@@ -1,0 +1,58 @@
+# Node.js
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+.build/
+.eggs/
+
+# Gradle / Android
+.gradle/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.obb
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Firebase database dumps - excluded from VCS per safety review
+SINGLE-TASK-DEFAULT/FIREBASE-DATABASE/
+*LATEST_FIREBASE*DATABASE*.json
+*GARBY-DATABASE*.json
+*.firebaserc
+firebase.json
+
+# ZIP archives (build artifacts / IDE exports)
+*.zip
+
+# Logs
+*.log
+
+# Env files
+*.env
+.env
+
+# Claude
+.claude/

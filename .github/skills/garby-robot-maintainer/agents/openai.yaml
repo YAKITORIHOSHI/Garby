@@ -1,0 +1,4 @@
+interface:
+  display_name: "GARBY Robot Maintainer"
+  short_description: "Safety-first GARBY firmware review and maintenance"
+  default_prompt: "Review the attached GARBY project as one Pi-BLE-MCU system, prioritize STOP safety, patch affected components, validate the changes, and update SYSTEM_ARCHITECTURE.md."

@@ -1,0 +1,13 @@
+*.iml
+.gradle/
+.idea/
+.claude/
+local.properties
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+.DS_Store
+debug_log.txt
+*.apk

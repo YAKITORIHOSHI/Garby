@@ -1,0 +1,70 @@
+GARBY ESP32 EXECUTOR - SAFETY AND TUNING NOTES
+================================================
+
+Scope
+-----
+This folder is the motion executor. The BLE receiver remains responsible for
+filtering LiDAR zones and calculating the direction, duration, and intensity of
+the N:<ms>:<intensity>|<direction> command. The executor validates, bounds, and
+smoothly applies that command; it does not receive raw LiDAR measurements.
+
+Current safe defaults
+---------------------
+- CPU: 160 MHz. Hardware-timed step pulses do not require forcing 240 MHz.
+- Straight cruise: 5,600 steps/s (about 0.71 m/s with the configured wheel).
+- Caution speed inside 90 cm: 3,900 steps/s (about 0.50 m/s).
+- Ultrasonic stop: two readings at or below 60 cm.
+- Immediate ultrasonic stop: one reading at or below 25 cm.
+- The confirmed 60 cm ultrasonic stop latch is enforced during turns and short
+  adjustment moves as well as long straight segments; 25 cm remains the
+  one-sample emergency path.
+- Resume: three readings at or above 72 cm, plus a fresh LiDAR GO stream.
+- Ultrasonic cadence: 40 ms, interrupt-captured (no pulseIn in the motion loop).
+- Path watchdog: 800 ms. Motion requires two fresh GO packets.
+- Nudge: 5-24 percent wheel-speed cut, maximum 110 ms, 220 ms settle time.
+- Stale nudge commands older than 250 ms are discarded.
+- Repeated Pi `[RESET]` relays are idempotent during `RETURNING`; they cannot
+  abort the route and produce an early `[IDLE]` completion.
+
+Why the servo stays centered while moving
+------------------------------------------
+The previous wide sweep left the ultrasonic sensor looking away from the travel
+direction for most of a fast hallway run. At the same time, the old servo settle
+estimate could sample before the horn reached its requested angle. The executor
+now parks the sensor at DEFAULT_VIEW during every move and turn, giving continuous
+front-path coverage. scanAngle() is retained for stopped/manual diagnostics.
+
+Wheel calibration
+-----------------
+MOTOR1_TRIM_PCT and MOTOR2_TRIM_PCT are deliberately 0.0 until measured. To
+calibrate, disable remote nudges, mark a straight 3-5 m lane, run at cruise speed,
+and measure lateral drift. Change only one trim in 0.25 percent steps, repeat in
+both travel directions, and keep the smallest value that removes repeatable
+mechanical bias. LiDAR intensity then corrects changing corridor error rather
+than masking a permanent wheel mismatch.
+
+Required chassis tests before unattended use
+---------------------------------------------
+1. Confirm DEFAULT_VIEW=80 points exactly along the chassis centerline. Adjust
+   DEFAULT_VIEW before changing distance thresholds.
+2. Verify the ultrasonic ECHO signal is limited to ESP32-safe 3.3 V. Many 5 V
+   modules require a divider or level shifter.
+3. Walk into the path at cruise speed from several angles. Confirm caution speed
+   begins near 90 cm and the chassis stops without crossing the 60 cm boundary.
+4. Repeat with dark clothing, soft bags, narrow poles, glass, and angled walls.
+   Ultrasonic and LiDAR have different blind cases; neither replaces a bumper.
+5. Test unplugged/restarting RasPi and BLE bridge. The wheels must decelerate to a
+   stop within the 800 ms executor watchdog and remain stopped until two GO frames.
+6. Record left/right LiDAR values and commanded nudge intensity on a long hallway
+   run. If it oscillates, increase receiver deadband/confirmation first. If it
+   responds too slowly, increase proportional intensity in small steps; do not
+   raise the executor's 24 percent cap until measured chassis testing supports it.
+7. Perform a 30-60 minute loaded thermal run. Log RasPi temperature/throttling,
+   executor resets, UART stale stops, motor-driver temperature, and supply dips.
+
+Validation performed
+--------------------
+PlatformIO CI compilation for board esp32dev succeeded with ESP32Servo 3.2.1,
+FastAccelStepper 1.2.7, and HX711 0.7.5. Hardware-in-the-loop and hallway tests
+are still required because compile validation cannot establish physical braking,
+sensor aiming, power integrity, or actual wheel mismatch.

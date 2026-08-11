@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "183404977768",
+    "firebase_url": "https://garby-thesis-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "garby-thesis",
+    "storage_bucket": "garby-thesis.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:183404977768:android:2aa1e00ab31447d8e3a5dd",
+        "android_client_info": {
+          "package_name": "com.thesis.garby"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDz2m8xc5f-jU5gtIqrZcr2ndu-TgrpsDY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
