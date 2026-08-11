@@ -17,11 +17,11 @@ GARBY/
 ├─ .github/                    # Agent definitions & skills for this repo
 │  ├─ agents/
 │  └─ skills/garby-robot-maintainer/   # SKILL.md, agents, references, scripts
+├─ Garby_MobileApp/            # Android companion app (Kotlin, Firebase RTDB)
 ├─ SINGLE-TASK-DEFAULT/        # Active single-task (main loop) firmware variant
 │  ├─ BLE_Receiver-Final/      # ESP32 BLE bridge sketch + docs
 │  ├─ NAPHTALI_CODE_V2/        # Main ESP32 MCU motor controller (active source)
 │  ├─ RasPi/                   # Raspberry Pi ROS 2 LiDAR + serial sensor node
-│  ├─ Garby_MobileApp/         # Android companion app (Kotlin, Firebase RTDB)
 │  ├─ SYSTEM_ARCHITECTURE.md   # Full system architecture
 │  ├─ DEPLOYMENT_AND_ACCEPTANCE.md
 │  └─ VALIDATION_RESULTS.md
@@ -51,7 +51,7 @@ Android App  ──Firebase RTDB──▶  Raspberry Pi
 | **Main ESP32 MCU** | `SINGLE-TASK-DEFAULT/NAPHTALI_CODE_V2/` | Stepper motor execution, servo+ultrasonic obstacle check, HX711 load cell, Air780E SMS, state machine (`IDLE`/`RUNNING`/`RETURNING`) |
 | **ESP32 BLE Bridge** | `SINGLE-TASK-DEFAULT/BLE_Receiver-Final/` | NimBLE server, path packet parser, lane-centering/anti-zigzag nudge algorithm, UART relay to MCU |
 | **Raspberry Pi** | `SINGLE-TASK-DEFAULT/RasPi/final_w_serial.py` | ROS 2 LiDAR reader, Pi serial sensor reader, Firebase heartbeat/sync, BLE client, reset command bridge |
-| **Android App** | `SINGLE-TASK-DEFAULT/Garby_MobileApp/` | Telemetry dashboard, sensor monitoring, explicit reset intent |
+| **Android App** | `Garby_MobileApp/` | Telemetry dashboard, sensor monitoring, explicit reset intent |
 
 ## Documentation
 
