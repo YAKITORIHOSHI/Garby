@@ -1,7 +1,53 @@
 #!/usr/bin/env python3
 """
-Combined application – Fast LiDAR + BLE with immediate obstacle push.
+GARBY Autonomous Waste-Collection Robot — Raspberry Pi Production Bridge
+========================================================================
+
+Module: final_w_serial.py
+Role: Main supervisor and bridge node running on Raspberry Pi. Connects ROS 2
+      YDLiDAR, UART sensor serial, ESP32 BLE motor controller, and Firebase RTDB.
+
+Key Subsystems & Components:
+----------------------------
+1. ROS 2 LiDAR Node (LidarDistanceReader):
+   - Ingests LaserScan from YDLiDAR at 7 Hz.
+   - Partitions scans in O(n) into 8 directions (0° Back, 90° Right, 180° Front, 270° Left):
+     * Safety: 45° gap-free sectors for fail-safe collision detection.
+     * Steering: Centered 22° slices for clean corridor centering and heading tilt (T).
+   - Watchdog fails closed (P:...|F=S|B=S) if LiDAR stalls > 0.8 s.
+
+2. Driver Supervisor (LidarDriverSupervisor):
+   - Starts and monitors the ROS 2 ydlidar_ros2_driver node.
+   - Automatically restarts the driver with exponential backoff upon crash/stall.
+
+3. BLE Transport Service (BleService & CoalescingBleQueue):
+   - GATT client connecting to 'GarbyESP32' (Write UUID: ...26a8, Notify UUID: ...26a9).
+   - Sends path state packets (P:seq|F=C/O/S|B=C/O/S), steering packets (S:seq|...),
+     and sensor packets (SENSOR:US=...|MQ4=...|MQ137=...|MQ135=...).
+   - High-priority urgent queue bypass for immediate obstacle stop pushes.
+   - Handles robot notifications, load-cell weight telemetry, and reset handshakes.
+
+4. Serial Sensor Bridge (receiveSerial):
+   - Reads UART (/dev/ttyAMA0 @ 9600 baud) for internal bin sensors:
+     * Ultrasonic (bin trash fill level in cm; does NOT affect path safety).
+     * Gas sensors (MQ-4 methane, MQ-137 ammonia, MQ-135 air quality).
+   - Implements per-sensor outage tracking, reconnect backoff, and sentinel gating.
+
+5. Firebase RTDB Manager (FirebaseManager):
+   - Atomic root multi-location updates for sensor data, health telemetry, and commands.
+   - Decoupled in-memory coalescing update worker ensures cloud latency never
+     blocks the robot's local motion safety loop.
+   - Listens for remote reset commands (/devices/{id}/commands/reset).
+
+6. User Interface:
+   - 8-direction radar GUI (Tkinter) with real-time distance bars & alert badges.
+   - Headless mode (--headless) for low-overhead production deployment.
+
+Usage:
+------
+    python3 final_w_serial.py [--headless]
 """
+
 
 import os, sys, time, queue, threading, asyncio, random, math, logging, signal, subprocess, glob
 from collections import deque
