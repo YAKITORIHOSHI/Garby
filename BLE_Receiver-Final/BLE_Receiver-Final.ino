@@ -28,10 +28,10 @@ HardwareSerial ESP_Serial(1);
 // Path freshness is safety-critical and therefore uses a much shorter timeout
 // than general BLE liveness. Any stale path stream produces STOP, never GO or
 // an automatic return movement.
-#define PATH_DATA_TIMEOUT_MS        650UL
-#define LINK_DATA_TIMEOUT_MS       8000UL
+#define PATH_DATA_TIMEOUT_MS        850UL
+#define LINK_DATA_TIMEOUT_MS      10000UL
 #define STALE_STOP_REPEAT_MS        500UL
-#define CLEAR_CONFIRM_PACKETS          3
+#define CLEAR_CONFIRM_PACKETS          2
 #define VERBOSE_PROTOCOL_LOGS           0
 
 // BLE callbacks run in the NimBLE host task. Keep that task deterministic:
@@ -40,8 +40,8 @@ HardwareSerial ESP_Serial(1);
 #define BLE_FRAME_MAX_BYTES           244U
 #define CONTROL_QUEUE_DEPTH              8U
 #define CONTROL_DRAIN_BUDGET              4U
-#define PATH_FRAME_MAX_AGE_MS          250UL
-#define SIDES_FRAME_MAX_AGE_MS         200UL
+#define PATH_FRAME_MAX_AGE_MS          650UL
+#define SIDES_FRAME_MAX_AGE_MS         500UL
 #define SENSOR_FRAME_MAX_AGE_MS       2000UL
 #define MCU_UART_LINE_MAX_BYTES         256U
 #define MCU_UART_RX_BYTE_BUDGET         384U
@@ -92,7 +92,7 @@ NimBLECharacteristic* pNotifyChar = nullptr;
 volatile bool deviceConnected     = false;
 volatile bool sentConnectedMsg    = false;
 volatile bool bleBridgeSignalSent = false;  // Track if we told the MCU about BLE link
-volatile bool mcuReady            = false;  // Track if MCU has completed setup()
+volatile bool mcuReady            = false;  // Fail closed until explicit [MCU READY]
 
 uint16_t      activeConnHandle = 0;
 volatile unsigned long lastDataReceived = 0;  // any bounded, non-empty BLE write
@@ -617,6 +617,20 @@ static void computeNudgeCommand(const String& sidesVal,
 // trash fill level, not a person detector, so it must never promote O to H.
 // H remains accepted only for backward compatibility; both O and H fail closed.
 
+static bool parseUint32Decimal(const String& text, uint32_t& out) {
+  if (text.length() == 0) return false;
+  uint32_t value = 0;
+  for (unsigned int i = 0; i < text.length(); ++i) {
+    const char c = text.charAt(i);
+    if (c < '0' || c > '9') return false;
+    const uint32_t digit = (uint32_t)(c - '0');
+    if (value > (UINT32_MAX - digit) / 10U) return false;
+    value = value * 10U + digit;
+  }
+  out = value;
+  return true;
+}
+
 static bool parseSequencedPacket(const String& raw,
                                  char packetType,
                                  uint32_t& seq,
@@ -626,12 +640,8 @@ static bool parseSequencedPacket(const String& raw,
   }
   int pipe = raw.indexOf('|', 2);
   if (pipe < 0) return false;
-  String seqText = raw.substring(2, pipe);
-  if (seqText.length() == 0) return false;
-  for (unsigned int i = 0; i < seqText.length(); ++i) {
-    if (!isDigit(seqText.charAt(i))) return false;
-  }
-  seq = (uint32_t)strtoul(seqText.c_str(), nullptr, 10);
+  const String seqText = raw.substring(2, pipe);
+  if (!parseUint32Decimal(seqText, seq)) return false;
   body = raw.substring(pipe + 1);
   body.trim();
   return body.length() > 0;
@@ -666,6 +676,31 @@ static bool validPathCode(const String& code) {
   return code == "C" || code == "O" || code == "H" || code == "S";
 }
 
+static bool parsePathBody(const String& body, String& frontCode, String& backCode) {
+  bool haveFront = false;
+  bool haveBack = false;
+  int start = 0;
+  while (start < body.length()) {
+    int end = body.indexOf('|', start);
+    if (end < 0) end = body.length();
+    String token = body.substring(start, end);
+    token.trim();
+    if (token.startsWith("F=")) {
+      if (haveFront || token.length() != 3) return false;
+      frontCode = token.substring(2);
+      haveFront = true;
+    } else if (token.startsWith("B=")) {
+      if (haveBack || token.length() != 3) return false;
+      backCode = token.substring(2);
+      haveBack = true;
+    } else {
+      return false;
+    }
+    start = end + 1;
+  }
+  return haveFront && haveBack && validPathCode(frontCode) && validPathCode(backCode);
+}
+
 static void handlePathPacket(const String& raw) {
   uint32_t seq = 0;
   String body;
@@ -678,9 +713,9 @@ static void handlePathPacket(const String& raw) {
     return;
   }
 
-  String frontCode = extractSegment(body, "F=");
-  String backCode = extractSegment(body, "B=");
-  if (!validPathCode(frontCode) || !validPathCode(backCode)) {
+  String frontCode;
+  String backCode;
+  if (!parsePathBody(body, frontCode, backCode)) {
     relayStop("STOP:PROTOCOL");
     return;
   }
@@ -826,10 +861,19 @@ static void handleLegacyCombined(const String& raw) {
     return;
   }
 
+  const bool frontClear = pathVal == "CLEAR";
+  const bool frontBlocked = pathVal.startsWith("BLOCKED");
+  const bool backClear = backPathVal == "CLEAR";
+  const bool backBlocked = backPathVal.startsWith("BLOCKED");
+  if ((!frontClear && !frontBlocked) || (!backClear && !backBlocked)) {
+    relayStop("STOP:PROTOCOL");
+    return;
+  }
+
   uint32_t seq = havePathSeq ? lastPathSeq + 1U : 1U;
-  String f = pathVal.startsWith("BLOCKED") ?
+  String f = frontBlocked ?
              (pathVal.indexOf("HUMAN_DETECTED") >= 0 ? "H" : "O") : "C";
-  String b = backPathVal.startsWith("BLOCKED") ? "O" : "C";
+  String b = backBlocked ? "O" : "C";
   String compactPath = "P:" + String(seq) + "|F=" + f + "|B=" + b;
   handlePathPacket(compactPath);
 
@@ -870,6 +914,9 @@ static void processAndRelayMessage(const char* incoming) {
     return;
   }
 
+  if (raw.indexOf("PATH") >= 0 || raw.startsWith("P")) {
+    relayStop("STOP:PROTOCOL");
+  }
   Serial.println(">>> Ignored unknown BLE packet: " + raw);
 }
 
@@ -927,17 +974,15 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
                          strcmp(frame.payload, "[RESET]") == 0 ||
                          strstr(frame.payload, "PATH:") != nullptr;
   if (isControl) {
-    if (controlQueue == nullptr ||
-        xQueueSendToBack(controlQueue, &frame, 0) != pdPASS) {
-      // Preserve the newest physical state, discard the oldest queued state,
-      // and force a fail-closed stop before any replacement can be executed.
-      BleFrame discarded = {};
-      if (controlQueue != nullptr) {
-        xQueueReceive(controlQueue, &discarded, 0);
-        xQueueSendToBack(controlQueue, &frame, 0);
-      }
-      controlOverflowCount++;
+    if (controlQueue == nullptr) {
       ingressFaultCount++;
+      return;
+    }
+    if (xQueueSendToBack(controlQueue, &frame, 0) != pdPASS) {
+      BleFrame discarded = {};
+      xQueueReceive(controlQueue, &discarded, 0);
+      xQueueSendToBack(controlQueue, &frame, 0);
+      controlOverflowCount++;
     }
     return;
   }
@@ -964,7 +1009,12 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
 
   // These messages intentionally have no state effect. The ready token only
   // proves Pi-side startup and link liveness, already recorded above.
-  if (strcmp(frame.payload, "[RASPI READY]") == 0) return;
+  if (strcmp(frame.payload, "[RASPI READY]") == 0) {
+    if (deviceConnected) {
+      sendConnectedNotice();
+    }
+    return;
+  }
   unknownFrameCount++;
 }
 
@@ -1146,7 +1196,7 @@ void setup() {
 
   NimBLEDevice::init("GarbyESP32");
   NimBLEDevice::setMTU(247);
-  NimBLEDevice::setPower(ESP_PWR_LVL_P3);
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
   // Leave the controller's configured modem sleep enabled. Disabling it here
   // kept the radio awake continuously and added heat without reducing the
   // application-level 250 ms command cadence.
@@ -1165,8 +1215,19 @@ void setup() {
     NOTIFY_CHAR_UUID,
     NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
+  // NimBLE-Arduino 2.x starts all registered services when advertising
+  // starts. NimBLEService::start() is a deprecated no-op in 2.5.x.
+
   NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
   pAdv->addServiceUUID(SERVICE_UUID);
+  pAdv->setMinInterval(32);
+  pAdv->setMaxInterval(64);
+
+  NimBLEAdvertisementData advData;
+  advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+  advData.setCompleteServices(NimBLEUUID(SERVICE_UUID));
+  pAdv->setAdvertisementData(advData);
+
   NimBLEAdvertisementData scanData;
   scanData.setName("GarbyESP32");
   pAdv->setScanResponseData(scanData);
@@ -1216,10 +1277,11 @@ static void handleMcuLine(const char* mcuMsg) {
   // UART consumer liveness; recovery still requires fresh clear path packets.
   if (strcmp(mcuMsg, "[ESP RECEIVED]") == 0) {
     const bool recovered = mcuAckFault;
-    // The legacy ACK has no sequence, so treat any ACK as proof that the UART
-    // consumer is draining again instead of pretending to match it to a line.
-    mcuUnackedCommands = 0;
-    mcuAckPending = false;
+    // UART is ordered, so one generic ACK proves one queued command was
+    // consumed. Do not let a single ACK erase an entire outstanding backlog.
+    if (mcuUnackedCommands > 0) mcuUnackedCommands--;
+    mcuAckPending = (mcuUnackedCommands > 0);
+    if (mcuAckPending) mcuAckPendingSince = millis();
     mcuAckFault = false;
     if (recovered) {
       stopLatched = true;
@@ -1357,7 +1419,7 @@ void loop() {
 
   if (deviceConnected && now - lastDataReceived >= LINK_DATA_TIMEOUT_MS) {
     if (mcuReady) relayStop("STOP:LINK");
-    Serial.println(">>> BLE link silent for 8s; holding STOP and reconnecting");
+    Serial.println(">>> BLE link silent for 10s; holding STOP and reconnecting");
     if (pServer != nullptr) {
       pServer->disconnect(activeConnHandle);
     }

@@ -3,10 +3,9 @@
 MANUAL SIMULATION / VISUALIZATION HARNESS.
 
 This tool shares GARBY's LiDAR-only blockage formatter, thresholds, sensor
-sentinels, BLE request token, and backward-compatible command vocabulary. It
+sentinels, BLE request token, and current sequenced P:/S: transport. It
 intentionally simplifies production behaviour: eight direction cards provide
-already-aggregated distances, and the tool emits the legacy combined
-PATH/BACK_PATH/SIDES payload. It does not consume raw LaserScan angles, run the
+already-aggregated distances. It does not consume raw LaserScan angles, run the
 production gap-free 45-degree safety partition, or certify collision safety.
 
 The GUI defaults are 100 cm per LiDAR direction, 999 for the bin trash-level
@@ -19,7 +18,7 @@ from collections import deque
 from datetime import datetime
 from statistics import median
 
-from bridge_core import format_lidar_blockage
+from bridge_core import format_lidar_blockage, lidar_status_code, clamp_heading_error_cm
 
 # pyrefly: ignore [missing-import]
 from bleak import BleakScanner, BleakClient
@@ -118,9 +117,11 @@ class ExecutorService:
                 self.queue.task_done()
 
 # ═══ Configuration ═══
-WRITE_CHAR_UUID  = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-NOTIFY_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a9"
-DEVICE_NAME       = "GarbyESP32"
+SERVICE_UUID     = os.environ.get("GARBY_BLE_SERVICE_UUID", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+WRITE_CHAR_UUID  = os.environ.get("GARBY_BLE_WRITE_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+NOTIFY_CHAR_UUID = os.environ.get("GARBY_BLE_NOTIFY_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a9")
+DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32")
+BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", None)
 
 THRESHOLD_CM      = 95.0                  # front stop distance (increased from 50cm for 1.05m/s travel speed reaction time)
 BACK_THRESHOLD_CM = 35.0                  # 35 cm back threshold
@@ -211,11 +212,12 @@ def on_demand_status_responder(lidar_node, stop_event):
                       f"|MQ137={mq137_str}|MQ135={mq135_str}")
 
         if lidar_node is not None:
-            combined_cmd = lidar_node.build_combined_cmd()
+            path_msg, sides_msg = lidar_node.build_status_packets()
         else:
-            combined_cmd = "PATH:CLEAR|BACK_PATH:CLEAR|SIDES:STABLE"
+            seq = int(time.monotonic() * 10.0) & 0xFFFFFFFF
+            path_msg, sides_msg = f"P:{seq}|F=S|B=S", f"S:{seq}|STABLE"
 
-        for msg in (sensor_msg, combined_cmd):
+        for msg in (path_msg, sides_msg, sensor_msg):
             try:
                 ble_send_queue.put_nowait(msg)
             except queue.Full:
@@ -255,6 +257,7 @@ class BleService(threading.Thread):
         self._notify_char = None
         self._connecting  = False
         self._stop_event  = asyncio.Event()
+        self._write_lock  = None
 
     def stop(self):
         if self._loop and not self._loop.is_closed():
@@ -285,6 +288,7 @@ class BleService(threading.Thread):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._stop_event = asyncio.Event()
+        self._write_lock = asyncio.Lock()
         self._loop.call_soon(lambda: asyncio.ensure_future(self._connect(), loop=self._loop))
         self._loop.run_forever()
 
@@ -322,24 +326,60 @@ class BleService(threading.Thread):
             return
         self._connecting = True
         self._status("Scanning…", "#d29922")
-        try:
-            devices = await BleakScanner.discover(timeout=self.SCAN_TIMEOUT)
-        except Exception as exc:
-            logger.error(f"BLE scan error: {exc}")
-            self._status("Scan error — retry 3 s", "#f85149")
-            self._schedule_retry()
-            return
+        target = None
+        target_address = BLE_MAC_ADDRESS
 
-        target = next((d for d in devices if d.name and d.name == DEVICE_NAME), None)
-        if target is None:
+        if not target_address:
+            try:
+                discovered = await BleakScanner.discover(
+                    timeout=self.SCAN_TIMEOUT, return_adv=True
+                )
+                for device, adv in discovered.values():
+                    name_match = bool(
+                        (device.name and device.name == DEVICE_NAME)
+                        or (adv.local_name and adv.local_name == DEVICE_NAME)
+                    )
+                    service_uuids = [str(s).lower() for s in (adv.service_uuids or [])]
+                    uuid_match = bool(
+                        SERVICE_UUID.lower() in service_uuids
+                        or WRITE_CHAR_UUID.lower() in service_uuids
+                        or NOTIFY_CHAR_UUID.lower() in service_uuids
+                    )
+                    if name_match or uuid_match:
+                        target = device
+                        target_address = device.address
+                        break
+            except TypeError:
+                devices = await BleakScanner.discover(timeout=self.SCAN_TIMEOUT)
+                for d in devices:
+                    name_match = bool(d.name and d.name == DEVICE_NAME)
+                    uuids = (
+                        [str(u).lower() for u in d.metadata.get("uuids", [])]
+                        if hasattr(d, "metadata") and isinstance(d.metadata, dict)
+                        else []
+                    )
+                    uuid_match = bool(
+                        SERVICE_UUID.lower() in uuids
+                        or WRITE_CHAR_UUID.lower() in uuids
+                        or NOTIFY_CHAR_UUID.lower() in uuids
+                    )
+                    if name_match or uuid_match:
+                        target = d
+                        target_address = d.address
+                        break
+            except Exception as exc:
+                logger.error(f"BLE scan error: {exc}")
+
+        if target_address is None:
             logger.warning(f"'{DEVICE_NAME}' not found.")
             self._status("Not found — retry 3 s", "#f85149")
             self._schedule_retry()
             return
 
-        logger.info(f"Found {target.name} [{target.address}]")
-        self._status(f"Connecting {target.address}…", "#d29922")
-        client = BleakClient(target.address, disconnected_callback=self._on_disconnect)
+        disp_name = getattr(target, "name", None) or DEVICE_NAME
+        logger.info(f"Connecting to BLE device {disp_name} [{target_address}]")
+        self._status(f"Connecting {target_address}…", "#d29922")
+        client = BleakClient(target_address, disconnected_callback=self._on_disconnect)
         try:
             await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
         except Exception as exc:
@@ -407,7 +447,11 @@ class BleService(threading.Thread):
                 await asyncio.sleep(self.DRAIN_INTERVAL)
                 continue
             try:
-                await self._client.write_gatt_char(self._write_char, msg.encode("utf-8"), response=False)
+                acknowledged = msg.startswith(("P:", "[RESET]", "[RASPI READY]"))
+                async with self._write_lock:
+                    await self._client.write_gatt_char(
+                        self._write_char, msg.encode("utf-8"), response=acknowledged
+                    )
             except Exception as exc:
                 logger.error(f"BLE write error: {exc}")
                 try:
@@ -423,7 +467,11 @@ class BleService(threading.Thread):
         if not self._client or not self._client.is_connected:
             return
         try:
-            await self._client.write_gatt_char(self._write_char, msg.encode("utf-8"), response=False)
+            acknowledged = msg.startswith(("P:", "[RESET]", "[RASPI READY]"))
+            async with self._write_lock:
+                await self._client.write_gatt_char(
+                    self._write_char, msg.encode("utf-8"), response=acknowledged
+                )
         except Exception as e:
             logger.error(f"Urgent BLE write error: {e}")
 
@@ -431,14 +479,14 @@ class BleService(threading.Thread):
 class SimulatedLidarReader:
     """Manual eight-direction visualizer, not a raw-scan safety simulator."""
     SIDES = {
-        "FRONT":       180.0,
-        "FRONT_LEFT":  225.0,
-        "LEFT":        270.0,
-        "BACK_LEFT":   315.0,
-        "BACK":        0.0,
-        "BACK_RIGHT":  45.0,
-        "RIGHT":       90.0,
-        "FRONT_RIGHT": 135.0
+        "FRONT":         0.0,
+        "FRONT_LEFT":   45.0,
+        "LEFT":         90.0,
+        "BACK_LEFT":   135.0,
+        "BACK":        180.0,
+        "BACK_RIGHT":  225.0,
+        "RIGHT":       270.0,
+        "FRONT_RIGHT": 315.0,
     }
     FRONT_GROUP = {"FRONT", "FRONT_LEFT", "FRONT_RIGHT"}
     BACK_GROUP  = {"BACK",  "BACK_LEFT",  "BACK_RIGHT"}
@@ -460,6 +508,8 @@ class SimulatedLidarReader:
         self._prev_back_blocked  = False
         self._last_urgent_send   = 0
         self._urgent_cooldown    = 0.2
+        self._path_seq           = 0
+        self._seq_lock           = threading.Lock()
 
     def _quick_min(self, side: str, window=5):
         valid = [v for v in self.history[side] if v is not None][-window:]
@@ -488,57 +538,19 @@ class SimulatedLidarReader:
         blocked = self._collect_blocked_sides(group, threshold_cm)
         return self._format_blocked_status(blocked, group)
 
+    def _next_path_seq(self):
+        with self._seq_lock:
+            self._path_seq = (self._path_seq + 1) & 0xFFFFFFFF
+            return self._path_seq
+
     def _send_immediate_status(self, front_blocked, back_blocked):
-        front_status = "CLEAR"
-        back_status  = "CLEAR"
-        if front_blocked:
-            blocked = self._collect_blocked_sides(self.FRONT_GROUP, THRESHOLD_CM)
-            _, front_status = self._format_blocked_status(blocked, self.FRONT_GROUP)
-        if back_blocked:
-            blocked = self._collect_blocked_sides(self.BACK_GROUP, BACK_THRESHOLD_CM)
-            _, back_status = self._format_blocked_status(blocked, self.BACK_GROUP)
-
-        left_med  = self._smoothed_distance("LEFT")
-        right_med = self._smoothed_distance("RIGHT")
-        front_med = self._smoothed_distance("FRONT")
-        back_med  = self._smoothed_distance("BACK")
-        front_left_med  = self._smoothed_distance("FRONT_LEFT")
-        front_right_med = self._smoothed_distance("FRONT_RIGHT")
-        back_left_med   = self._smoothed_distance("BACK_LEFT")
-        back_right_med  = self._smoothed_distance("BACK_RIGHT")
-
-        sides_parts = []
-        if left_med is not None and right_med is not None:
-            sides_parts.append(f"LEFT={left_med:.1f}|RIGHT={right_med:.1f}")
-        if front_med is not None:
-            sides_parts.append(f"FRONT={front_med:.1f}")
-        if back_med is not None:
-            sides_parts.append(f"BACK={back_med:.1f}")
-        if front_left_med is not None:
-            sides_parts.append(f"FRONT_LEFT={front_left_med:.1f}")
-        if front_right_med is not None:
-            sides_parts.append(f"FRONT_RIGHT={front_right_med:.1f}")
-        if back_left_med is not None:
-            sides_parts.append(f"BACK_LEFT={back_left_med:.1f}")
-        if back_right_med is not None:
-            sides_parts.append(f"BACK_RIGHT={back_right_med:.1f}")
-
-        if sides_parts:
-            sides_cmd = "|".join(sides_parts)
-        else:
-            sides_cmd = "STABLE"
-
-        combined = f"PATH:{front_status}|BACK_PATH:{back_status}|SIDES:{sides_cmd}"
-        if self.ble_service and self.ble_service._loop:
-            asyncio.run_coroutine_threadsafe(
-                self.ble_service._urgent_write(combined),
-                self.ble_service._loop
-            )
-        else:
-            try:
-                ble_send_queue.put_nowait(combined)
-            except queue.Full:
-                pass
+        # Keep the simulator on the same producer contract as production.
+        path_msg, sides_msg = self.build_status_packets()
+        try:
+            ble_send_queue.put_nowait(path_msg)
+            ble_send_queue.put_nowait(sides_msg)
+        except queue.Full:
+            pass
 
     def update_distances(self, distances_dict: dict):
         """Update simulated LiDAR distances for all sides (values in cm)."""
@@ -581,60 +593,44 @@ class SimulatedLidarReader:
             (data_out, 0.03, 8.0, self.CONE_DEG, self.last_sides_status)
         )
 
+    def build_status_packets(self):
+        seq = self._next_path_seq()
+        _, front_status = self._get_blocked_status(self.FRONT_GROUP, THRESHOLD_CM)
+        _, back_status = self._get_blocked_status(self.BACK_GROUP, BACK_THRESHOLD_CM)
+        if front_disabled.is_set():
+            front_status = "CLEAR"
+        if back_disabled.is_set():
+            back_status = "CLEAR"
+
+        med = {side: self._smoothed_distance(side) for side in self.SIDES}
+        path_msg = (
+            f"P:{seq}|F={lidar_status_code(front_status)}"
+            f"|B={lidar_status_code(back_status)}"
+        )
+        key_map = {
+            "LEFT": "L", "RIGHT": "R", "FRONT": "F", "BACK": "B",
+            "FRONT_LEFT": "FL", "FRONT_RIGHT": "FR",
+            "BACK_LEFT": "BL", "BACK_RIGHT": "BR",
+        }
+        parts = [f"{key_map[side]}={value:.1f}" for side, value in med.items() if value is not None]
+        fl, fr = med.get("FRONT_LEFT"), med.get("FRONT_RIGHT")
+        bl, br = med.get("BACK_LEFT"), med.get("BACK_RIGHT")
+        tilt = None
+        if None not in (fl, fr, bl, br):
+            tilt = 0.5 * (fl - fr) + 0.5 * (br - bl)
+        elif fl is not None and fr is not None:
+            tilt = fl - fr
+        if tilt is not None:
+            parts.append(f"T={clamp_heading_error_cm(tilt):.1f}")
+
+        sides_cmd = "|".join(parts) if parts else "STABLE"
+        self.last_sides_status = "SIDES:" + sides_cmd
+        return path_msg, f"S:{seq}|{sides_cmd}"
+
     def build_combined_cmd(self) -> str:
-        front_blocked, front_status = self._get_blocked_status(self.FRONT_GROUP, THRESHOLD_CM)
-        back_blocked,  back_status  = self._get_blocked_status(self.BACK_GROUP,  BACK_THRESHOLD_CM)
-        if front_disabled.is_set(): front_blocked, front_status = False, "CLEAR"
-        if back_disabled.is_set():  back_blocked,  back_status  = False, "CLEAR"
-
-        left_med  = self._smoothed_distance("LEFT")
-        right_med = self._smoothed_distance("RIGHT")
-        front_med = self._smoothed_distance("FRONT")
-        back_med  = self._smoothed_distance("BACK")
-        front_left_med  = self._smoothed_distance("FRONT_LEFT")
-        front_right_med = self._smoothed_distance("FRONT_RIGHT")
-        back_left_med   = self._smoothed_distance("BACK_LEFT")
-        back_right_med  = self._smoothed_distance("BACK_RIGHT")
-
-        sides_parts = []
-        if left_med is not None and right_med is not None:
-            sides_parts.append(f"LEFT={left_med:.1f}|RIGHT={right_med:.1f}")
-        if front_med is not None:
-            sides_parts.append(f"FRONT={front_med:.1f}")
-        if back_med is not None:
-            sides_parts.append(f"BACK={back_med:.1f}")
-        if front_left_med is not None:
-            sides_parts.append(f"FRONT_LEFT={front_left_med:.1f}")
-        if front_right_med is not None:
-            sides_parts.append(f"FRONT_RIGHT={front_right_med:.1f}")
-        if back_left_med is not None:
-            sides_parts.append(f"BACK_LEFT={back_left_med:.1f}")
-        if back_right_med is not None:
-            sides_parts.append(f"BACK_RIGHT={back_right_med:.1f}")
-
-        # Multi-Point Angle of Vision (heading tilt estimate from all sides)
-        tilt_val = 0.0
-        has_tilt = False
-        if front_left_med is not None and front_right_med is not None and back_left_med is not None and back_right_med is not None:
-            tilt_val += 0.5 * (front_left_med - front_right_med) + 0.5 * (back_right_med - back_left_med)
-            has_tilt = True
-        elif front_left_med is not None and front_right_med is not None:
-            tilt_val += (front_left_med - front_right_med) * 0.7
-            has_tilt = True
-        if left_med is not None and right_med is not None:
-            tilt_val += (left_med - right_med) * 0.3
-            has_tilt = True
-        if has_tilt:
-            sides_parts.append(f"TILT={tilt_val:.1f}")
-
-        if sides_parts:
-            sides_cmd = "|".join(sides_parts)
-        else:
-            sides_cmd = "STABLE"
-
-        self.last_sides_status = f"SIDES:{sides_cmd}"
-        combined = f"PATH:{front_status}|BACK_PATH:{back_status}|SIDES:{sides_cmd}"
-        return combined
+        """Human-readable compatibility display; do not transmit this string."""
+        path_msg, sides_msg = self.build_status_packets()
+        return f"{path_msg} || {sides_msg}"
 
 # ═══ GUI ═══
 def init_gui(sim_node: SimulatedLidarReader):

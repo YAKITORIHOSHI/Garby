@@ -1,0 +1,442 @@
+{
+  "root": "/mnt/data/GARBY_FIXED",
+  "summary": {
+    "PASS": 71,
+    "WARN": 1,
+    "FAIL": 0
+  },
+  "results": [
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found arch",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found pi",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found core",
+      "file": "RasPi/bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found tests",
+      "file": "RasPi/test_bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found bridge",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found mcu_h",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found mcu_cpp",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found mcu_ino",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "required file",
+      "detail": "Found points",
+      "file": "NAPHTALI_CODE_V2/pointsRun.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi LiDAR stale watchdog",
+      "detail": "0.8 s",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi helper source",
+      "detail": "Production imports bridge_core source",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi BLE queue",
+      "detail": "Bounded/coalescing BLE mailbox present",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi sequenced path",
+      "detail": "Produces P:<seq> packets",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi sequenced steering",
+      "detail": "Produces matching S:<seq> packets",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi stale output",
+      "detail": "LiDAR loss emits explicit stale path",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi BLE serialization",
+      "detail": "GATT writes share an asyncio lock",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi acknowledged safety writes",
+      "detail": "P/reset/readiness use acknowledged writes",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi safety bypass",
+      "detail": "Runtime bypass disabled by default",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi ROS subscription",
+      "detail": "Exactly one production LaserScan subscription",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi first-scan safety",
+      "detail": "No first scan is treated as stale/STOP",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi scan-quality gate",
+      "detail": "Incomplete safety sectors fail closed as unavailable",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi BLE connect recovery",
+      "detail": "Unexpected connect-task failures reschedule recovery",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi Firebase isolation",
+      "detail": "Missing firebase-admin cannot crash the safety bridge",
+      "file": "RasPi/final_w_serial.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi helper completeness",
+      "detail": "bridge_core.py is source-controlled, not pyc-only",
+      "file": "RasPi/bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi LaserScan infinity",
+      "detail": "+inf is represented as range_max",
+      "file": "RasPi/bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi collision representative",
+      "detail": "Safety uses the closest valid LiDAR return",
+      "file": "RasPi/bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "Pi host tests",
+      "detail": "test_bridge_core.py is included",
+      "file": "RasPi/test_bridge_core.py"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge path watchdog",
+      "detail": "850.0 ms",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge link recovery",
+      "detail": "10000.0 ms",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge STOP clearance",
+      "detail": "2.0 clear packets",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge MCU readiness",
+      "detail": "Fail closed until explicit [MCU READY]",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge STOP default",
+      "detail": "STOP latch defaults true",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge telemetry isolation",
+      "detail": "SENSOR is explicitly relayed",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge sequence freshness",
+      "detail": "Old path sequences rejected",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge steering binding",
+      "detail": "S sequence must match latest P sequence",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge disconnect STOP",
+      "detail": "Disconnect has stationary STOP path",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge UART baud",
+      "detail": "UART is 115200",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge ACK accounting",
+      "detail": "One generic ACK consumes one queued command",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge strict path parser",
+      "detail": "Exact fields and uint32 sequence validation present",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "bridge legacy parser",
+      "detail": "Legacy path values are explicitly validated",
+      "file": "BLE_Receiver-Final/BLE_Receiver-Final.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU STOP default",
+      "detail": "Controller starts fail closed",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU nudge guard",
+      "detail": "Nudges require fresh GO state",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU controlled braking",
+      "detail": "Safety stop decelerates before force fallback",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU sensor parser",
+      "detail": "Telemetry validates completely before commit",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU modem isolation",
+      "detail": "Cellular init runs in background task",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU modem ownership",
+      "detail": "Main pass-through cannot steal modem task responses",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU strict nudge parser",
+      "detail": "Nudge numeric fields reject junk/overflow",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU sonar no-echo safety",
+      "detail": "No-echo cannot become a fresh clear sample",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU movement gate requests",
+      "detail": "Gate actively requests fresh status while waiting",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU reverse brake pulse",
+      "detail": "No reverse pulse detected",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU path watchdog",
+      "detail": "800.0 ms",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU GO confirmation",
+      "detail": "2.0 GO packets",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU sonar timeout",
+      "detail": "8000.0 us",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU steering authority",
+      "detail": "side-sonar nudge=0.0",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU movement gate timing",
+      "detail": "900.0 ms",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU startup gating",
+      "detail": "setup() does not wait for modem/network",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU async modem start",
+      "detail": "Modem task starts after [MCU READY]",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU readiness handshake",
+      "detail": "[MCU READY] emitted",
+      "file": "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino"
+    },
+    {
+      "severity": "WARN",
+      "check": "route direction",
+      "detail": "Outbound and return contain positive long moves; physical direction remains hardware-unverified",
+      "file": "NAPHTALI_CODE_V2/pointsRun.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '850 ms'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '10 s'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '5600'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '40\u00b0'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '120\u00b0'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents 'FRONT | 0\u00b0'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents 'background'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents 'bridge_core.py'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents 'hardware-unverified'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents '900 ms'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "architecture sync",
+      "detail": "Documents 'no echo'",
+      "file": "SYSTEM_ARCHITECTURE.md"
+    },
+    {
+      "severity": "PASS",
+      "check": "package hygiene",
+      "detail": "No compiled Python cache files in release",
+      "file": ""
+    },
+    {
+      "severity": "PASS",
+      "check": "editor portability",
+      "detail": "No machine-specific absolute Windows path in launch.json",
+      "file": ""
+    }
+  ]
+}

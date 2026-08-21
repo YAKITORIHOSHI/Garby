@@ -221,7 +221,7 @@ The bridge alone converts LiDAR wall geometry into a nudge command.
 | Front full suppression | ≤60 cm |
 | Front warning scaling | 60–120 cm |
 
-The main controller applies stricter execution caps: maximum 24% cut, maximum 110 ms same-direction hold, and a 220 ms settle window. `ENABLE_ULTRASONIC_SIDE_NUDGE` remains `0`.
+The main controller applies stricter execution caps: maximum 24% cut, maximum 110 ms same-direction hold, and a 220 ms settle window. `ENABLE_ULTRASONIC_SIDE_NUDGE` remains `0`. When a valid, bridge-confirmed direction reversal arrives, the controller restores both wheel speeds and applies the new tap immediately; it no longer drops the correction and waits for another packet.
 
 ## 8. Main-controller communication and motion gate
 
@@ -231,6 +231,7 @@ The main controller applies stricter execution caps: maximum 24% cut, maximum 11
 - `MOTION_GATE_TIMEOUT_MS = 900`.
 - Motion gate repeatedly sends `[REQUEST-STATUS]`; requests are rate-limited to 80 ms.
 - Turns and distance moves re-check `pathCommandFresh()` before starting and continue polling UART/watchdogs while moving.
+- Motion primitives return a completion result. A missing/unaccepted motor command or aborted segment cannot be reported as `[OUTBOUND COMPLETE]`; the state remains active until the route really completes or an explicit reset is received.
 - Malformed `N:` numeric fields are rejected with strict digit/overflow checks rather than permissive `String.toInt()` parsing.
 - Main UART line input is bounded and discards oversize lines until newline.
 
@@ -281,7 +282,7 @@ These numbers are **not proof of stopping distance**. Floor traction, load, batt
 
 The Air780E modem no longer gates the MCU communication handshake. `[MCU READY]` is emitted first, then modem initialization runs in a FreeRTOS background task. SMS requests are ignored while the modem is unavailable/busy; modem delays cannot block STOP processing.
 
-Load and gas are IDLE→RUNNING triggers, with repeated confirmation. Gas telemetry becomes non-triggering when stale/unavailable. Firebase is asynchronous/coalesced on the Pi and is not a motion authority. GUI controls cannot override unavailable LiDAR data while active-operation safety is enforced.
+Load and gas are IDLE→RUNNING triggers, with repeated confirmation. The load trigger is `LOAD_TRIGGER_KG = 1.0 kg` and requires two filtered samples; it starts the route state machine but does not bypass the independent fresh-path motion gate. Gas telemetry becomes non-triggering when stale/unavailable. Firebase is asynchronous/coalesced on the Pi and is not a motion authority. GUI controls cannot override unavailable LiDAR data while active-operation safety is enforced.
 
 ## 12. State machine
 
@@ -295,6 +296,7 @@ Load and gas are IDLE→RUNNING triggers, with repeated confirmation. Gas teleme
 ### RUNNING
 
 - execute `runStart()` once
+- only a successful `runStart()` completion is reported as outbound complete; interrupted/incomplete segments remain in RUNNING
 - every movement passes the fresh-path gate
 - after route completion, remain stationary
 - transition to RETURNING only on explicit `[RESET]`
@@ -302,7 +304,7 @@ Load and gas are IDLE→RUNNING triggers, with repeated confirmation. Gas teleme
 ### RETURNING
 
 - execute `returnToPointB()` using the same live safety gates
-- finish with `fullReset()` to IDLE
+- finish with `fullReset()` to IDLE only after the return route reports success
 
 ## 13. Route limitation — physical direction is hardware-unverified
 

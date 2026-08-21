@@ -1,53 +1,7 @@
 #!/usr/bin/env python3
 """
-GARBY Autonomous Waste-Collection Robot — Raspberry Pi Production Bridge
-========================================================================
-
-Module: final_w_serial.py
-Role: Main supervisor and bridge node running on Raspberry Pi. Connects ROS 2
-      YDLiDAR, UART sensor serial, ESP32 BLE motor controller, and Firebase RTDB.
-
-Key Subsystems & Components:
-----------------------------
-1. ROS 2 LiDAR Node (LidarDistanceReader):
-   - Ingests LaserScan from YDLiDAR at 7 Hz.
-   - Partitions scans in O(n) into 8 directions (0° Back, 90° Right, 180° Front, 270° Left):
-     * Safety: 45° gap-free sectors for fail-safe collision detection.
-     * Steering: Centered 22° slices for clean corridor centering and heading tilt (T).
-   - Watchdog fails closed (P:...|F=S|B=S) if LiDAR stalls > 0.8 s.
-
-2. Driver Supervisor (LidarDriverSupervisor):
-   - Starts and monitors the ROS 2 ydlidar_ros2_driver node.
-   - Automatically restarts the driver with exponential backoff upon crash/stall.
-
-3. BLE Transport Service (BleService & CoalescingBleQueue):
-   - GATT client connecting to 'GarbyESP32' (Write UUID: ...26a8, Notify UUID: ...26a9).
-   - Sends path state packets (P:seq|F=C/O/S|B=C/O/S), steering packets (S:seq|...),
-     and sensor packets (SENSOR:US=...|MQ4=...|MQ137=...|MQ135=...).
-   - High-priority urgent queue bypass for immediate obstacle stop pushes.
-   - Handles robot notifications, load-cell weight telemetry, and reset handshakes.
-
-4. Serial Sensor Bridge (receiveSerial):
-   - Reads UART (/dev/ttyAMA0 @ 9600 baud) for internal bin sensors:
-     * Ultrasonic (bin trash fill level in cm; does NOT affect path safety).
-     * Gas sensors (MQ-4 methane, MQ-137 ammonia, MQ-135 air quality).
-   - Implements per-sensor outage tracking, reconnect backoff, and sentinel gating.
-
-5. Firebase RTDB Manager (FirebaseManager):
-   - Atomic root multi-location updates for sensor data, health telemetry, and commands.
-   - Decoupled in-memory coalescing update worker ensures cloud latency never
-     blocks the robot's local motion safety loop.
-   - Listens for remote reset commands (/devices/{id}/commands/reset).
-
-6. User Interface:
-   - 8-direction radar GUI (Tkinter) with real-time distance bars & alert badges.
-   - Headless mode (--headless) for low-overhead production deployment.
-
-Usage:
-------
-    python3 final_w_serial.py [--headless]
+Combined application – Fast LiDAR + BLE with immediate obstacle push.
 """
-
 
 import os, sys, time, queue, threading, asyncio, random, math, logging, signal, subprocess, glob
 from collections import deque
@@ -75,17 +29,26 @@ from bleak import BleakScanner, BleakClient
 
 # Custom modules (optional)
 try:
-# pyrefly: ignore [missing-import]
+    # pyrefly: ignore [missing-import]
     from GPIO_RESET import kill_gpio_users
 except ImportError:
     def kill_gpio_users():
         print("[GPIO] kill_gpio_users not available, skipping...")
 
 # ═══ Firebase Manager ═══
-# pyrefly: ignore [missing-import]
-import firebase_admin
-# pyrefly: ignore [missing-import]
-from firebase_admin import credentials, db
+# Firebase is operational telemetry, not a motion prerequisite. If its SDK is
+# absent, keep LiDAR/BLE safety alive and report the integration as disabled.
+try:
+    # pyrefly: ignore [missing-import]
+    import firebase_admin
+    # pyrefly: ignore [missing-import]
+    from firebase_admin import credentials, db
+    FIREBASE_IMPORT_ERROR = None
+except ImportError as exc:
+    firebase_admin = None
+    credentials = None
+    db = None
+    FIREBASE_IMPORT_ERROR = exc
 
 class FirebaseManager:
     """Non-blocking, atomic Firebase RTDB bridge.
@@ -101,6 +64,8 @@ class FirebaseManager:
     )
 
     def __init__(self, credential_path=None, database_url=None):
+        if firebase_admin is None or credentials is None or db is None:
+            raise RuntimeError(f"firebase-admin unavailable: {FIREBASE_IMPORT_ERROR}")
         credential_path = credential_path or os.environ.get(
             "GARBY_FIREBASE_CREDENTIALS", self.DEFAULT_CREDENTIALS
         )
@@ -299,17 +264,28 @@ class ExecutorService:
                 self.queue.task_done()
 
 # ═══ Configuration ═══
-SERIAL_PORT = os.environ.get("GARBY_SENSOR_SERIAL_PORT", "/dev/ttyAMA0")
+def _resolve_sensor_serial_port():
+    configured = os.environ.get("GARBY_SENSOR_SERIAL_PORT")
+    if configured:
+        return configured
+    for candidate in ("/dev/serial0", "/dev/ttyAMA0", "/dev/ttyS0", "/dev/ttyUSB1", "/dev/ttyACM0"):
+        if os.path.exists(candidate):
+            return candidate
+    return "/dev/ttyAMA0"
+
+SERIAL_PORT = _resolve_sensor_serial_port()
 SERIAL_BAUD = int(os.environ.get("GARBY_SENSOR_SERIAL_BAUD", "9600"))
 
-WRITE_CHAR_UUID  = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-NOTIFY_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a9"
-DEVICE_NAME       = "GarbyESP32"
+SERVICE_UUID     = os.environ.get("GARBY_BLE_SERVICE_UUID", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+WRITE_CHAR_UUID  = os.environ.get("GARBY_BLE_WRITE_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+NOTIFY_CHAR_UUID = os.environ.get("GARBY_BLE_NOTIFY_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a9")
+DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32")
+BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", None)
 
 THRESHOLD_CM      = 95.0                  # front stop distance
 BACK_THRESHOLD_CM = 35.0                  # back stop distance
 
-# Safety/transport timing. A 7 Hz LiDAR should update about every 143 ms;
+# Safety/transport timing. A 10 Hz LiDAR should update about every 100 ms;
 # 0.8 s therefore allows several missed scans but never permits seconds of
 # blind travel. Telemetry is intentionally slower than the safety stream.
 LIDAR_STALE_TIMEOUT_S = 0.8
@@ -321,6 +297,17 @@ FIREBASE_RESET_POLL_S = 2.0
 LOAD_CELL_CHANGE_KG = 0.05
 LOAD_CELL_REFRESH_S = 30.0
 ALLOW_RUNTIME_SAFETY_DISABLE = False
+
+# Software LiDAR convention is 0 deg FRONT / 90 deg LEFT. Keep the physical
+# mounting correction configurable instead of silently baking in an unverified
+# chassis orientation. 180 reproduces the old opposite-facing convention.
+try:
+    LIDAR_YAW_OFFSET_DEG = float(os.environ.get("GARBY_LIDAR_YAW_OFFSET_DEG", "0"))
+    if not math.isfinite(LIDAR_YAW_OFFSET_DEG):
+        raise ValueError
+except ValueError:
+    LIDAR_YAW_OFFSET_DEG = 0.0
+    logger.warning("Invalid GARBY_LIDAR_YAW_OFFSET_DEG; using 0 degrees")
 
 SIDES_TOLERANCE   = 5.0
 BLE_CMD_PERIOD    = 0.25
@@ -630,6 +617,11 @@ def raspi_heartbeat_loop(stop_event):
 def firebase_connection_loop(stop_event):
     """Initialize Firebase without making robot safety depend on the network."""
     global firebase
+    if firebase_admin is None:
+        logger.warning("Firebase disabled because firebase-admin is not installed: %s",
+                       FIREBASE_IMPORT_ERROR)
+        stop_event.wait()
+        return
     backoff = ExponentialBackoff(
         2.0,
         60.0,
@@ -756,10 +748,12 @@ def on_demand_status_responder(lidar_node, stop_event):
     last_sensor_send = 0.0
     fallback_seq = 0
     while not stop_event.is_set():
-        fired = _status_requested.wait(timeout=0.05)
-        if not fired:
-            continue
+        # Wake immediately when requested by MCU, or tick periodically at BLE_CMD_PERIOD (250 ms)
+        fired = _status_requested.wait(timeout=BLE_CMD_PERIOD)
         _status_requested.clear()
+
+        if not ble_connected.is_set():
+            continue
 
         if lidar_node is not None:
             path_msg, sides_msg = lidar_node.build_status_packets()
@@ -805,7 +799,7 @@ def ble_notify_handler(msg: str):
         pass
 
     stripped = msg.strip()
-    if stripped == REQUEST_TOKEN:
+    if stripped in (REQUEST_TOKEN, "CONNECTED...", "[BLE CONNECTION ESTABLISHED]"):
         _robot_running.set()
         _status_requested.set()
         return
@@ -840,7 +834,7 @@ class BleService(threading.Thread):
     SCAN_TIMEOUT   = 5.0
     CONNECT_TIMEOUT = 6.0
     WRITE_TIMEOUT = 2.0
-    DRAIN_INTERVAL  = 0.08
+    DRAIN_INTERVAL  = 0.02
 
     def __init__(self, status_cb, notify_cb):
         super().__init__(daemon=True, name="ble-service")
@@ -924,9 +918,27 @@ class BleService(threading.Thread):
         def launch():
             self._retry_handle = None
             if not self._stop_event.is_set():
-                self._connect_task = self._loop.create_task(self._connect())
+                self._connect_task = self._loop.create_task(self._connect_guarded())
 
         self._retry_handle = self._loop.call_later(delay, launch)
+
+    async def _connect_guarded(self):
+        try:
+            await self._connect()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Unexpected BLE connection failure: %s", exc)
+            client = self._client
+            self._client = None
+            self._write_char = None
+            self._notify_char = None
+            if client and getattr(client, "is_connected", False):
+                try:
+                    await asyncio.wait_for(client.disconnect(), timeout=2.0)
+                except Exception:
+                    pass
+            self._schedule_retry("BLE error")
 
     def _schedule_retry(self, reason="Disconnected"):
         if not self._loop or self._loop.is_closed() or self._stop_event.is_set():
@@ -979,39 +991,107 @@ class BleService(threading.Thread):
         if self._stop_event.is_set() or (self._client and self._client.is_connected):
             return
         self._connecting = True
-        self._status("Scanning…", "#d29922")
-        try:
-            devices = await BleakScanner.discover(timeout=self.SCAN_TIMEOUT)
-        except Exception as exc:
-            logger.error(f"BLE scan error: {exc}")
-            self._schedule_retry("Scan error")
-            return
+        target = None
+        target_address = BLE_MAC_ADDRESS or getattr(self, "_cached_address", None)
+        client = None
 
-        target = next((d for d in devices if d.name and d.name == DEVICE_NAME), None)
-        if target is None:
-            logger.warning(f"'{DEVICE_NAME}' not found.")
-            self._schedule_retry("Not found")
-            return
-
-        logger.info(f"Found {target.name} [{target.address}]")
-        self._status(f"Connecting {target.address}…", "#d29922")
-        client = BleakClient(target.address, disconnected_callback=self._on_disconnect)
-        try:
-            await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
-        except Exception as exc:
-            logger.error(f"BLE connect error: {exc}")
+        if target_address:
             try:
-                await client.disconnect()
-            except Exception:
-                pass
-            self._schedule_retry("Connect failed")
-            return
+                self._status(f"Direct {target_address[-5:]}…", "#d29922")
+                logger.info(f"Attempting direct connect to BLE address [{target_address}]")
+                direct_client = BleakClient(target_address, disconnected_callback=self._on_disconnect)
+                await asyncio.wait_for(direct_client.connect(), timeout=5.0)
+                if direct_client.is_connected:
+                    client = direct_client
+                    self._cached_address = target_address
+            except Exception as exc:
+                logger.info(f"Direct connect failed ({exc}); falling back to BLE scan.")
+                client = None
 
-        if not client.is_connected:
+        if client is None:
+            self._status("Scanning…", "#d29922")
+            target_address = None
+            try:
+                discovered = await BleakScanner.discover(
+                    timeout=self.SCAN_TIMEOUT, return_adv=True
+                )
+                clean_service_uuid = SERVICE_UUID.lower().replace("-", "")
+                clean_write_uuid = WRITE_CHAR_UUID.lower().replace("-", "")
+                clean_notify_uuid = NOTIFY_CHAR_UUID.lower().replace("-", "")
+
+                for device, adv in discovered.values():
+                    dev_name = (device.name or "").strip()
+                    adv_name = (adv.local_name or "").strip()
+                    name_match = bool(
+                        (dev_name and DEVICE_NAME.lower() in dev_name.lower())
+                        or (adv_name and DEVICE_NAME.lower() in adv_name.lower())
+                    )
+                    service_uuids = [
+                        str(s).lower().replace("-", "")
+                        for s in (adv.service_uuids or [])
+                    ]
+                    uuid_match = bool(
+                        clean_service_uuid in service_uuids
+                        or clean_write_uuid in service_uuids
+                        or clean_notify_uuid in service_uuids
+                    )
+                    if name_match or uuid_match:
+                        target = device
+                        target_address = device.address
+                        break
+            except TypeError:
+                devices = await BleakScanner.discover(timeout=self.SCAN_TIMEOUT)
+                clean_service_uuid = SERVICE_UUID.lower().replace("-", "")
+                clean_write_uuid = WRITE_CHAR_UUID.lower().replace("-", "")
+                clean_notify_uuid = NOTIFY_CHAR_UUID.lower().replace("-", "")
+
+                for d in devices:
+                    dev_name = (d.name or "").strip()
+                    name_match = bool(dev_name and DEVICE_NAME.lower() in dev_name.lower())
+                    raw_uuids = (
+                        d.metadata.get("uuids", [])
+                        if hasattr(d, "metadata") and isinstance(d.metadata, dict)
+                        else []
+                    )
+                    uuids = [str(u).lower().replace("-", "") for u in raw_uuids]
+                    uuid_match = bool(
+                        clean_service_uuid in uuids
+                        or clean_write_uuid in uuids
+                        or clean_notify_uuid in uuids
+                    )
+                    if name_match or uuid_match:
+                        target = d
+                        target_address = d.address
+                        break
+            except Exception as exc:
+                logger.warning(f"BLE scanner error: {exc}")
+
+            if target_address is None:
+                logger.warning(f"'{DEVICE_NAME}' not found.")
+                self._schedule_retry("Not found")
+                return
+
+            disp_name = getattr(target, "name", None) or DEVICE_NAME
+            logger.info(f"Connecting to BLE device {disp_name} [{target_address}]")
+            self._status(f"Connecting {target_address}…", "#d29922")
+            client = BleakClient(target_address, disconnected_callback=self._on_disconnect)
+            try:
+                await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
+            except Exception as exc:
+                logger.error(f"BLE connect error: {exc}")
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+                self._schedule_retry("Connect failed")
+                return
+
+        if not client or not client.is_connected:
             logger.warning("connect() returned but is_connected is False.")
             self._schedule_retry("Connect failed")
             return
 
+        self._cached_address = target_address
         # Install the session before characteristic setup so disconnect
         # callbacks can be correlated to the correct client.
         self._client = client
@@ -1044,25 +1124,24 @@ class BleService(threading.Thread):
                     timeout=3.0,
                 )
                 logger.info("Subscribed to BLE notifications.")
-            except Exception as e:
-                logger.error(f"Failed to subscribe to notifications: {e}")
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
-                self._schedule_retry("Notify failed")
+            except Exception as exc:
+                logger.error(f"Notify subscribe error: {exc}")
+                await client.disconnect()
+                self._schedule_retry("Notify sub failed")
                 return
 
-        self._client      = client
         self._write_char  = write_char
         self._notify_char = notify_char
         self._connecting  = False
         self._retry_backoff.reset()
+        _robot_running.set()
         ble_connected.set()
-        self._status("CONNECTED", "#3fb950")
-        logger.info("BLE connected.")
-        ble_send_queue.clear()
+        _status_requested.set()
 
+        self._status("Connected", "#3fb950")
+        logger.info("BLE connected.")
+
+        # Seed the connection epoch with [RASPI READY]
         try:
             ble_send_queue.put_nowait(RASPI_READY)
             logger.info(f"[PROTOCOL] Sent {RASPI_READY}")
@@ -1098,6 +1177,7 @@ class BleService(threading.Thread):
             )
 
     async def _drain_loop(self, session_client):
+        consecutive_write_failures = 0
         while (
             not self._stop_event.is_set()
             and self._client is session_client
@@ -1110,8 +1190,20 @@ class BleService(threading.Thread):
                 continue
             try:
                 await self._write_message(msg, expected_client=session_client)
+                consecutive_write_failures = 0
             except Exception as exc:
-                logger.error(f"BLE write error: {exc}")
+                consecutive_write_failures += 1
+                logger.warning(f"BLE write glitch ({consecutive_write_failures}/3): {exc}")
+                if consecutive_write_failures < 3:
+                    # Never reinsert an old path packet: a newer STOP may already
+                    # be queued. Ask the producer for a fresh sequenced snapshot.
+                    if msg.startswith("P:"):
+                        _status_requested.set()
+                    elif msg in ("[RESET]", RASPI_READY):
+                        ble_send_queue.put_nowait(msg, urgent=True)
+                    await asyncio.sleep(0.05)
+                    continue
+                logger.error(f"BLE persistent write failure: {exc}")
                 try:
                     await asyncio.wait_for(session_client.disconnect(), timeout=2.0)
                 except Exception:
@@ -1360,7 +1452,7 @@ def init_gui():
             except queue.Empty:
                 pass
             self._update_sensor_readings()
-            self.root.after(200, self._process_updates)
+            self.root.after(40, self._process_updates)
 
         def _process_ble_recv(self):
             while True:
@@ -1374,7 +1466,7 @@ def init_gui():
                 self.log_text.insert(tk.END, line)
                 self.log_text.see(tk.END)
                 self.log_text.config(state=tk.DISABLED)
-            self.root.after(200, self._process_ble_recv)
+            self.root.after(40, self._process_ble_recv)
 
         def _update_sensor_readings(self):
             with sensor_readings_lock:
@@ -1500,12 +1592,16 @@ def start_headless_key_listener():
 
     def _listener():
         fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            return
         try:
             tty.setcbreak(fd)
-            while True:
+            while not serial_stop.is_set():
                 ch = sys.stdin.read(1)
-                if not ch: continue
+                if not ch:
+                    break
                 ch = ch.lower()
                 if ch == 'f':
                     if front_disabled.is_set(): front_disabled.clear(); logger.info("FRONT re-enabled.")
@@ -1515,8 +1611,13 @@ def start_headless_key_listener():
                     else: back_disabled.set(); logger.info("BACK disabled.")
                 elif ch == 'q':
                     os.kill(os.getpid(), signal.SIGINT); return
+        except Exception:
+            pass
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
     threading.Thread(target=_listener, daemon=True, name="key-listener").start()
 
@@ -1546,7 +1647,37 @@ def _terminate_process(proc):
             pass
 
 
-def start_lidar_driver(stop_event=None):
+def _cleanup_stale_driver_state():
+    """Stop leftover LiDAR drivers and clear stale ROS 2 DDS state.
+
+    Must run BEFORE rclpy.init(). While the safety node is alive, stopping the
+    ROS daemon or deleting /dev/shm/fastrtps_* shared-memory segments can break
+    DDS discovery, so the running node would never receive the new driver's
+    /scan messages (the "driver started but node gets no scan" failure).
+    """
+    try:
+        subprocess.run(
+            ["pkill", "-f", "ydlidar_ros2_driver"],
+            capture_output=True,
+            timeout=3.0,
+            check=False,
+        )
+        subprocess.run(
+            ["ros2", "daemon", "stop"],
+            capture_output=True,
+            timeout=3.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for path in glob.glob("/dev/shm/fastrtps_*"):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def start_lidar_driver(stop_event=None, ros_node=None):
     port = find_lidar_port()
     if port is None:
         raise RuntimeError("[LiDAR] No ttyUSB port found!")
@@ -1559,73 +1690,80 @@ def start_lidar_driver(stop_event=None):
         )
     except (OSError, subprocess.SubprocessError):
         pass
-    for path in glob.glob("/dev/shm/fastrtps_*"):
-        try:
-            os.remove(path)
-        except OSError:
-            pass
     if stop_event and stop_event.wait(1.0):
         raise RuntimeError("LiDAR startup cancelled")
     logger.info(f"Starting LiDAR driver on {port}")
+    # Defaults match the bench-tested YDLIDAR X3 config
+    # (ros2_ws/src/ydlidar_ros2_driver/config/ydlidar_x3.yaml). In particular
+    # the X3 does NOT use DTR motor control; forcing it glitches the serial
+    # stream and produces the "Checksum error" storm that prevents any valid
+    # scan from ever being assembled/published.
+    baudrate = os.environ.get("GARBY_LIDAR_BAUDRATE", "115200")
+    lidar_type = os.environ.get("GARBY_LIDAR_TYPE", "1")
+    sample_rate = os.environ.get("GARBY_LIDAR_SAMPLE_RATE", "3")
+    motor_dtr = os.environ.get("GARBY_LIDAR_DTR", "true")
+    frequency = os.environ.get("GARBY_LIDAR_FREQUENCY", "10.0")
     command = [
         "ros2", "run", "ydlidar_ros2_driver", "ydlidar_ros2_driver_node",
         "--ros-args",
         "-p", f"port:={port}",
-        "-p", "baudrate:=115200",
-        "-p", "lidar_type:=1",
+        "-p", f"baudrate:={baudrate}",
+        "-p", f"lidar_type:={lidar_type}",
         "-p", "device_type:=0",
-        "-p", "sample_rate:=3",
+        "-p", f"sample_rate:={sample_rate}",
         "-p", "isSingleChannel:=true",
-        "-p", "support_motor_dtr:=true",
-        "-p", "frequency:=7.0",
+        "-p", "fixed_resolution:=true",
+        "-p", "reversion:=false",
+        "-p", "inverted:=false",
+        "-p", "intensity:=false",
+        "-p", f"support_motor_dtr:={motor_dtr}",
+        "-p", f"frequency:={frequency}",
         "-p", "range_max:=8.0",
-        "-p", "range_min:=0.03",
+        "-p", "range_min:=0.1",
+        "-p", "angle_max:=180.0",
+        "-p", "angle_min:=-180.0",
+        "-p", "abnormal_check_count:=4",
+        "-p", "invalid_range_is_inf:=false",
         "-p", "frame_id:=laser_frame",
         "-p", "auto_reconnect:=true",
-        "-p", "intensity_bit:=0",
     ]
-    show_driver_logs = os.environ.get("GARBY_LIDAR_DRIVER_LOGS", "0") == "1"
+    # Suppress verbose driver SDK output by default unless explicitly enabled with GARBY_LIDAR_DRIVER_LOGS=1
+    suppress_driver_logs = os.environ.get("GARBY_LIDAR_DRIVER_LOGS", "0") != "1"
     proc = subprocess.Popen(
         command,
-        stdout=None if show_driver_logs else subprocess.DEVNULL,
-        stderr=None if show_driver_logs else subprocess.STDOUT,
+        stdout=subprocess.DEVNULL if suppress_driver_logs else None,
+        stderr=subprocess.DEVNULL if suppress_driver_logs else None,
+        env=os.environ.copy(),
     )
     for _ in range(30):
         if stop_event and stop_event.is_set():
             _terminate_process(proc)
             raise RuntimeError("LiDAR startup cancelled")
         if proc.poll() is not None:
-            raise RuntimeError("LiDAR driver exited early")
-        try:
-            result = subprocess.run(
-                ["ros2", "topic", "list"],
-                capture_output=True,
-                text=True,
-                timeout=2.0,
-                check=False,
-            )
-            if "/scan" in result.stdout.splitlines():
-                break
-        except (OSError, subprocess.SubprocessError):
-            pass
+            raise RuntimeError(f"LiDAR driver exited early with code {proc.returncode}")
+        # In-process verification: check if healthy scan was received or if node sees publisher
+        if lidar_healthy.is_set() or (ros_node is not None and ros_node.count_publishers("/scan") > 0):
+            break
         if stop_event:
             stop_event.wait(1.0)
         else:
             time.sleep(1.0)
     else:
         _terminate_process(proc)
-        raise RuntimeError("/scan topic never appeared")
+        raise RuntimeError("/scan topic publisher never appeared")
     return proc
 
 
 class LidarDriverSupervisor(threading.Thread):
     """Restart a failed/stalled ROS driver with bounded backoff."""
 
-    RESTART_STALE_AFTER_S = 8.0
+    STARTUP_GRACE_PERIOD_S = 30.0
+    RESTART_STALE_AFTER_S = 15.0
 
-    def __init__(self, stop_event):
+    def __init__(self, stop_event, ros_node=None):
         super().__init__(daemon=True, name="lidar-driver-supervisor")
         self.stop_event = stop_event
+        self.ros_node = ros_node
         self._process = None
         self._process_lock = threading.Lock()
         self._backoff = ExponentialBackoff(
@@ -1642,10 +1780,11 @@ class LidarDriverSupervisor(threading.Thread):
     def run(self):
         while not self.stop_event.is_set():
             try:
-                proc = start_lidar_driver(self.stop_event)
+                proc = start_lidar_driver(self.stop_event, self.ros_node)
                 with self._process_lock:
                     self._process = proc
                 logger.info("LiDAR driver is online.")
+                started_at = time.monotonic()
                 stale_since = None
                 healthy_since = None
 
@@ -1653,18 +1792,23 @@ class LidarDriverSupervisor(threading.Thread):
                     if proc.poll() is not None:
                         logger.error("LiDAR driver exited with code %s", proc.returncode)
                         break
+                    now = time.monotonic()
                     if lidar_healthy.is_set():
                         stale_since = None
-                        healthy_since = healthy_since or time.monotonic()
-                        if time.monotonic() - healthy_since >= 10.0:
+                        healthy_since = healthy_since or now
+                        if now - healthy_since >= 10.0:
                             self._backoff.reset()
                     else:
                         healthy_since = None
-                        stale_since = stale_since or time.monotonic()
-                        if time.monotonic() - stale_since >= self.RESTART_STALE_AFTER_S:
-                            logger.error("LiDAR produced no healthy scan for %.0f s; restarting driver.",
-                                         self.RESTART_STALE_AFTER_S)
-                            break
+                        in_startup_grace = (now - started_at) < self.STARTUP_GRACE_PERIOD_S
+                        if not in_startup_grace:
+                            stale_since = stale_since or now
+                            if now - stale_since >= self.RESTART_STALE_AFTER_S:
+                                logger.error(
+                                    "LiDAR produced no healthy scan for %.0f s; restarting driver.",
+                                    self.RESTART_STALE_AFTER_S,
+                                )
+                                break
             except Exception as exc:
                 if not self.stop_event.is_set():
                     logger.error("LiDAR driver startup failed: %s", exc)
@@ -1684,7 +1828,7 @@ import rclpy
 # pyrefly: ignore [missing-import]
 from rclpy.node import Node
 # pyrefly: ignore [missing-import]
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import qos_profile_sensor_data
 # pyrefly: ignore [missing-import]
 from rclpy.executors import SingleThreadedExecutor
 # pyrefly: ignore [missing-import]
@@ -1692,22 +1836,22 @@ from sensor_msgs.msg import LaserScan
 
 class LidarDistanceReader(Node):
     SIDES = {
-        "FRONT":       180.0,
-        "FRONT_LEFT":  225.0,
-        "LEFT":        270.0,
-        "BACK_LEFT":   315.0,
-        "BACK":        0.0,
-        "BACK_RIGHT":  45.0,
-        "RIGHT":       90.0,
-        "FRONT_RIGHT": 135.0
+        "FRONT":         0.0,
+        "FRONT_LEFT":   45.0,
+        "LEFT":         90.0,
+        "BACK_LEFT":   135.0,
+        "BACK":        180.0,
+        "BACK_RIGHT":  225.0,
+        "RIGHT":       270.0,
+        "FRONT_RIGHT": 315.0,
     }
     FRONT_GROUP = {"FRONT", "FRONT_LEFT", "FRONT_RIGHT"}
     BACK_GROUP  = {"BACK",  "BACK_LEFT",  "BACK_RIGHT"}
     CONE_DEG          = 22.0  # centered steering slice inside each 45° safety sector
-    HISTORY_DEPTH     = 6
+    HISTORY_DEPTH     = 3
     MIN_VALID_POINTS  = 3
     OUTLIER_RATIO     = 2.5
-    OUTLIER_CONFIRM   = 2      # consecutive frames needed to accept a big jump (either direction)
+    OUTLIER_CONFIRM   = 1      # faster response to real-world movement
 
     def __init__(self, gui, data_queue: queue.Queue, ble_service=None):
         super().__init__('lidar_distance_reader')
@@ -1723,22 +1867,23 @@ class LidarDistanceReader(Node):
         self._prev_front_blocked = False
         self._prev_back_blocked = False
         self._last_urgent_send = 0
-        self._urgent_cooldown = 0.1
-        self._last_scan_time = time.monotonic()
+        self._urgent_cooldown = 0.05
+        self._last_scan_time = 0.0
+        self._first_scan_received = False
+        self._front_data_valid = False
+        self._back_data_valid = False
         self._lidar_stale_announced = False
         self._path_seq = 0
         self._path_seq_lock = threading.Lock()
         self._history_lock = threading.RLock()
         self._watchdog_timer = self.create_timer(0.25, self._watchdog_callback)
-
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            # Safety decisions must use the newest scan, never a CPU backlog.
-            depth=1
+        # One ROS subscription only. Multiple subscriptions to /scan caused the
+        # same scan to be processed repeatedly and distorted confirmation logic.
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+        self.get_logger().info(
+            f'Lidar Distance Reader started '
+            f'(fail-closed, yaw offset {LIDAR_YAW_OFFSET_DEG:.1f} deg)'
         )
-        self.create_subscription(LaserScan, '/scan', self.scan_callback, qos)
-        self.get_logger().info('Lidar Distance Reader started (optimized single-pass & fast emergency stop)')
 
     def _next_path_seq(self):
         with self._path_seq_lock:
@@ -1746,6 +1891,10 @@ class LidarDistanceReader(Node):
             return self._path_seq
 
     def _lidar_is_stale(self):
+        # Safety has no startup grace: until the first scan is received the path
+        # is unknown and therefore STOP. Driver supervision has its own grace.
+        if not self._first_scan_received or self._last_scan_time <= 0.0:
+            return True
         return (time.monotonic() - self._last_scan_time) > LIDAR_STALE_TIMEOUT_S
 
     def _watchdog_callback(self):
@@ -1757,8 +1906,7 @@ class LidarDistanceReader(Node):
             return
         self._lidar_stale_announced = True
         self.get_logger().error(
-            "LiDAR stream stale for > %.1f s; issuing fail-closed STOP",
-            LIDAR_STALE_TIMEOUT_S,
+            f"LiDAR stream stale for > {LIDAR_STALE_TIMEOUT_S:.1f} s; issuing fail-closed STOP"
         )
         seq = self._next_path_seq()
         path_msg = f"P:{seq}|F=S|B=S"
@@ -1796,12 +1944,11 @@ class LidarDistanceReader(Node):
 
     def _collect_blocked_sides(self, group, threshold_cm):
         """Return list of side names in *group* whose quick-min distance
-        is None or ≤ threshold_cm. Used by both the periodic combined-cmd
-        builder and the urgent edge-triggered path push."""
+        is ≤ threshold_cm. None represents open space with no obstacles."""
         blocked = []
         for side in group:
             d = self._quick_min(side)
-            if d is None or d <= threshold_cm:
+            if d is not None and d <= threshold_cm:
                 blocked.append(side)
         return blocked
 
@@ -1835,13 +1982,17 @@ class LidarDistanceReader(Node):
 
     def scan_callback(self, msg: LaserScan):
         self._last_scan_time = time.monotonic()
+        first_scan = not self._first_scan_received
+        self._first_scan_received = True
         self._lidar_stale_announced = False
+        if first_scan:
+            logger.info("First LiDAR scan received with %d range samples.", len(msg.ranges))
 
         # One pass creates two geometries: gap-free nearest 45° sectors for
         # collision safety, and centered 22° slices for clean wall steering.
         # There are no eight-way comparisons and no safety blind angles.
         ranges = msg.ranges
-        angle_min = msg.angle_min
+        angle_min = msg.angle_min + math.radians(LIDAR_YAW_OFFSET_DEG)
         angle_inc = msg.angle_increment
         minimum_range = max(0.03, float(msg.range_min or 0.03))
         maximum_range = min(8.0, float(msg.range_max or 8.0))
@@ -1854,20 +2005,41 @@ class LidarDistanceReader(Node):
             steering_cone_deg=self.CONE_DEG,
         )
 
-        if valid_points >= self.MIN_VALID_POINTS:
+        front_data_valid = all(
+            len(safety_dists[side]) >= self.MIN_VALID_POINTS
+            for side in self.FRONT_GROUP
+        )
+        back_data_valid = all(
+            len(safety_dists[side]) >= self.MIN_VALID_POINTS
+            for side in self.BACK_GROUP
+        )
+        prior_quality = self._front_data_valid and self._back_data_valid
+        self._front_data_valid = front_data_valid
+        self._back_data_valid = back_data_valid
+        if front_data_valid and back_data_valid:
             lidar_healthy.set()
         else:
             lidar_healthy.clear()
+
+        # A scan can arrive on time yet be unusable (NaNs, missing sectors, bad
+        # range metadata). Treat that transition as safety-critical immediately.
+        if prior_quality and not (front_data_valid and back_data_valid):
+            seq = self._next_path_seq()
+            degraded = (
+                f"P:{seq}|F={'C' if front_data_valid else 'S'}"
+                f"|B={'C' if back_data_valid else 'S'}"
+            )
+            if not self._dispatch_urgent_path(degraded):
+                ble_send_queue.put_nowait(degraded, urgent=True)
 
         urgent_status = None
         with self._history_lock:
             for side in self.SIDES:
                 dists = safety_dists[side]
                 if len(dists) >= self.MIN_VALID_POINTS:
-                    # Keep independent estimates: low-percentile proximity for
-                    # fail-safe obstacle stops, median wall geometry for smooth
-                    # centering/tilt. One stray speck can no longer command an
-                    # aggressive nudge.
+                    # Keep independent estimates: nearest return for collision
+                    # safety and median wall geometry for smooth centering/tilt.
+                    # Temporal confirmation handles non-emergency jump noise.
                     new_cm = robust_near_distance_cm(dists)
                     narrow_wall_dists = steering_dists[side]
                     wall_source = select_steering_samples(
@@ -1987,10 +2159,17 @@ class LidarDistanceReader(Node):
                 self.BACK_GROUP, BACK_THRESHOLD_CM
             )
 
+            # Fresh-but-incomplete scans are unknown, never clear. Manual GUI
+            # bypasses are intentionally unable to override unavailable data.
+            if not self._front_data_valid:
+                front_blocked, front_status = True, "LIDAR_UNAVAILABLE"
+            if not self._back_data_valid:
+                back_blocked, back_status = True, "LIDAR_UNAVAILABLE"
+
             bypass_allowed = ALLOW_RUNTIME_SAFETY_DISABLE or not _robot_running.is_set()
-            if bypass_allowed and front_disabled.is_set():
+            if self._front_data_valid and bypass_allowed and front_disabled.is_set():
                 front_blocked, front_status = False, "CLEAR"
-            if bypass_allowed and back_disabled.is_set():
+            if self._back_data_valid and bypass_allowed and back_disabled.is_set():
                 back_blocked, back_status = False, "CLEAR"
 
             med = {
@@ -2059,13 +2238,34 @@ def main():
     )
     firebase_thread.start()
 
-    executor = ExecutorService(workers=4)
-    executor.submit(lambda: receiveSerial(serial_stop), permanent=True)
-    executor.submit(lambda: raspi_heartbeat_loop(serial_stop), permanent=True)
-    executor.submit(lambda: firebase_reset_command_loop(serial_stop), permanent=True)
+    serial_thread = threading.Thread(
+        target=lambda: receiveSerial(serial_stop),
+        daemon=True,
+        name="uart-sensors",
+    )
+    serial_thread.start()
+
+    heartbeat_thread = threading.Thread(
+        target=lambda: raspi_heartbeat_loop(serial_stop),
+        daemon=True,
+        name="raspi-heartbeat",
+    )
+    heartbeat_thread.start()
+
+    reset_thread = threading.Thread(
+        target=lambda: firebase_reset_command_loop(serial_stop),
+        daemon=True,
+        name="firebase-reset",
+    )
+    reset_thread.start()
+
+    # Clear stale DDS/daemon state BEFORE the ROS node initializes its DDS
+    # participant. Doing this later (while the node is live) prevents the node
+    # from discovering the LiDAR driver's /scan publisher.
+    _cleanup_stale_driver_state()
 
     rclpy.init()
-    data_queue = queue.Queue(maxsize=2)
+    data_queue = queue.Queue(maxsize=5)
 
     ble_service = None
     node = LidarDistanceReader(None, data_queue, ble_service)
@@ -2078,10 +2278,15 @@ def main():
     )
     ros_thread.start()
 
-    lidar_supervisor = LidarDriverSupervisor(serial_stop)
+    lidar_supervisor = LidarDriverSupervisor(serial_stop, node)
     lidar_supervisor.start()
 
-    executor.submit(lambda: on_demand_status_responder(node, serial_stop), permanent=True)
+    status_responder_thread = threading.Thread(
+        target=lambda: on_demand_status_responder(node, serial_stop),
+        daemon=True,
+        name="status-responder",
+    )
+    status_responder_thread.start()
 
     ble = None
     gui_root = None
@@ -2169,14 +2374,14 @@ def main():
         start_headless_key_listener()
         try:
             while not serial_stop.is_set():
-                # Bounded drain plus unconditional wait prevents a notification
-                # burst from turning the headless main loop into a CPU hot-loop.
+                # Bounded drain plus wait prevents a notification burst
+                # from turning the headless main loop into a CPU hot-loop.
                 for _ in range(20):
                     try:
                         ble_recv_queue.get_nowait()
                     except queue.Empty:
                         break
-                serial_stop.wait(0.1)
+                serial_stop.wait(0.5)
         except KeyboardInterrupt:
             shutdown()
     else:

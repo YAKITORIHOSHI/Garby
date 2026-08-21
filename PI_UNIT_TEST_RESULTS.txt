@@ -1,0 +1,22 @@
+test_backoff_is_bounded_and_resettable (test_bridge_core.BackoffTests.test_backoff_is_bounded_and_resettable) ... ok
+test_available_thermal_source_preserves_ok_and_warning_states (test_bridge_core.HealthTests.test_available_thermal_source_preserves_ok_and_warning_states) ... ok
+test_unknown_thermal_sources_do_not_report_false_ok (test_bridge_core.HealthTests.test_unknown_thermal_sources_do_not_report_false_ok) ... ok
+test_between_cone_obstacle_is_safety_visible_but_not_steering_input (test_bridge_core.LidarTests.test_between_cone_obstacle_is_safety_visible_but_not_steering_input) ... ok
+test_lidar_named_sector_orientation_and_boundaries (test_bridge_core.LidarTests.test_lidar_named_sector_orientation_and_boundaries) ... ok
+test_lidar_nearest_sectors_have_no_angular_gaps (test_bridge_core.LidarTests.test_lidar_nearest_sectors_have_no_angular_gaps) ... ok
+test_lidar_representatives_and_tilt_clamp (test_bridge_core.LidarTests.test_lidar_representatives_and_tilt_clamp) ... ok
+test_positive_infinity_is_clear_at_range_max (test_bridge_core.LidarTests.test_positive_infinity_is_clear_at_range_max) ... ok
+test_sparse_steering_cone_falls_back_to_gap_free_samples (test_bridge_core.LidarTests.test_sparse_steering_cone_falls_back_to_gap_free_samples) ... ok
+test_trash_ultrasonic_cannot_change_path_classification (test_bridge_core.LidarTests.test_trash_ultrasonic_cannot_change_path_classification) ... ok
+test_initial_unavailable_sentinels_are_emitted_once (test_bridge_core.SensorTrackerTests.test_initial_unavailable_sentinels_are_emitted_once) ... ok
+test_live_refresh_is_rate_bounded (test_bridge_core.SensorTrackerTests.test_live_refresh_is_rate_bounded) ... ok
+test_partial_sensor_failure_does_not_overwrite_live_sensor (test_bridge_core.SensorTrackerTests.test_partial_sensor_failure_does_not_overwrite_live_sensor) ... ok
+test_recovery_rearms_exactly_one_future_sentinel (test_bridge_core.SensorTrackerTests.test_recovery_rearms_exactly_one_future_sentinel) ... ok
+test_repeated_explicit_unavailable_does_not_republish (test_bridge_core.SensorTrackerTests.test_repeated_explicit_unavailable_does_not_republish) ... ok
+test_update_retry_backoff_is_not_bypassed_by_new_samples (test_bridge_core.UpdateWorkerTests.test_update_retry_backoff_is_not_bypassed_by_new_samples) ... ok
+test_update_worker_coalesces_to_one_atomic_map (test_bridge_core.UpdateWorkerTests.test_update_worker_coalesces_to_one_atomic_map) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.155s
+
+OK

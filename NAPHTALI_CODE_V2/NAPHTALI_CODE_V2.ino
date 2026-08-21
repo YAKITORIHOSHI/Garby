@@ -11,25 +11,11 @@ void setup() {
   Air780.begin(115200, SERIAL_8N1, AIR_RX, AIR_TX);
   ESP_Serial.begin(115200, SERIAL_8N1, ESP_RX, ESP_TX);
   ESP_Serial.setTimeout(50);
-  delay(1000);
+  delay(250);
   flushESPSerial();
 
-  powerOnAir780();
-  if (!waitForModule(10)) {
-    Serial.println("[Air780E] WARNING: Module not responding — SMS alerts disabled.");
-  } else {
-    sendAT("AT+CGSN");
-    sendAT("AT+CSQ");
-    sendAT("AT+CIMI");
-    sendAT("AT+COPS?");
-    sendAT("AT+CFUN=1", 5000);
-    delay(1000);
-    if (!waitForNetwork(10)) {
-      Serial.println("[Air780E] Proceeding anyway — SMS may fail.");
-    }
-    sendAT("AT+CSQ");
-    delay(100);
-  }
+  // The cellular modem is operational telemetry, not a motion prerequisite.
+  // Never block the safety/control handshake waiting for a network registration.
 
   // ── Stepper Motor Setup ────────────────────────────────────
   engine.init();
@@ -78,18 +64,22 @@ void setup() {
   Serial.println("[BOOT] Setup finished. Sending [MCU READY] to BLE bridge...");
   flushESPSerial();
   ESP_Serial.println("[MCU READY]");
+  startModemInitialization();
 
   bool bleReady = false;
   const unsigned long handshakeStartedMs = millis();
   unsigned long lastPingMs = millis();
   while (!bleReady && millis() - handshakeStartedMs < 8000UL) {
-    while (Air780.available()) {
-      char c = (char)Air780.read();
-      if ((c >= 32 && c <= 126) || c == '\r' || c == '\n' || c == '\t') {
-        Serial.write(c);
+    // The modem init worker owns Air780 while it is active. Do not consume its
+    // AT responses from this handshake loop.
+    if (!smsAlertBusy()) {
+      while (Air780.available()) {
+        char c = (char)Air780.read();
+        if ((c >= 32 && c <= 126) || c == '\r' || c == '\n' || c == '\t') {
+          Serial.write(c);
+        }
       }
     }
-
 
     // Send periodic [MCU READY] handshake signal to BLE bridge every 1000ms
     if (millis() - lastPingMs >= 1000) {
@@ -112,7 +102,7 @@ void setup() {
     Serial.println("[BOOT] BLE handshake timed out — entering fail-closed recovery mode.");
   }
 
-  queueSMSAlert("[GARBY] Restarted and ready.");
+  // The modem background task sends the restart SMS only after it is ready.
 }
 
 // ============================================================
@@ -120,6 +110,7 @@ void setup() {
 // ============================================================
 void loop() {
   static bool outboundComplete = false;
+  static bool routeFaultLatched = false;
   static unsigned long lastIdleStatusRequestMs = 0;
   static unsigned long lastIdleSensorLogMs = 0;
   static unsigned long lastLoadSampleMs = 0;
@@ -133,6 +124,7 @@ void loop() {
                            previousState != GarbyState::IDLE;
   previousState = garbyState;
   if (enteredIdle) {
+    routeFaultLatched = false;
     loadConfirmCount = 0;
     gasConfirmCount = 0;
     loadFilterReady = false;
@@ -184,24 +176,19 @@ void loop() {
       }
       newLoadSample = true;
 
-      if (filteredLoadKg >= MAX_LOAD_APPRX && filteredLoadKg <= 20.0f) {
+      if (filteredLoadKg >= LOAD_TRIGGER_KG && filteredLoadKg <= 20.0f) {
         loadConfirmCount++;
         if (logIdleSensor) {
           Serial.printf("[IDLE] Load threshold met! Confirm count: %d/2\n",
                         loadConfirmCount);
         }
-      } else if (filteredLoadKg < MAX_LOAD_APPRX) {
+      } else if (filteredLoadKg < LOAD_TRIGGER_KG) {
         loadConfirmCount = 0;
       }
     }
 
-    if (logIdleSensor) {
-      if (loadFilterReady) {
-        Serial.printf("[IDLE] Filtered load: %.2f kg\n", filteredLoadKg);
-        ESP_Serial.printf("LOAD_CELL:%.2f\n", filteredLoadKg);
-      } else {
-        Serial.println("[IDLE] LoadCell unavailable; loop remains responsive");
-      }
+    if (logIdleSensor && loadFilterReady) {
+      ESP_Serial.printf("LOAD_CELL:%.2f\n", filteredLoadKg);
     }
 
     if (lastSensorPacketMs != 0 &&
@@ -240,38 +227,55 @@ void loop() {
       vTaskDelay(pdMS_TO_TICKS(newLoadSample ? 5 : 10));
     }
 
-    // ── RUNNING ────────────────────────────────────────────────
+  // ── RUNNING ────────────────────────────────────────────────
   } else if (garbyState == GarbyState::RUNNING) {
-    if (!outboundComplete) {
+    if (!outboundComplete && !routeFaultLatched) {
       Serial.println("[RUN] Starting outbound run");
-      runStart();
-      if (!resetQueued) {
+      const bool outboundSucceeded = runStart();
+      if (outboundSucceeded && !resetQueued) {
         outboundComplete = true;
         smoothDecelStopMotors();
         ESP_Serial.println("[OUTBOUND COMPLETE]");
         Serial.println("[RUN] Outbound run complete; remaining stationary");
+      } else if (!resetQueued) {
+        // A missing motor command or aborted segment is not a completed route
+        // and must not be replayed from an unknown physical position. Hold
+        // the controller fail-closed until an explicit reset/recovery cycle.
+        routeFaultLatched = true;
+        shouldStop = true;
+        emergencyStopMotors();
+        Serial.println("[RUN] Outbound segment incomplete; route fault latched");
+        vTaskDelay(pdMS_TO_TICKS(20));
       }
     }
 
     if (resetQueued) {
       resetQueued = false;
+      routeFaultLatched = false;
       outboundComplete = false;
       garbyState = GarbyState::RETURNING;
       Serial.println("[STATE] RUNNING -> RETURNING (explicit reset)");
     } else {
-      // Do not execute runStart() again. Stay stopped at the destination and
-      // continue servicing communication until an explicit return command.
+      // A completed route stays stopped at the destination. A route fault
+      // also stays stopped until an explicit reset/recovery cycle.
       requestStatus();
       vTaskDelay(pdMS_TO_TICKS(20));
     }
 
-    // ── RETURNING ─────────────────────────────────────────────
+  // ── RETURNING ─────────────────────────────────────────────
   } else if (garbyState == GarbyState::RETURNING) {
     Serial.println("[RETURN] Starting returnToPointB()");
-    returnToPointB();
-    Serial.println("[RETURN] Done.");
-    outboundComplete = false;
-    fullReset();
+    if (returnToPointB()) {
+      Serial.println("[RETURN] Done.");
+      outboundComplete = false;
+      fullReset();
+    } else if (!resetQueued) {
+      routeFaultLatched = true;
+      shouldStop = true;
+      emergencyStopMotors();
+      Serial.println("[RETURN] Route incomplete; route fault latched");
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
 
   }
 }

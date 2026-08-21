@@ -17,7 +17,7 @@
 // ============================================================
 #define LOADCELL_DOUT_PIN  33
 #define LOADCELL_SCK_PIN   32
-const float  MAX_LOAD_APPRX      = 1.0;        // kg
+constexpr float LOAD_TRIGGER_KG = 1.0f;
 const float  CALIBRATION_FACTOR  = 100000.0f;
 
 // ============================================================
@@ -89,6 +89,7 @@ const uint32_t SAFETY_STOP_DECEL = 14000;
 const uint32_t NUDGE_ACCELERATION = 6500;
 #define PATH_COMMAND_TIMEOUT_MS 800UL
 #define MCU_GO_CONFIRM_PACKETS     2
+#define MOTION_GATE_TIMEOUT_MS    900UL
 const int32_t  FAR          = 10000000;
 const int      STEP_VAL     = 3000;
 const uint32_t NUDGE_ACCEL  = (uint32_t)(ACCELERATION * NUDGE_SPEED / MAX_SPEED);
@@ -112,7 +113,7 @@ extern uint32_t lastPrintMs;
 // ============================================================
 #define OBSTACLE_DISTANCE    ULTRASONIC_STOP_DISTANCE_CM
 #define TRASHBIN_TARGET_CM   25.0f   // cm (trashbin proximity threshold)
-#define TRASHBIN_MARGIN_CM    4.0f   // cm (margin of error +-4cm: 21.0cm to 29.0cm)
+#define TRASHBIN_MARGIN_CM   4.0f   // cm (margin of error +-4cm: 21.0cm to 29.0cm)
 #define MAX_BLOCKED_COUNT    10
 
 // ============================================================
@@ -212,16 +213,16 @@ class ParseData {
 
 class ReceivedDatas {
   public:
-    enum class UltrasonicStatus { EMPTY, HALFWAY, FULL };
-    enum class MQ4Status        { NORMAL, WARNING, DANGER };
-    enum class MQ135Status      { CLEAN, MODERATE, POOR, VERY_POOR };
-    enum class MQ137Status      { NORMAL, WARNING, DANGER };
+    enum class UltrasonicStatus { UNAVAILABLE, EMPTY, HALFWAY, FULL };
+    enum class MQ4Status        { UNAVAILABLE, NORMAL, WARNING, DANGER };
+    enum class MQ135Status      { UNAVAILABLE, CLEAN, MODERATE, POOR, VERY_POOR };
+    enum class MQ137Status      { UNAVAILABLE, NORMAL, WARNING, DANGER };
 
   private:
-    struct Ultrasonic_Data { int value = 0; UltrasonicStatus status = UltrasonicStatus::EMPTY; };
-    struct MQ4_Data        { int value = 0; MQ4Status        status = MQ4Status::NORMAL;       };
-    struct MQ135_Data      { int value = 0; MQ135Status      status = MQ135Status::CLEAN;      };
-    struct MQ137_Data      { int value = 0; MQ137Status      status = MQ137Status::NORMAL;     };
+    struct Ultrasonic_Data { int value = 999; UltrasonicStatus status = UltrasonicStatus::UNAVAILABLE; };
+    struct MQ4_Data        { int value = -1; MQ4Status        status = MQ4Status::UNAVAILABLE;  };
+    struct MQ135_Data      { int value = -1; MQ135Status      status = MQ135Status::UNAVAILABLE; };
+    struct MQ137_Data      { int value = -1; MQ137Status      status = MQ137Status::UNAVAILABLE; };
 
     Ultrasonic_Data us;
     MQ4_Data        mq4;
@@ -325,8 +326,8 @@ extern unsigned long lastIdlePrintMs;
 // FUNCTION PROTOTYPES
 // ============================================================
 // Motor control
-void turnRight(int32_t step = STEP_VAL);
-void turnLeft (int32_t step = STEP_VAL);
+bool turnRight(int32_t step = STEP_VAL);
+bool turnLeft (int32_t step = STEP_VAL);
 void emergencyStopMotors();
 void smoothDecelStopMotors();
 void activeBrakeStopMotors();
@@ -341,10 +342,10 @@ void nudgeLeftContinuous (float delayMs, unsigned int intensityPct = 0);
 void nudgeRightContinuous(float delayMs, unsigned int intensityPct = 0);
 void updateNudge();
 
-void moveToTarget(long target1, long target2, bool isADJ = false, bool isNudgeEnabled = true);
-void moveDistance(int32_t steps = FAR, bool isADJ = false, bool isNudgeEnabled = true);
-void runStart();
-void returnToPointB();
+bool moveToTarget(long target1, long target2, bool isADJ = false, bool isNudgeEnabled = true);
+bool moveDistance(int32_t steps = FAR, bool isADJ = false, bool isNudgeEnabled = true);
+bool runStart();
+bool returnToPointB();
 
 // Sensor
 float readDistanceRaw();
@@ -365,6 +366,8 @@ bool   waitForNetwork(int maxAttempts = 20);
 void   sendSMS(const String& phoneNumber, const String& message);
 void   queueSMSAlert(const String& message);
 bool   smsAlertBusy();
+bool   modemReady();
+void   startModemInitialization();
 
 // Path / sensor handlers
 bool handlePath();
@@ -377,9 +380,9 @@ void enforcePathWatchdog();
 void haltAndWait(const String& reason);
 void movementGate(bool isNudgeEnabled = true);
 
-void safeMoveDistance(int32_t steps, bool isADJ = false, bool isNudgeEnabled = true);
-void safeTurnLeft (int32_t step = STEP_VAL);
-void safeTurnRight(int32_t step = STEP_VAL);
+bool safeMoveDistance(int32_t steps, bool isADJ = false, bool isNudgeEnabled = true);
+bool safeTurnLeft (int32_t step = STEP_VAL);
+bool safeTurnRight(int32_t step = STEP_VAL);
 void fullReset();
 void printIdleUptime();
 void serviceBridgeRecovery();
@@ -388,4 +391,4 @@ void responsiveDelay(unsigned long durationMs);
 // Utility
 void flushESPSerial();
 void buzzerTask(void *pvParameters);
-bool checkLoad(float threshold = MAX_LOAD_APPRX);
+bool checkLoad(float threshold = LOAD_TRIGGER_KG);

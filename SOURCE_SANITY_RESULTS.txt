@@ -1,0 +1,20 @@
+PASS C++ structure  BLE_Receiver-Final/BLE_Receiver-Final.ino
+PASS C++ structure  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp
+PASS C++ structure  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h
+PASS C++ structure  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino
+PASS C++ structure  NAPHTALI_CODE_V2/pointsRun.ino
+PASS JSON parse     .vscode/c_cpp_properties.json
+PASS JSON parse     .vscode/launch.json
+PASS JSON parse     .vscode/settings.json
+PASS JSON parse     AUDIT_RESULTS.json
+PASS JSON parse     FIREBASE-DATABASE/LATEST_FIREBASE_REAL-TIME_DATABASE.json
+PASS required file  RasPi/bridge_core.py
+PASS required file  RasPi/final_w_serial.py
+PASS required file  BLE_Receiver-Final/BLE_Receiver-Final.ino
+PASS required file  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino
+PASS required file  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp
+PASS required file  NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h
+PASS required file  NAPHTALI_CODE_V2/pointsRun.ino
+
+Summary: PASS (5 C/C++ files, 5 JSON files)
+Structural host check only; target Arduino compilation is still required.

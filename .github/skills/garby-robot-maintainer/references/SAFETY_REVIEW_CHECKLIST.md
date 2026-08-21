@@ -2,6 +2,18 @@
 
 Use this checklist for full audits, release reviews, protocol changes, and any issue involving STOP, steering, braking, or sensor timing.
 
+## 2026-08-21 release-specific checks
+
+- [ ] `RasPi/bridge_core.py` exists as source; deployment does not depend on `.pyc`.
+- [ ] No valid LiDAR scan yet produces `S`, never CLEAR.
+- [ ] Fresh scans missing required front/back sectors produce `S`.
+- [ ] Only one production `/scan` subscription is active.
+- [ ] Bridge waits for `[MCU READY]` and treats a repeated READY as a new MCU boot epoch.
+- [ ] Main `movementGate()` allows enough time for bridge + MCU repeated-clear confirmation and re-requests status while waiting.
+- [ ] Sonar no-echo cannot increment local clear confirmation or clear a previous obstacle latch.
+- [ ] Air780E initialization occurs after `[MCU READY]` and outside the safety handshake.
+- [ ] Physical LiDAR yaw and `pointsRun.ino` route direction are recorded from wheels-lifted tests.
+
 ## Table of contents
 
 1. [Project and version control](#1-project-and-version-control)

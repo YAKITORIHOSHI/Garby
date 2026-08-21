@@ -8,8 +8,8 @@ HardwareSerial    ESP_Serial(1);
 HardwareSerial    Air780(2);
 Servo             servo;
 FastAccelStepperEngine engine   = FastAccelStepperEngine();
-FastAccelStepper*      stepper1 = NULL;
-FastAccelStepper*      stepper2 = NULL;
+FastAccelStepper*      stepper1 = nullptr;
+FastAccelStepper*      stepper2 = nullptr;
 
 // ============================================================
 // STATIC / MISC VARS
@@ -78,6 +78,7 @@ static uint32_t ultrasonicPingStartedUs = 0;
 static unsigned long lastUltrasonicPingMs = 0;
 static unsigned long lastFrontSampleMs = 0;
 static uint32_t frontSampleSequence = 0;
+static bool latestFrontSampleValid = false;
 static float latestFrontRawCm = 999.0f;
 static float frontFilterWindow[3] = {999.0f, 999.0f, 999.0f};
 static uint8_t frontFilterIndex = 0;
@@ -95,6 +96,8 @@ static void setStraightBaseSpeed(uint32_t requestedSpeed);
 static void cancelActiveNudge(bool addSettleTime);
 
 static volatile bool smsWorkerBusy = false;
+static volatile bool modemServiceBusy = false;
+static volatile bool modemReadyFlag = false;
 
 static void smsWorkerTask(void* arg) {
   String* message = static_cast<String*>(arg);
@@ -107,7 +110,9 @@ static void smsWorkerTask(void* arg) {
 }
 
 void queueSMSAlert(const String& message) {
-  if (smsWorkerBusy) return;
+  // SMS is operational telemetry only. Never let an unavailable modem delay
+  // motion safety, BLE/UART handshakes, or the main state machine.
+  if (!modemReadyFlag || modemServiceBusy || smsWorkerBusy) return;
   String* copy = new String(message);
   if (copy == nullptr) return;
   smsWorkerBusy = true;
@@ -118,7 +123,11 @@ void queueSMSAlert(const String& message) {
 }
 
 bool smsAlertBusy() {
-  return smsWorkerBusy;
+  return smsWorkerBusy || modemServiceBusy;
+}
+
+bool modemReady() {
+  return modemReadyFlag;
 }
 
 // ============================================================
@@ -132,11 +141,6 @@ void requestStatus() {
   }
   lastStatusRequestMs = now;
   ESP_Serial.println("[REQUEST-STATUS]");
-  static unsigned long lastRequestLogMs = 0;
-  if (now - lastRequestLogMs >= 5000UL) {
-    lastRequestLogMs = now;
-    Serial.println("[REQ] Requesting fresh path status");
-  }
 }
 
 void serviceBridgeRecovery() {
@@ -178,6 +182,21 @@ void responsiveDelay(unsigned long durationMs) {
 // controller's hot loop anymore.
 //
 // Returns true if `buf` was a well-formed N: command we recognised.
+static bool parseUnsignedToken(const String& token, unsigned long maxValue,
+                               unsigned long& out) {
+  if (token.length() == 0) return false;
+  unsigned long value = 0;
+  for (size_t i = 0; i < token.length(); ++i) {
+    const char c = token.charAt(i);
+    if (c < '0' || c > '9') return false;
+    const unsigned long digit = (unsigned long)(c - '0');
+    if (value > (maxValue - digit) / 10UL) return false;
+    value = value * 10UL + digit;
+  }
+  out = value;
+  return true;
+}
+
 bool ParseData::parseNudgeCmd(const String& buf) {
   String s = buf;
   s.trim();
@@ -197,16 +216,19 @@ bool ParseData::parseNudgeCmd(const String& buf) {
   unsigned int intensity = 0;
 
   int subColon = numStr.indexOf(':');
+  unsigned long parsedMs = 0;
+  unsigned long parsedIntensity = 0;
   if (subColon >= 0) {
-    const long parsedMs = numStr.substring(0, subColon).toInt();
-    const long parsedIntensity = numStr.substring(subColon + 1).toInt();
-    if (parsedMs < 0 || parsedIntensity < 0) return false;
-    ms = (unsigned long)parsedMs;
+    if (numStr.indexOf(':', subColon + 1) >= 0) return false;
+    if (!parseUnsignedToken(numStr.substring(0, subColon),
+                            NUDGE_MAX_HOLD_MS, parsedMs)) return false;
+    if (!parseUnsignedToken(numStr.substring(subColon + 1),
+                            100UL, parsedIntensity)) return false;
+    ms = parsedMs;
     intensity = (unsigned int)parsedIntensity;
   } else {
-    const long parsedMs = numStr.toInt();
-    if (parsedMs < 0) return false;
-    ms = (unsigned long)parsedMs;
+    if (!parseUnsignedToken(numStr, NUDGE_MAX_HOLD_MS, parsedMs)) return false;
+    ms = parsedMs;
     intensity = 0;
   }
 
@@ -244,50 +266,111 @@ void ParseData::printAllState() {
 // ============================================================
 void ReceivedDatas::setUS(int val) {
   us.value = val;
-  if      (val < 20) us.status = UltrasonicStatus::EMPTY;
-  else if (val < 40) us.status = UltrasonicStatus::HALFWAY;
-  else               us.status = UltrasonicStatus::FULL;
+  if      (val == 999) us.status = UltrasonicStatus::UNAVAILABLE;
+  else if (val < 20)   us.status = UltrasonicStatus::EMPTY;
+  else if (val < 40)   us.status = UltrasonicStatus::HALFWAY;
+  else                 us.status = UltrasonicStatus::FULL;
 }
 void ReceivedDatas::setMQ4(int val) {
   mq4.value = val;
-  if      (val < 400) mq4.status = MQ4Status::NORMAL;
+  if      (val < 0)   mq4.status = MQ4Status::UNAVAILABLE;
+  else if (val < 400) mq4.status = MQ4Status::NORMAL;
   else if (val < 700) mq4.status = MQ4Status::WARNING;
   else                mq4.status = MQ4Status::DANGER;
 }
 void ReceivedDatas::setMQ135(int val) {
   mq135.value = val;
-  if      (val < 300) mq135.status = MQ135Status::CLEAN;
+  if      (val < 0)   mq135.status = MQ135Status::UNAVAILABLE;
+  else if (val < 300) mq135.status = MQ135Status::CLEAN;
   else if (val < 500) mq135.status = MQ135Status::MODERATE;
   else if (val < 700) mq135.status = MQ135Status::POOR;
   else                mq135.status = MQ135Status::VERY_POOR;
 }
 void ReceivedDatas::setMQ137(int val) {
   mq137.value = val;
-  if      (val < 400) mq137.status = MQ137Status::NORMAL;
+  if      (val < 0)   mq137.status = MQ137Status::UNAVAILABLE;
+  else if (val < 400) mq137.status = MQ137Status::NORMAL;
   else if (val < 700) mq137.status = MQ137Status::WARNING;
   else                mq137.status = MQ137Status::DANGER;
 }
+static bool parseSensorNumber(const String& text,
+                              float minimum,
+                              float maximum,
+                              int& out) {
+  String value = text;
+  value.trim();
+  if (value.length() == 0) return false;
+
+  bool hasDigit = false;
+  for (unsigned int i = 0; i < value.length(); ++i) {
+    const char c = value.charAt(i);
+    if (isDigit(c)) {
+      hasDigit = true;
+      continue;
+    }
+    if (c != '+' && c != '-' && c != '.' && c != 'e' && c != 'E') {
+      return false;
+    }
+  }
+  if (!hasDigit) return false;
+
+  char* end = nullptr;
+  const char* start = value.c_str();
+  const float parsed = strtof(start, &end);
+  if (end == start || end == nullptr || *end != '\0' || !isfinite(parsed) ||
+      parsed < minimum || parsed > maximum) {
+    return false;
+  }
+  out = (int)lroundf(parsed);
+  return true;
+}
+
 bool ReceivedDatas::parse(const String& raw) {
   if (!raw.startsWith("SENSOR:")) return false;
   String body = raw.substring(7);
   body.trim();
+  if (body.length() == 0) return false;
+
+  int nextUS = 0, nextMQ4 = 0, nextMQ135 = 0, nextMQ137 = 0;
+  bool seenUS = false, seenMQ4 = false, seenMQ135 = false, seenMQ137 = false;
   int segStart = 0;
   while (segStart < (int)body.length()) {
-    int    pipe = body.indexOf('|', segStart);
-    String seg  = (pipe == -1) ? body.substring(segStart)
-                               : body.substring(segStart, pipe);
+    int pipe = body.indexOf('|', segStart);
+    String seg = (pipe == -1) ? body.substring(segStart)
+                              : body.substring(segStart, pipe);
     seg.trim();
     segStart = (pipe == -1) ? (int)body.length() : pipe + 1;
-    int eq = seg.indexOf('=');
-    if (eq == -1) return false;
+    if (seg.length() == 0) return false;
+
+    const int eq = seg.indexOf('=');
+    if (eq <= 0 || seg.indexOf('=', eq + 1) != -1) return false;
     String key = seg.substring(0, eq);
-    int    val = seg.substring(eq + 1).toInt();
+    String value = seg.substring(eq + 1);
     key.trim();
-    if      (key == "US")    setUS(val);
-    else if (key == "MQ4")   setMQ4(val);
-    else if (key == "MQ135") setMQ135(val);
-    else if (key == "MQ137") setMQ137(val);
+
+    if (key == "US") {
+      if (seenUS || !parseSensorNumber(value, 0.0f, 999.0f, nextUS)) return false;
+      seenUS = true;
+    } else if (key == "MQ4") {
+      if (seenMQ4 || !parseSensorNumber(value, -1.0f, 100000.0f, nextMQ4)) return false;
+      seenMQ4 = true;
+    } else if (key == "MQ135") {
+      if (seenMQ135 || !parseSensorNumber(value, -1.0f, 100000.0f, nextMQ135)) return false;
+      seenMQ135 = true;
+    } else if (key == "MQ137") {
+      if (seenMQ137 || !parseSensorNumber(value, -1.0f, 100000.0f, nextMQ137)) return false;
+      seenMQ137 = true;
+    } else {
+      return false;
+    }
   }
+
+  // Commit atomically only after the complete telemetry packet validates.
+  if (!seenUS || !seenMQ4 || !seenMQ135 || !seenMQ137) return false;
+  setUS(nextUS);
+  setMQ4(nextMQ4);
+  setMQ135(nextMQ135);
+  setMQ137(nextMQ137);
   return true;
 }
 int ReceivedDatas::getUSValue()    { return us.value;    }
@@ -587,9 +670,12 @@ void haltAndWait(const String& reason) {
 void movementGate(bool isNudgeEnabled) {
   (void)isNudgeEnabled;
   commandServoTracked(DEFAULT_VIEW);
-  requestStatus();
   const unsigned long start = millis();
   do {
+    // Re-request while waiting. requestStatus() is internally rate-limited to
+    // 80 ms, allowing the bridge/Pi to satisfy both clearance-confirmation
+    // layers without relying on the slower periodic status cadence.
+    requestStatus();
     pollESP();
     serviceUltrasonic();
     serviceBridgeRecovery();
@@ -612,26 +698,28 @@ void movementGate(bool isNudgeEnabled) {
       return;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
-  } while (millis() - start < 400UL);
+  } while (millis() - start < MOTION_GATE_TIMEOUT_MS);
 
   haltAndWait(linkFaultActive ? "LINK:WAITING_FOR_FRESH_PATH"
                               : "PATH:BLOCKED from LiDAR");
 }
 
-void safeMoveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
+bool safeMoveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
   movementGate(isNudgeEnabled);
-  if (resetQueued || shouldStop || !pathCommandFresh()) return;
-  moveDistance(steps, isADJ, isNudgeEnabled);
+  if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+  return moveDistance(steps, isADJ, isNudgeEnabled);
 }
 
-void safeTurnLeft(int32_t step) {
+bool safeTurnLeft(int32_t step) {
   movementGate(false);
-  if (!resetQueued && !shouldStop) turnLeft(step);
+  if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+  return turnLeft(step);
 }
 
-void safeTurnRight(int32_t step) {
+bool safeTurnRight(int32_t step) {
   movementGate(false);
-  if (!resetQueued && !shouldStop) turnRight(step);
+  if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+  return turnRight(step);
 }
 
 void fullReset() {
@@ -708,8 +796,8 @@ static void controlledStopMotors(uint32_t deceleration,
   clearNudgeState();
 }
 
-void turnRight(int32_t step) {
-  if (!stepper1 || !stepper2) return;
+bool turnRight(int32_t step) {
+  if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
   commandServoTracked(DEFAULT_VIEW);
   const long target1 = stepper1->getCurrentPosition() - step;
   const long target2 = stepper2->getCurrentPosition() + step;
@@ -726,9 +814,10 @@ void turnRight(int32_t step) {
     enforcePathWatchdog();
     if (resetQueued || shouldStop) {
       activeBrakeStopMotors();
-      if (resetQueued) break;
+      if (resetQueued) return false;
       haltAndWait("PATH:BLOCKED during turn");
-      if (resetQueued) break;
+      if (resetQueued) return false;
+      if (shouldStop || !pathCommandFresh()) return false;
       stepper1->setSpeedInHz(TURN_SPEED);
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
@@ -740,7 +829,8 @@ void turnRight(int32_t step) {
     if (frontObstacleDetected()) {
       activeBrakeStopMotors();
       haltAndWait("SONIC:BLOCKED during turn");
-      if (resetQueued) break;
+      if (resetQueued) return false;
+      if (shouldStop || !pathCommandFresh()) return false;
       stepper1->setSpeedInHz(TURN_SPEED);
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
@@ -750,10 +840,13 @@ void turnRight(int32_t step) {
     }
     delay(1);
   }
+  movingForward = false;
+  return stepper1->getCurrentPosition() == target1 &&
+         stepper2->getCurrentPosition() == target2;
 }
 
-void turnLeft(int32_t step) {
-  if (!stepper1 || !stepper2) return;
+bool turnLeft(int32_t step) {
+  if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
   commandServoTracked(DEFAULT_VIEW);
   const long target1 = stepper1->getCurrentPosition() + step;
   const long target2 = stepper2->getCurrentPosition() - step;
@@ -770,9 +863,10 @@ void turnLeft(int32_t step) {
     enforcePathWatchdog();
     if (resetQueued || shouldStop) {
       activeBrakeStopMotors();
-      if (resetQueued) break;
+      if (resetQueued) return false;
       haltAndWait("PATH:BLOCKED during turn");
-      if (resetQueued) break;
+      if (resetQueued) return false;
+      if (shouldStop || !pathCommandFresh()) return false;
       stepper1->setSpeedInHz(TURN_SPEED);
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
@@ -784,7 +878,8 @@ void turnLeft(int32_t step) {
     if (frontObstacleDetected()) {
       activeBrakeStopMotors();
       haltAndWait("SONIC:BLOCKED during turn");
-      if (resetQueued) break;
+      if (resetQueued) return false;
+      if (shouldStop || !pathCommandFresh()) return false;
       stepper1->setSpeedInHz(TURN_SPEED);
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
@@ -794,6 +889,9 @@ void turnLeft(int32_t step) {
     }
     delay(1);
   }
+  movingForward = false;
+  return stepper1->getCurrentPosition() == target1 &&
+         stepper2->getCurrentPosition() == target2;
 }
 
 void emergencyStopMotors() {
@@ -830,9 +928,9 @@ void startStraight() {
   movingForward = true;
 }
 
-static void startTargetMove(long target1, long target2) {
+static bool startTargetMove(long target1, long target2) {
   enforcePathWatchdog();
-  if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return;
+  if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
   motionBaseSpeed = MAX_SPEED;
   const uint32_t motor1Speed = (uint32_t)(motionBaseSpeed *
     (1.0f + constrain(MOTOR1_TRIM_PCT, -10.0f, 10.0f) / 100.0f));
@@ -845,6 +943,15 @@ static void startTargetMove(long target1, long target2) {
   stepper1->moveTo(target1);
   stepper2->moveTo(target2);
   movingForward = true;
+  const bool targetAlreadyReached =
+    stepper1->getCurrentPosition() == target1 &&
+    stepper2->getCurrentPosition() == target2;
+  if (!targetAlreadyReached && !motorsRunning()) {
+    movingForward = false;
+    Serial.println("[MOTOR] Target command was not accepted");
+    return false;
+  }
+  return true;
 }
 
 void restoreStraight() {
@@ -912,9 +1019,16 @@ void nudgeLeftContinuous(float delayMs, unsigned int intensityPct) {
       (long)(millis() - nudgeSettleUntilMs) < 0) return;
   if (activeNudge == NudgeDir::LEFT) return;  // never extend a tap indefinitely
   if (activeNudge == NudgeDir::RIGHT) {
+    // A confirmed reversal is already filtered by the bridge hysteresis and
+    // cooldown. Restore the base speeds, then apply the new direction now;
+    // dropping the reversal here made the robot ignore the correction and
+    // look permanently stuck near a wall.
     restoreWheelSpeeds();
-    clearNudgeState();
-    return;
+    activeNudge = NudgeDir::NONE;
+    nudgeStartMs = 0;
+    nudgeDurationMs = 0;
+    nudgeHoldStartMs = 0;
+    nudgeSettleUntilMs = millis();
   }
 
   const float cutPct = nudgeCutFraction(delayMs, intensityPct,
@@ -944,9 +1058,14 @@ void nudgeRightContinuous(float delayMs, unsigned int intensityPct) {
       (long)(millis() - nudgeSettleUntilMs) < 0) return;
   if (activeNudge == NudgeDir::RIGHT) return;
   if (activeNudge == NudgeDir::LEFT) {
+    // See the left-nudge reversal path above. Do not consume a valid opposite
+    // correction without executing it.
     restoreWheelSpeeds();
-    clearNudgeState();
-    return;
+    activeNudge = NudgeDir::NONE;
+    nudgeStartMs = 0;
+    nudgeDurationMs = 0;
+    nudgeHoldStartMs = 0;
+    nudgeSettleUntilMs = millis();
   }
 
   const float cutPct = nudgeCutFraction(delayMs, intensityPct);
@@ -972,7 +1091,7 @@ void nudgeRightContinuous(float delayMs, unsigned int intensityPct) {
 // ── updateNudge ───────────────────────────────────────────────
 void updateNudge() {
   if (shouldStop) {
-    activeNudge = NudgeDir::NONE;
+    cancelActiveNudge(false);
     return;
   }
   if (activeNudge == NudgeDir::NONE) return;
@@ -1029,9 +1148,18 @@ static float medianOfThree(float a, float b, float c) {
   return b;
 }
 
-static void recordFrontSample(float distanceCm) {
-  if (!isfinite(distanceCm) || distanceCm < 1.5f || distanceCm > 999.0f) {
-    distanceCm = 999.0f;
+static void recordFrontSample(float distanceCm, bool validEcho = true) {
+  const bool valid = validEcho && isfinite(distanceCm) &&
+                     distanceCm >= 1.5f && distanceCm <= 999.0f;
+  lastFrontSampleMs = millis();
+  frontSampleSequence++;
+  latestFrontSampleValid = valid;
+
+  if (!valid) {
+    // No echo is UNKNOWN, not a clear reading. Preserve any existing obstacle
+    // latch/counters so sensor silence can never release a prior safety STOP.
+    latestFrontRawCm = 999.0f;
+    return;
   }
 
   latestFrontRawCm = distanceCm;
@@ -1048,8 +1176,6 @@ static void recordFrontSample(float distanceCm) {
                                   frontFilterWindow[1],
                                   frontFilterWindow[2]);
   }
-  lastFrontSampleMs = millis();
-  frontSampleSequence++;
 
   if (distanceCm <= VERY_CLOSE_DISTANCE_CM) {
     frontEmergencyActive = true;
@@ -1135,7 +1261,7 @@ void serviceUltrasonic() {
     ultrasonicEchoReady = false;
     portEXIT_CRITICAL(&ultrasonicMux);
     ultrasonicPingInFlight = false;
-    recordFrontSample(999.0f);
+    recordFrontSample(999.0f, false);
   }
 
   const bool centered = abs(servoCommandAngle - DEFAULT_VIEW) <=
@@ -1156,7 +1282,7 @@ bool frontEmergencyObstacleDetected() {
 }
 
 bool frontDistanceFresh() {
-  return lastFrontSampleMs != 0 &&
+  return latestFrontSampleValid && lastFrontSampleMs != 0 &&
          millis() - lastFrontSampleMs <= ULTRASONIC_SAMPLE_MAX_AGE_MS;
 }
 
@@ -1164,8 +1290,8 @@ float latestFrontDistance() {
   return frontDistanceFresh() ? frontDistance : 999.0f;
 }
 
-void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
-  if (!stepper1 || !stepper2) return;
+bool moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
+  if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
   commandServoTracked(DEFAULT_VIEW);
 
   if (isADJ) {
@@ -1175,6 +1301,14 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
     stepper2->setAcceleration(ACCELERATION);
     stepper1->moveTo(target1);
     stepper2->moveTo(target2);
+    if (stepper1->getCurrentPosition() != target1 ||
+        stepper2->getCurrentPosition() != target2) {
+      if (!motorsRunning()) {
+        Serial.println("[MOTOR] Adjustment command was not accepted");
+        movingForward = false;
+        return false;
+      }
+    }
     while (motorsRunning()) {
       pollESP();
       serviceUltrasonic();
@@ -1182,26 +1316,26 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
       enforcePathWatchdog();
       if (resetQueued || shouldStop) {
         activeBrakeStopMotors();
-        if (resetQueued) break;
+        if (resetQueued) return false;
         haltAndWait("PATH:BLOCKED during adjustment");
-        if (resetQueued) break;
-        startTargetMove(target1, target2);
+        if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+        if (!startTargetMove(target1, target2)) return false;
         continue;
       }
       if (frontObstacleDetected()) {
         activeBrakeStopMotors();
         haltAndWait("SONIC:BLOCKED during adjustment");
-        if (resetQueued) break;
-        startTargetMove(target1, target2);
+        if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+        if (!startTargetMove(target1, target2)) return false;
       }
       delay(1);
     }
     movingForward = false;
-    return;
+    return stepper1->getCurrentPosition() == target1 &&
+           stepper2->getCurrentPosition() == target2;
   }
 
-  startTargetMove(target1, target2);
-  if (!movingForward) return;
+  if (!startTargetMove(target1, target2)) return false;
   Serial.println("[MOVE] Targeted straight run started");
 
   unsigned long lastRequestTime = 0;
@@ -1222,7 +1356,7 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
     if (resetQueued) {
       smoothDecelStopMotors();
       Serial.println("[MOVE] Explicit reset -- controlled stop");
-      break;
+      return false;
     }
 
     if (shouldStop) {
@@ -1233,8 +1367,8 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
         ? "SONIC:BLOCKED (centered ultrasonic obstacle)"
         : (linkFaultActive ? "LINK:STALE" : "PATH:BLOCKED from LiDAR");
       haltAndWait(reason);
-      if (resetQueued) break;
-      startTargetMove(target1, target2);
+      if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+      if (!startTargetMove(target1, target2)) return false;
       commandServoTracked(DEFAULT_VIEW);
       lastRequestTime = millis();
       continue;
@@ -1270,8 +1404,8 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
       activeBrakeStopMotors();
       xTaskCreate(buzzerTask, "garby-obstacle", 1536, nullptr, 2, nullptr);
       haltAndWait("SONIC:BLOCKED in center path");
-      if (resetQueued) break;
-      startTargetMove(target1, target2);
+      if (resetQueued || shouldStop || !pathCommandFresh()) return false;
+      if (!startTargetMove(target1, target2)) return false;
       commandServoTracked(DEFAULT_VIEW);
       continue;
     }
@@ -1283,13 +1417,15 @@ void moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
   else clearNudgeState();
   movingForward = false;
   commandServoTracked(DEFAULT_VIEW);
+  return stepper1->getCurrentPosition() == target1 &&
+         stepper2->getCurrentPosition() == target2;
 }
 
-void moveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
-  if (!stepper1 || !stepper2) return;
+bool moveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
+  if (!stepper1 || !stepper2) return false;
   long t1 = stepper1->getCurrentPosition() + steps;
   long t2 = stepper2->getCurrentPosition() + steps;
-  moveToTarget(t1, t2, isADJ, isNudgeEnabled);
+  return moveToTarget(t1, t2, isADJ, isNudgeEnabled);
 }
 
 // ============================================================
@@ -1358,7 +1494,7 @@ String sendAT(const String& cmd, unsigned long timeout) {
     while (Air780.available()) {
       char c = (char)Air780.read();
       if ((c >= 32 && c <= 126) || c == '\r' || c == '\n' || c == '\t') {
-        response += c;
+        if (response.length() < 768U) response += c;
       }
     }
     if (response.indexOf("OK") != -1 || response.indexOf("ERROR") != -1) break;
@@ -1415,6 +1551,45 @@ bool waitForNetwork(int maxAttempts) {
   Serial.println("[Air780E] WARNING: Not registered.");
   return false;
 }
+static void modemInitializationTask(void*) {
+  modemServiceBusy = true;
+  modemReadyFlag = false;
+
+  powerOnAir780();
+  if (!waitForModule(10)) {
+    Serial.println("[Air780E] WARNING: Module not responding; SMS remains disabled.");
+  } else {
+    sendAT("AT+CGSN");
+    sendAT("AT+CSQ");
+    sendAT("AT+CIMI");
+    sendAT("AT+COPS?");
+    sendAT("AT+CFUN=1", 5000);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (!waitForNetwork(10)) {
+      Serial.println("[Air780E] Network unavailable; control system remains operational.");
+    }
+    sendAT("AT+CSQ");
+    modemReadyFlag = true;
+  }
+
+  modemServiceBusy = false;
+  if (modemReadyFlag) {
+    Serial.println("[Air780E] Background initialization complete.");
+    queueSMSAlert("[GARBY] Restarted and ready.");
+  }
+  vTaskDelete(nullptr);
+}
+
+void startModemInitialization() {
+  if (modemServiceBusy || modemReadyFlag) return;
+  modemServiceBusy = true;
+  if (xTaskCreate(modemInitializationTask, "garby-modem-init", 7168,
+                  nullptr, 1, nullptr) != pdPASS) {
+    modemServiceBusy = false;
+    Serial.println("[Air780E] WARNING: Could not start modem init task; SMS disabled.");
+  }
+}
+
 void sendSMS(const String& phoneNumber, const String& message) {
   Serial.println("[SMS] Sending to " + phoneNumber);
   String resp = sendAT("AT+CMGF=1", 3000);
@@ -1426,7 +1601,9 @@ void sendSMS(const String& phoneNumber, const String& message) {
   while (millis() - start < 5000) {
     while (Air780.available()) {
       char c = (char)Air780.read();
-      if ((c >= 32 && c <= 126) || c == '\r' || c == '\n' || c == '>') prompt += c;
+      if ((c >= 32 && c <= 126) || c == '\r' || c == '\n' || c == '>') {
+        if (prompt.length() < 256U) prompt += c;
+      }
     }
     if (prompt.indexOf(">") != -1) break;
     vTaskDelay(pdMS_TO_TICKS(2));
@@ -1443,7 +1620,9 @@ void sendSMS(const String& phoneNumber, const String& message) {
   while (millis() - start < 15000) {
     while (Air780.available()) {
       char c = (char)Air780.read();
-      if ((c >= 32 && c <= 126) || c == '\r' || c == '\n') result += c;
+      if ((c >= 32 && c <= 126) || c == '\r' || c == '\n') {
+        if (result.length() < 768U) result += c;
+      }
     }
     if (result.indexOf("+CMGS") != -1 || result.indexOf("ERROR") != -1) break;
     vTaskDelay(pdMS_TO_TICKS(2));
@@ -1484,7 +1663,7 @@ void flushESPSerial() {
 void buzzerTask(void *pvParameters) {
   (void)pvParameters;
   if (buzzerState) {
-    vTaskDelete(NULL);
+    vTaskDelete(nullptr);
     return;
   }
   buzzerState = true;
@@ -1493,7 +1672,7 @@ void buzzerTask(void *pvParameters) {
   digitalWrite(BUZZER_PIN, LOW);
   vTaskDelay(pdMS_TO_TICKS(100));
   buzzerState = false;
-  vTaskDelete(NULL);
+  vTaskDelete(nullptr);
 }
 bool checkLoad(float threshold) {
   if (!scale.is_ready()) return false;

@@ -17,16 +17,15 @@ GARBY/
 ├─ .github/                    # Agent definitions & skills for this repo
 │  ├─ agents/
 │  └─ skills/garby-robot-maintainer/   # SKILL.md, agents, references, scripts
+├─ BLE_Receiver-Final/         # ESP32 BLE bridge sketch & firmware
 ├─ Garby_MobileApp/            # Android companion app (Kotlin, Firebase RTDB)
-├─ SINGLE-TASK-DEFAULT/        # Active single-task (main loop) firmware variant
-│  ├─ BLE_Receiver-Final/      # ESP32 BLE bridge sketch + docs
-│  ├─ NAPHTALI_CODE_V2/        # Main ESP32 MCU motor controller (active source)
-│  ├─ RasPi/                   # Raspberry Pi ROS 2 LiDAR + serial sensor node
-│  ├─ SYSTEM_ARCHITECTURE.md   # Full system architecture
-│  ├─ DEPLOYMENT_AND_ACCEPTANCE.md
-│  └─ VALIDATION_RESULTS.md
-├─ GARBY-NOTIF-TRIG-HOST (EXPERIMENT)/  # Experimental Firebase Functions host
-└─ .vscode/                    # Editor configuration
+├─ NAPHTALI_CODE_V2/           # Main ESP32 MCU motor controller (active source)
+├─ RasPi/                      # Raspberry Pi ROS 2 LiDAR + serial sensor node
+├─ tools/                      # Project verification and sanity tools
+├─ SYSTEM_ARCHITECTURE.md      # Full system architecture
+├─ DEPLOYMENT_AND_ACCEPTANCE.md
+├─ VALIDATION_RESULTS.md
+└─ AUDIT_REPORT.md
 ```
 
 ## Architecture
@@ -48,17 +47,18 @@ Android App  ──Firebase RTDB──▶  Raspberry Pi
 
 | Node | Source | Role |
 |---|---|---|
-| **Main ESP32 MCU** | `SINGLE-TASK-DEFAULT/NAPHTALI_CODE_V2/` | Stepper motor execution, servo+ultrasonic obstacle check, HX711 load cell, Air780E SMS, state machine (`IDLE`/`RUNNING`/`RETURNING`) |
-| **ESP32 BLE Bridge** | `SINGLE-TASK-DEFAULT/BLE_Receiver-Final/` | NimBLE server, path packet parser, lane-centering/anti-zigzag nudge algorithm, UART relay to MCU |
-| **Raspberry Pi** | `SINGLE-TASK-DEFAULT/RasPi/final_w_serial.py` | ROS 2 LiDAR reader, Pi serial sensor reader, Firebase heartbeat/sync, BLE client, reset command bridge |
+| **Main ESP32 MCU** | `NAPHTALI_CODE_V2/` | Stepper motor execution, servo+ultrasonic obstacle check, HX711 load cell, Air780E SMS, state machine (`IDLE`/`RUNNING`/`RETURNING`) |
+| **ESP32 BLE Bridge** | `BLE_Receiver-Final/` | NimBLE server, path packet parser, lane-centering/anti-zigzag nudge algorithm, UART relay to MCU |
+| **Raspberry Pi** | `RasPi/final_w_serial.py` | ROS 2 LiDAR reader, Pi serial sensor reader, Firebase heartbeat/sync, BLE client, reset command bridge |
 | **Android App** | `Garby_MobileApp/` | Telemetry dashboard, sensor monitoring, explicit reset intent |
 
 ## Documentation
 
-- [**System Architecture**](SINGLE-TASK-DEFAULT/SYSTEM_ARCHITECTURE.md) — detailed design, watchdogs, BLE packet protocol, Firebase schema
-- [Deployment & Acceptance](SINGLE-TASK-DEFAULT/DEPLOYMENT_AND_ACCEPTANCE.md)
-- [Validation Results](SINGLE-TASK-DEFAULT/VALIDATION_RESULTS.md)
-- [RasPi README](SINGLE-TASK-DEFAULT/RasPi/README.md)
+- [**System Architecture**](SYSTEM_ARCHITECTURE.md) — detailed design, watchdogs, BLE packet protocol, Firebase schema
+- [Deployment & Acceptance](DEPLOYMENT_AND_ACCEPTANCE.md)
+- [Validation Results](VALIDATION_RESULTS.md)
+- [Audit Report](AUDIT_REPORT.md)
+- [RasPi README](RasPi/README.md)
 
 ## Key Protocols
 
