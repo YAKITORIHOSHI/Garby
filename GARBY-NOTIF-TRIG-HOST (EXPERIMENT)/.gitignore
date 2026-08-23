@@ -1,6 +1,0 @@
-node_modules/
-serviceAccountKey.json
-.runtimeconfig.json
-firebase-debug.log
-firebase-debug.*.log
-.firebaserc.local

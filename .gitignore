@@ -1,18 +1,14 @@
-# Node.js
-node_modules/
-npm-debug.log*
-package-lock.json
-
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
-*.egg
-dist/
-.build/
-.eggs/
+.venv/
 
-# Gradle / Android
+# Node / experiment dependencies
+node_modules/
+npm-debug.log*
+
+# Android / Gradle build output
 .gradle/
 **/build/
 captures/
@@ -25,34 +21,32 @@ captures/
 *.jks
 *.keystore
 
-# IDE
+# MCU Flasher / PlatformIO generated output
+.mcu_flasher_build_cache/
+.pio/
+
+# IDE and OS files
 .idea/
 *.iml
 .vscode/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
+.claude/
 
-# Firebase database dumps - excluded from VCS per safety review
-SINGLE-TASK-DEFAULT/FIREBASE-DATABASE/
-*LATEST_FIREBASE*DATABASE*.json
-*GARBY-DATABASE*.json
-*.firebaserc
-firebase.json
-
-# ZIP archives (build artifacts / IDE exports)
-*.zip
-
-# Logs
-*.log
-
-# Env files
+# Credentials and local configuration
 *.env
 .env
+*.firebaserc
+firebase.json
+*service-account*.json
 
-# Claude
-.claude/
+# Firebase exports and packaged IDE artifacts
+*LATEST*FIREBASE*DATABASE*.json
+*GARBY-DATABASE*.json
+*.zip
+
+# Logs and generated reports
+*.log

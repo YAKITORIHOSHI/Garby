@@ -2,6 +2,18 @@
 
 Use this checklist for full audits, release reviews, protocol changes, and any issue involving STOP, steering, braking, or sensor timing.
 
+## 2026-08-21 release-specific checks
+
+- [ ] `RasPi/bridge_core.py` exists as source; deployment does not depend on `.pyc`.
+- [ ] No valid LiDAR scan yet produces `S`, never CLEAR.
+- [ ] Fresh scans missing required front/back sectors produce `S`.
+- [ ] Only one production `/scan` subscription is active.
+- [ ] Bridge waits for `[MCU READY]` and treats a repeated READY as a new MCU boot epoch.
+- [ ] Main `movementGate()` allows enough time for bridge + MCU repeated-clear confirmation and re-requests status while waiting.
+- [ ] Sonar no-echo cannot increment local clear confirmation or clear a previous obstacle latch.
+- [ ] Air780E initialization occurs after `[MCU READY]` and outside the safety handshake.
+- [ ] Physical LiDAR yaw and `pointsRun.ino` route direction are recorded from wheels-lifted tests.
+
 ## Table of contents
 
 1. [Project and version control](#1-project-and-version-control)
@@ -95,6 +107,8 @@ Use this checklist for full audits, release reviews, protocol changes, and any i
 - [ ] Nudge duration and intensity are proportional and bounded.
 - [ ] Front-obstacle proximity suppresses steering.
 - [ ] Side-wall proximity prevents steering into a nearby wall.
+- [ ] Side returns at or below the configured hard envelope block both travel directions.
+- [ ] A side human, trash bin, and wall-mounted extinguisher are tested as generic LiDAR protrusions.
 - [ ] Doorway and protrusion handling are present.
 - [ ] Left/right execution is symmetric unless measured calibration is documented.
 - [ ] Logs include error, direction, duration, intensity, and sequence during tuning.
@@ -106,6 +120,7 @@ Use this checklist for full audits, release reviews, protocol changes, and any i
 - [ ] Settling time accounts for angular travel.
 - [ ] Echo timeout is bounded and shorter than the intended schedule.
 - [ ] Center samples receive stop priority.
+- [ ] A fresh centered echo inside the stop envelope is checked before nudge execution.
 - [ ] Very-close obstacles stop immediately.
 - [ ] Normal obstacles require confirmation without excessive delay.
 - [ ] Resume requires repeated local-clear samples and fresh LiDAR clearance.

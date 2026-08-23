@@ -1,0 +1,3 @@
+bleak>=0.20
+pyserial>=3.5
+firebase-admin>=6.0
