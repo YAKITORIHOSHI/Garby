@@ -264,16 +264,28 @@ void loop() {
 
   // ── RETURNING ─────────────────────────────────────────────
   } else if (garbyState == GarbyState::RETURNING) {
-    Serial.println("[RETURN] Starting returnToPointB()");
-    if (returnToPointB()) {
-      Serial.println("[RETURN] Done.");
-      outboundComplete = false;
-      fullReset();
-    } else if (!resetQueued) {
-      routeFaultLatched = true;
+    if (!routeFaultLatched) {
+      Serial.println("[RETURN] Starting returnToPointB()");
+      if (returnToPointB()) {
+        Serial.println("[RETURN] Done.");
+        outboundComplete = false;
+        fullReset();
+      } else {
+        // The chassis position is no longer known well enough to restart the
+        // route from its first segment. Latch the fault and remain stationary
+        // until a supervised recovery physically re-establishes the route.
+        routeFaultLatched = true;
+        shouldStop = true;
+        resetQueued = false;
+        emergencyStopMotors();
+        Serial.println("[RETURN] Route incomplete; stationary fault latched");
+      }
+    } else {
+      // Keep communication and sensor servicing alive through the normal top
+      // of loop(), but never replay returnToPointB() from an unknown position.
       shouldStop = true;
-      emergencyStopMotors();
-      Serial.println("[RETURN] Route incomplete; route fault latched");
+      resetQueued = false;
+      requestStatus();
       vTaskDelay(pdMS_TO_TICKS(20));
     }
 

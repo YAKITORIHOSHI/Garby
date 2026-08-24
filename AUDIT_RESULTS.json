@@ -1,7 +1,7 @@
 {
   "root": "C:\\Users\\napht\\Documents\\GarbyMostLatest",
   "summary": {
-    "PASS": 70,
+    "PASS": 71,
     "WARN": 2,
     "FAIL": 0
   },
@@ -352,6 +352,12 @@
       "severity": "PASS",
       "check": "MCU readiness handshake",
       "detail": "[MCU READY] emitted",
+      "file": "NAPHTALI_CODE_V2\\NAPHTALI_CODE_V2.ino"
+    },
+    {
+      "severity": "PASS",
+      "check": "MCU return route fault latch",
+      "detail": "Incomplete return stays stationary and cannot replay from an unknown position",
       "file": "NAPHTALI_CODE_V2\\NAPHTALI_CODE_V2.ino"
     },
     {

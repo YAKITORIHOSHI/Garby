@@ -146,6 +146,17 @@ def audit_mcu(a,h,cpp,ino,points):
       (a.fail if blocking else a.ok)("MCU startup gating","setup() does not wait for modem/network",ino)
       (a.ok if 'startModemInitialization();' in isrc else a.fail)("MCU async modem start","Modem task starts after [MCU READY]",ino)
       (a.ok if 'ESP_Serial.println("[MCU READY]")' in isrc else a.fail)("MCU readiness handshake","[MCU READY] emitted",ino)
+      returning_start=isrc.find("GarbyState::RETURNING")
+      returning=isrc[returning_start:] if returning_start>=0 else ""
+      guard_pos=returning.find("if (!routeFaultLatched)")
+      route_call_pos=returning.find("if (returnToPointB())")
+      holds_stop='shouldStop = true;' in returning and 'resetQueued = false;' in returning
+      return_fault_guard=(guard_pos>=0 and route_call_pos>guard_pos and holds_stop)
+      (a.ok if return_fault_guard else a.fail)(
+        "MCU return route fault latch",
+        "Incomplete return stays stationary and cannot replay from an unknown position",
+        ino,
+      )
     if points:
       ps=text(points)
       rm=re.search(r"runStart\(\).*?safeMoveDistance\(([-0-9]+)",ps,re.S); rr=re.search(r"returnToPointB\(\).*?safeMoveDistance\(([-0-9]+)",ps,re.S)

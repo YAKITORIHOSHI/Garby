@@ -1,4 +1,4 @@
-# GARBY Validation Results — 2026-08-23 Coordinated Follow-up
+# GARBY Validation Results — 2026-08-24 Return-Route Safety Follow-up
 
 This report covers the active root deployment set. Generated build/cache
 directories are not production source. Static and target builds do not replace
@@ -24,7 +24,7 @@ Coordinated static audit:
 python3 .github/skills/garby-robot-maintainer/scripts/audit_project.py .
 ```
 
-Result: **70 PASS / 2 WARN / 0 FAIL**. The warnings are expected: physical
+Result: **71 PASS / 2 WARN / 0 FAIL**. The warnings are expected: physical
 route direction remains hardware-unverified, and generated Python bytecode is
 present from validation runs.
 
@@ -55,7 +55,17 @@ source.
 The active main controller compiled in a temporary PlatformIO fixture for
 `esp32dev` using ESP32Servo 3.2.1, FastAccelStepper 1.2.7, and HX711 0.6.4.
 The BLE bridge compiled for `esp32-s3-devkitm-1` using NimBLE-Arduino 2.5.1.
+The main controller used 8.5% RAM and 26.1% flash; the BLE bridge used 10.0%
+RAM and 15.5% flash. Strict `-Wall -Wextra` builds produced only third-party
+library warnings and no project-source warnings.
 No hardware was flashed.
+
+## Return-route safety follow-up
+
+- An incomplete `returnToPointB()` result now latches a stationary route fault.
+- The RETURNING state no longer replays the full route from an unknown chassis position.
+- Communication and sensor servicing continue while motion remains fail-closed.
+- The coordinated audit now fails if the RETURNING route call is no longer protected by the fault latch.
 
 ## Android validation
 

@@ -312,6 +312,7 @@ Load and gas are IDLE→RUNNING triggers, with repeated confirmation. The load t
 
 - execute `returnToPointB()` using the same live safety gates
 - finish with `fullReset()` to IDLE only after the return route reports success
+- if any return segment fails, latch a stationary route fault and do not replay `returnToPointB()` from the robot's now-unknown physical position; supervised physical recovery is required
 
 ## 13. Route limitation — physical direction is hardware-unverified
 

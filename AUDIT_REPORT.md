@@ -117,7 +117,7 @@ evidence for the centered nudge and Servo+Ultrasonic interlock changes.
 
 - Main route primitives now return success/failure through `safeMoveDistance()`, `safeTurnLeft()`, and `safeTurnRight()`.
 - `runStart()` and `returnToPointB()` stop at the first incomplete segment, so a load trigger cannot be followed by a false `[OUTBOUND COMPLETE]` when no motor command was accepted.
-- The main state machine keeps RUNNING/RETURNING active until the route reports success; explicit reset behavior remains unchanged.
+- The main state machine keeps RUNNING/RETURNING active until the route reports success; an incomplete return now latches a stationary fault and cannot replay the full route from an unknown physical position.
 - A confirmed nudge reversal restores the base wheel speeds and applies the opposite tap immediately instead of discarding it.
 - C++ pointer/task null uses were modernized to `nullptr` in the active controller source.
 - Removed the deprecated `NimBLEService::start()` no-op; NimBLE-Arduino 2.5.x starts services as part of advertising/server startup.
