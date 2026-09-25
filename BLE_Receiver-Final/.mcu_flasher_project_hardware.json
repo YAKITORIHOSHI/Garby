@@ -1,0 +1,9 @@
+{
+  "project_dir": "C:\\Users\\napht\\Documents\\GarbyMostLatest\\BLE_Receiver-Final",
+  "board_name": "ESP32 Dev Module",
+  "platform": "espressif32",
+  "board_id": "esp32dev",
+  "com_port": "COM12",
+  "baud_rate": 115200,
+  "updated_at": "2026-09-19 00:35:38"
+}

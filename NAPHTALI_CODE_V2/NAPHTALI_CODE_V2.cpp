@@ -998,10 +998,12 @@ static void setStraightBaseSpeed(uint32_t requestedSpeed) {
 static float nudgeCutFraction(float delayMs, unsigned int intensityPct,
                               float directionBoost = 1.0f) {
   // Older bridges omit intensity. Their proportional duration still carries
-  // useful error magnitude, so map it to a gentle execution level.
+  // useful error magnitude, so map it to a firm-but-bounded execution level
+  // scaled to the current caps.
   if (intensityPct == 0) {
     const float ratio = constrain(delayMs / (float)NUDGE_MAX_HOLD_MS, 0.0f, 1.0f);
-    intensityPct = (unsigned int)(NUDGE_MIN_CUT_PCT + ratio * 13.0f);
+    const float span = (float)(NUDGE_MAX_CUT_PCT - NUDGE_MIN_CUT_PCT) * 0.75f;
+    intensityPct = (unsigned int)(NUDGE_MIN_CUT_PCT + ratio * span);
   }
   intensityPct = constrain(intensityPct, NUDGE_MIN_CUT_PCT, NUDGE_MAX_CUT_PCT);
   float cut = ((float)intensityPct / 100.0f) * directionBoost;

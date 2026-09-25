@@ -62,15 +62,25 @@ HardwareSerial ESP_Serial(1);
 //   3. Proportional tap duration — small drift gets a short tap.
 //   4. Direction confirmation — a direction must persist across several
 //      fresh packets before a short correction is allowed.
-#define NUDGE_DEAD_ZONE_CM               18.0f
-#define NUDGE_HYSTERESIS_CM              12.0f
-#define NUDGE_DURATION_MIN_MS             35UL
-#define NUDGE_DURATION_MAX_MS             60UL
-#define NUDGE_INTENSITY_MIN_PCT            8U
-#define NUDGE_INTENSITY_MAX_PCT           18U
+// Tuning note (2026-09-22): taps raised to 180-320 ms at 20-34% cut after
+// on-robot testing showed shorter/weaker taps produced no visible drift.
+// The 3-packet confirmation plus the strong-signal fast path remain the
+// anti-zigzag / instant-response guards.
+#define NUDGE_DEAD_ZONE_CM               12.0f
+#define NUDGE_HYSTERESIS_CM               8.0f
+// 2026-09-22: tap span raised (55-95 -> 180-320 ms, 12-22 -> 20-34% cut).
+// Earlier values commanded a sub-millimeter per-tap drift that was invisible.
+// Both stay within the MCU execution caps (35% cut, 260 ms hold).
+#define NUDGE_DURATION_MIN_MS            180UL
+#define NUDGE_DURATION_MAX_MS            320UL
+#define NUDGE_INTENSITY_MIN_PCT           20U
+#define NUDGE_INTENSITY_MAX_PCT           34U
 #define NUDGE_ERROR_SCALE_CM              70.0f
-#define NUDGE_COOLDOWN_MS                1200UL
-#define NUDGE_CONFIRM_PACKETS               5
+#define NUDGE_COOLDOWN_MS                1000UL
+#define NUDGE_CONFIRM_PACKETS               3
+// A lateral error beyond the dead zone by this extra margin triggers a nudge
+// immediately without waiting for the multi-packet direction confirmation.
+#define STRONG_NUDGE_MARGIN_CM            25.0f
 #define STARTUP_GRACE_PACKETS               8
 // After grace, ramp from the valid minimum tap toward the computed tap over
 // this many fresh accepted packets. Zero remains reserved for safety/stable.
@@ -81,7 +91,7 @@ HardwareSerial ESP_Serial(1);
 // Corridor protrusion filtering (fire extinguishers, wall pillars, passing people)
 #define CORRIDOR_PROTRUSION_THRESHOLD_CM 12.0f
 #define CORRIDOR_OPENING_THRESHOLD_CM    25.0f
-#define ERROR_EMA_ALPHA                  0.10f
+#define ERROR_EMA_ALPHA                  0.15f
 // Front-aware: front <= SUPPRESS -> nudge fully suppressed
 #define FRONT_NUDGE_SUPPRESS_CM          60.0f
 #define FRONT_NUDGE_WARN_CM             120.0f
@@ -588,13 +598,22 @@ static void computeNudgeCommand(const String& sidesVal,
   }
 
   // ── Direction confirmation (anti-zigzag) ───────────────────
+  // A strong unambiguous side error (beyond the dead zone plus a wide safety
+  // margin) fires immediately without multi-packet confirmation. This makes
+  // the robot react at once when it is already well off-center — the delayed
+  // confirmation path remains as the anti-zigzag guard for weak drift.
   if (wantDir != 0 && wantDir == nudgeConfirmDir) {
     nudgeConfirmCnt++;
   } else {
     nudgeConfirmDir = wantDir;
     nudgeConfirmCnt = (wantDir != 0) ? 1 : 0;
   }
-  bool confirmed = (wantDir != 0) && (nudgeConfirmCnt >= NUDGE_CONFIRM_PACKETS);
+  const bool strongSignal =
+    wantDir != 0 &&
+    fabsf(rawError) > (requiredThreshold + STRONG_NUDGE_MARGIN_CM) &&
+    lastFireDir != wantDir;  // only when not already tapping this direction
+  bool confirmed = (wantDir != 0) &&
+                   (nudgeConfirmCnt >= NUDGE_CONFIRM_PACKETS || strongSignal);
 
   // ── Cooldown check ─────────────────────────────────────────
   bool periodOk = (millis() - lastNudgeFireMs >= NUDGE_COOLDOWN_MS);

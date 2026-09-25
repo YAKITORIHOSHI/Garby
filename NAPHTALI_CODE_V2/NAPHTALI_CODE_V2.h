@@ -8,9 +8,9 @@
 #include <HX711.h>
 #include <Arduino.h>
 
-// 160 MHz is ample for UART parsing and hardware-timed step pulses, while
+// 240 MHz is ample for UART parsing and hardware-timed step pulses, while
 // reducing heat and current draw compared with forcing this executor to 240 MHz.
-#define EXECUTOR_CPU_MHZ 160
+#define EXECUTOR_CPU_MHZ 240
 
 // ============================================================
 // LOAD CELL
@@ -84,7 +84,9 @@ const uint32_t TURN_SPEED      = 3000;
 const uint32_t ACCELERATION    = 4800;
 const uint32_t GENTLE_STOP_DECEL = 6500;
 const uint32_t SAFETY_STOP_DECEL = 14000;
-const uint32_t NUDGE_ACCELERATION = 6500;
+// 2026-09-22: raised from 6500 so the speed ramp of each tap completes
+// faster and the correction becomes effective within the bounded tap window.
+const uint32_t NUDGE_ACCELERATION = 9000;
 #define PATH_COMMAND_TIMEOUT_MS 800UL
 #define MCU_GO_CONFIRM_PACKETS     2
 #define MOTION_GATE_TIMEOUT_MS    900UL
@@ -120,12 +122,15 @@ extern uint32_t lastPrintMs;
 
 // Symmetric execution limits. Mechanical bias should be calibrated from a
 // measured straight-line test, not compensated with a large hard-coded boost.
+// 2026-09-22: caps raised (cut 24->35, hold 110->260) because a 55-95 ms tap
+// at <=24% cut produced no visible corrective displacement. The bridge must
+// be able to express a stronger tap for the correction to be felt.
 const float NUDGE_LEFT_BOOST_FACTOR  = 1.00f;
 #define NUDGE_MIN_CUT_PCT  5U
-#define NUDGE_MAX_CUT_PCT 24U
+#define NUDGE_MAX_CUT_PCT 35U
 
 // Hard ceiling on how long a nudge can stay active in the SAME direction.
-#define NUDGE_MAX_HOLD_MS  110UL
+#define NUDGE_MAX_HOLD_MS  260UL
 
 // Minimum straight-run settling time AFTER a nudge ends before a new
 // nudge can be accepted.
