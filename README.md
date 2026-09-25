@@ -47,7 +47,7 @@ GARBY/
 │   ├── bridge_core.py         # Core LiDAR parsing, coalescing mailbox & health helpers
 │   ├── final_w_serial.py      # Main production ROS 2 node & BLE client
 │   ├── requirements.txt       # Python dependencies
-│   └── test_bridge_core.py    # Host unit test suite (18 test cases)
+│   └── test_bridge_core.py    # Host unit test suite (32 test cases)
 ├── Garby_MobileApp/           # Android companion app (Kotlin, Firebase RTDB)
 ├── tools/                     # Host sanity and verification scripts
 │   └── source_sanity.py       # Structural syntax and JSON integrity validator
@@ -55,6 +55,7 @@ GARBY/
 ├── DEPLOYMENT_AND_ACCEPTANCE.md# Hardware checklist & supervised deployment runbook
 ├── VALIDATION_RESULTS.md      # Static, unit test, and compilation verification record
 ├── AUDIT_REPORT.md            # Coordinated multi-node audit & defect repair log
+├── RELEASE_NOTES.md           # Multi-node throttling resilience & safety release notes
 └── .github/                   # Copilot/agent definitions & maintainer skills
 ```
 
@@ -126,6 +127,7 @@ cd Garby_MobileApp
 
 ## Documentation
 
+- [Release Notes](RELEASE_NOTES.md) — Multi-node throttling resilience, return-route fault latching, and verification results.
 - [System Architecture](SYSTEM_ARCHITECTURE.md) — Comprehensive technical architecture, watchdogs, timing parameters, and fail-closed state machines.
 - [Deployment & Acceptance Runbook](DEPLOYMENT_AND_ACCEPTANCE.md) — Step-by-step flashing order, wheels-lifted verification, and physical acceptance checklist.
 - [Validation Results](VALIDATION_RESULTS.md) — Host test results, static audit outputs, and target compilation details.
