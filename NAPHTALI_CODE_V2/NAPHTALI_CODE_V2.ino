@@ -9,6 +9,9 @@ void setup() {
 
   Serial.begin(115200);
   Air780.begin(115200, SERIAL_8N1, AIR_RX, AIR_TX);
+  // A doubled RX buffer absorbs a bounded burst while a CPU-throttled loop
+  // iteration delays pollESP(); the bridge sends only a few lines per period.
+  ESP_Serial.setRxBufferSize(512);
   ESP_Serial.begin(115200, SERIAL_8N1, ESP_RX, ESP_TX);
   ESP_Serial.setTimeout(50);
   delay(250);
@@ -110,7 +113,6 @@ void setup() {
 // ============================================================
 void loop() {
   static bool outboundComplete = false;
-  static bool routeFaultLatched = false;
   static unsigned long lastIdleStatusRequestMs = 0;
   static unsigned long lastIdleSensorLogMs = 0;
   static unsigned long lastLoadSampleMs = 0;
@@ -264,16 +266,29 @@ void loop() {
 
   // ── RETURNING ─────────────────────────────────────────────
   } else if (garbyState == GarbyState::RETURNING) {
-    Serial.println("[RETURN] Starting returnToPointB()");
-    if (returnToPointB()) {
-      Serial.println("[RETURN] Done.");
-      outboundComplete = false;
-      fullReset();
-    } else if (!resetQueued) {
-      routeFaultLatched = true;
-      shouldStop = true;
-      emergencyStopMotors();
-      Serial.println("[RETURN] Route incomplete; route fault latched");
+    if (!routeFaultLatched) {
+      Serial.println("[RETURN] Starting returnToPointB()");
+      if (returnToPointB()) {
+        Serial.println("[RETURN] Done.");
+        outboundComplete = false;
+        fullReset();
+      } else if (!resetQueued) {
+        // A failed return segment must not be replayed from the robot's
+        // now-unknown physical position. Latch a stationary route fault;
+        // only supervised physical recovery plus an explicit [RESET] clears it.
+        routeFaultLatched = true;
+        shouldStop = true;
+        emergencyStopMotors();
+        Serial.println("[RETURN] Route incomplete; route fault latched");
+        vTaskDelay(pdMS_TO_TICKS(20));
+      }
+    } else {
+      // Stationary route fault: hold fail-closed until a supervised [RESET]
+      // clears it via fullReset(). The defensive resetQueued clear cannot
+      // replay the route because the fault guard above blocks it, and
+      // pollESP() never queues a reset while a route fault is latched.
+      resetQueued = false;
+      requestStatus();
       vTaskDelay(pdMS_TO_TICKS(20));
     }
 

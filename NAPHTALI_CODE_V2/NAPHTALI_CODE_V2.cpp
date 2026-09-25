@@ -51,6 +51,7 @@ ReceivedDatas data;
 
 GarbyState garbyState  = GarbyState::IDLE;
 bool       resetQueued = false;
+bool       routeFaultLatched = false;
 
 // ── Non-blocking nudge ───────────────────────────────────────
 NudgeDir      activeNudge     = NudgeDir::NONE;
@@ -66,6 +67,35 @@ static unsigned long lastBridgeRxMs = 0;
 static unsigned long lastStatusRequestMs = 0;
 static unsigned long lastReadyRecoveryMs = 0;
 static uint32_t motionBaseSpeed = MAX_SPEED;
+
+// ── Adaptive path-command tolerance (CPU/connection throttling) ─────────
+// A fixed 800 ms watchdog trips spuriously when the bridge or Pi is throttled
+// and refreshes STOP/GO state more slowly than the normal 250 ms cadence.
+// Track the observed STOP/GO inter-arrival period (EWMA alpha = 1/4) and
+// widen the tolerance up to a hard cap while commands keep arriving. True
+// bridge silence still lapses at the 800 ms floor, so the fail-closed
+// guarantee is unchanged.
+#define PATH_TOLERANCE_ADAPT_CAP_MS  1200UL
+static uint32_t pathCommandEwmaMs = 0;
+
+static void notePathCommandArrival(unsigned long nowMs) {
+  if (lastPathCommandMs == 0) return;
+  unsigned long interval = nowMs - lastPathCommandMs;
+  // Ignore long latched/halted gaps so they cannot distort the cadence
+  // estimate; the tolerance cap bounds the effect anyway.
+  if (interval > PATH_TOLERANCE_ADAPT_CAP_MS) interval = PATH_TOLERANCE_ADAPT_CAP_MS;
+  pathCommandEwmaMs = (pathCommandEwmaMs == 0)
+    ? (uint32_t)interval
+    : (uint32_t)(((uint64_t)interval + 3ULL * pathCommandEwmaMs) / 4ULL);
+}
+
+static uint32_t pathCommandToleranceMs() {
+  if (pathCommandEwmaMs == 0) return PATH_COMMAND_TIMEOUT_MS;
+  const uint32_t widened = pathCommandEwmaMs * 2U;
+  if (widened < PATH_COMMAND_TIMEOUT_MS) return PATH_COMMAND_TIMEOUT_MS;
+  if (widened > PATH_TOLERANCE_ADAPT_CAP_MS) return PATH_TOLERANCE_ADAPT_CAP_MS;
+  return widened;
+}
 
 static portMUX_TYPE ultrasonicMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool ultrasonicAwaitingEcho = false;
@@ -419,7 +449,7 @@ static void noteBridgeRx() {
 
 bool pathCommandFresh() {
   return pathCommandSeen &&
-         (millis() - lastPathCommandMs <= PATH_COMMAND_TIMEOUT_MS);
+         (millis() - lastPathCommandMs <= pathCommandToleranceMs());
 }
 
 void enforcePathWatchdog() {
@@ -447,10 +477,13 @@ static void processESPMessage(const String& espMsg) {
 
     if (espMsg == "[RESET]") {
       noteBridgeRx();
-      // The Pi deliberately retries RESET until it receives [IDLE]. Once the
-      // return route is already active, that retry is an idempotent keepalive,
-      // not a request to abort the route and report a false completion.
-      if (garbyState == GarbyState::RETURNING) {
+      // The Pi deliberately retries RESET until it receives [IDLE]. While the
+      // return route is actively running, that retry is an idempotent
+      // keepalive, not a request to abort the route and report a false
+      // completion. A latched route fault, however, is the supervised
+      // physical-recovery path: the operator has repositioned the robot and
+      // the explicit reset must return it to IDLE.
+      if (garbyState == GarbyState::RETURNING && !routeFaultLatched) {
         ESP_Serial.println(ACK_MSG);
         return;
       }
@@ -473,6 +506,7 @@ static void processESPMessage(const String& espMsg) {
       const bool changed = !shouldStop || espMsg != lastStopReason;
       shouldStop = true;
       pathCommandSeen = true;
+      notePathCommandArrival(millis());
       lastPathCommandMs = millis();
       clearPathCommandCount = 0;
       linkFaultActive = espMsg.indexOf("LINK") >= 0 ||
@@ -491,6 +525,7 @@ static void processESPMessage(const String& espMsg) {
     if (espMsg == "GO") {
       noteBridgeRx();
       pathCommandSeen = true;
+      notePathCommandArrival(millis());
       lastPathCommandMs = millis();
       if (clearPathCommandCount < MCU_GO_CONFIRM_PACKETS) {
         clearPathCommandCount++;
@@ -735,6 +770,7 @@ void fullReset() {
   blockedSMSSent = false;
   loadcellSMSSent = false;
   resetQueued = false;
+  routeFaultLatched = false;
   path.reset();
   activeNudge = NudgeDir::NONE;
   nudgeHoldStartMs = 0;

@@ -1,3 +1,13 @@
+test_boundary_floor_equals_cap (test_bridge_core.AdaptiveToleranceTests.test_boundary_floor_equals_cap) ... ok
+test_invalid_intervals_are_ignored (test_bridge_core.AdaptiveToleranceTests.test_invalid_intervals_are_ignored) ... ok
+test_jittered_throttling_cadence (test_bridge_core.AdaptiveToleranceTests.test_jittered_throttling_cadence) ... ok
+test_normal_fast_cadence_stays_at_floor (test_bridge_core.AdaptiveToleranceTests.test_normal_fast_cadence_stays_at_floor) ... ok
+test_reset_returns_to_floor (test_bridge_core.AdaptiveToleranceTests.test_reset_returns_to_floor) ... ok
+test_step_throttling_gradual_convergence (test_bridge_core.AdaptiveToleranceTests.test_step_throttling_gradual_convergence) ... ok
+test_throttled_cadence_widens_and_caps (test_bridge_core.AdaptiveToleranceTests.test_throttled_cadence_widens_and_caps) ... ok
+test_untoleranced_cadence_uses_floor (test_bridge_core.AdaptiveToleranceTests.test_untoleranced_cadence_uses_floor) ... ok
+test_widening_never_drops_below_floor_mid_stream (test_bridge_core.AdaptiveToleranceTests.test_widening_never_drops_below_floor_mid_stream) ... ok
+test_zero_interval_burst (test_bridge_core.AdaptiveToleranceTests.test_zero_interval_burst) ... ok
 test_backoff_is_bounded_and_resettable (test_bridge_core.BackoffTests.test_backoff_is_bounded_and_resettable) ... ok
 test_available_thermal_source_preserves_ok_and_warning_states (test_bridge_core.HealthTests.test_available_thermal_source_preserves_ok_and_warning_states) ... ok
 test_unknown_thermal_sources_do_not_report_false_ok (test_bridge_core.HealthTests.test_unknown_thermal_sources_do_not_report_false_ok) ... ok
@@ -14,10 +24,14 @@ test_live_refresh_is_rate_bounded (test_bridge_core.SensorTrackerTests.test_live
 test_partial_sensor_failure_does_not_overwrite_live_sensor (test_bridge_core.SensorTrackerTests.test_partial_sensor_failure_does_not_overwrite_live_sensor) ... ok
 test_recovery_rearms_exactly_one_future_sentinel (test_bridge_core.SensorTrackerTests.test_recovery_rearms_exactly_one_future_sentinel) ... ok
 test_repeated_explicit_unavailable_does_not_republish (test_bridge_core.SensorTrackerTests.test_repeated_explicit_unavailable_does_not_republish) ... ok
+test_backoff_pacing_under_connection_throttling (test_bridge_core.ThrottlingResilienceTests.test_backoff_pacing_under_connection_throttling) ... ok
+test_health_status_under_cpu_thermal_throttling (test_bridge_core.ThrottlingResilienceTests.test_health_status_under_cpu_thermal_throttling) ... ok
+test_sensor_tracker_cadence_stretching (test_bridge_core.ThrottlingResilienceTests.test_sensor_tracker_cadence_stretching) ... ok
+test_update_worker_coalescing_under_cpu_contention (test_bridge_core.ThrottlingResilienceTests.test_update_worker_coalescing_under_cpu_contention) ... ok
 test_update_retry_backoff_is_not_bypassed_by_new_samples (test_bridge_core.UpdateWorkerTests.test_update_retry_backoff_is_not_bypassed_by_new_samples) ... ok
 test_update_worker_coalesces_to_one_atomic_map (test_bridge_core.UpdateWorkerTests.test_update_worker_coalesces_to_one_atomic_map) ... ok
 
 ----------------------------------------------------------------------
-Ran 18 tests in 0.158s
+Ran 32 tests in 0.172s
 
 OK

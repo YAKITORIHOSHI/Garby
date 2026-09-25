@@ -145,7 +145,7 @@ const float NUDGE_LEFT_BOOST_FACTOR  = 1.00f;
 #define BRIDGE_RX_STALE_MS             3000UL
 #define SENSOR_DATA_TIMEOUT_MS         3000UL
 #define UART_RX_LINE_MAX                 255U
-#define UART_RX_BUDGET_BYTES             192U
+#define UART_RX_BUDGET_BYTES             512U
 
 // ============================================================
 // ACK PROTOCOL
@@ -261,6 +261,10 @@ struct LidarZones {
 enum class GarbyState { IDLE, RUNNING, RETURNING };
 extern GarbyState garbyState;
 extern bool       resetQueued;
+// Stationary route-fault latch: set when a route segment fails so the route is
+// never replayed from the robot's now-unknown physical position. Cleared by an
+// explicit [RESET] (supervised physical recovery) or on the next IDLE entry.
+extern bool       routeFaultLatched;
 
 // ============================================================
 // NON-BLOCKING NUDGE STATE (execution-side only)

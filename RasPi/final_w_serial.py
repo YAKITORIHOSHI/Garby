@@ -9,6 +9,7 @@ from datetime import datetime
 from statistics import median
 
 from bridge_core import (
+    AdaptiveTolerance,
     CoalescingUpdateWorker,
     ExponentialBackoff,
     SENSOR_SPECS,
@@ -830,12 +831,22 @@ def ble_notify_handler(msg: str):
 
 # ═══ BLE Service with urgent direct write ═══
 class BleService(threading.Thread):
-    RETRY_MIN_S    = 2.0
+    # A 1 s first retry is enough for the ESP32 to restart advertising after a
+    # throttled-link drop; the exponential growth still caps storm pressure.
+    RETRY_MIN_S    = 1.0
     RETRY_MAX_S    = 30.0
     SCAN_TIMEOUT   = 5.0
     CONNECT_TIMEOUT = 6.0
     WRITE_TIMEOUT = 2.0
     DRAIN_INTERVAL  = 0.02
+    # Adaptive write-retry pacing for CPU/connection throttling: transient
+    # congestion shows up as slow or timed-out writes. Escalate the retry gap
+    # instead of dropping the session after the first glitch; the ESP32 link
+    # watchdog tolerates 10 s of silence, so patient retries recover faster
+    # than a full rescan cycle.
+    WRITE_RETRY_STRIKES = 5
+    WRITE_RETRY_BASE_S  = 0.05
+    WRITE_RETRY_MAX_S   = 0.8
 
     def __init__(self, status_cb, notify_cb):
         super().__init__(daemon=True, name="ble-service")
@@ -1192,17 +1203,29 @@ class BleService(threading.Thread):
             try:
                 await self._write_message(msg, expected_client=session_client)
                 consecutive_write_failures = 0
+                # Small inter-write yield keeps acknowledged GATT writes from
+                # saturating a throttled connection interval back-to-back.
+                await asyncio.sleep(0.005)
             except Exception as exc:
                 consecutive_write_failures += 1
-                logger.warning(f"BLE write glitch ({consecutive_write_failures}/3): {exc}")
-                if consecutive_write_failures < 3:
+                # Escalating gaps ride out throttling-induced write stalls;
+                # only a persistent failure drops the session.
+                retry_delay = min(
+                    self.WRITE_RETRY_MAX_S,
+                    self.WRITE_RETRY_BASE_S * (2 ** (consecutive_write_failures - 1)),
+                )
+                logger.warning(
+                    "BLE write glitch (%d/%d): %s",
+                    consecutive_write_failures, self.WRITE_RETRY_STRIKES, exc,
+                )
+                if consecutive_write_failures < self.WRITE_RETRY_STRIKES:
                     # Never reinsert an old path packet: a newer STOP may already
                     # be queued. Ask the producer for a fresh sequenced snapshot.
                     if msg.startswith("P:"):
                         _status_requested.set()
                     elif msg in ("[RESET]", RASPI_READY):
                         ble_send_queue.put_nowait(msg, urgent=True)
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(retry_delay)
                     continue
                 logger.error(f"BLE persistent write failure: {exc}")
                 try:
@@ -1886,6 +1909,16 @@ class LidarDistanceReader(Node):
         self._path_seq = 0
         self._path_seq_lock = threading.Lock()
         self._history_lock = threading.RLock()
+        # LiDAR staleness adapts to the observed scan cadence: CPU throttling
+        # or executor contention can delay every callback uniformly, and a
+        # fixed 0.8 s window would then trip on a healthy-but-slow stream.
+        # Genuine stream loss still lapses at the 0.8 s floor.
+        self._scan_stale_tolerance = AdaptiveTolerance(
+            LIDAR_STALE_TIMEOUT_S,
+            2.0,
+            alpha=0.25,
+            margin_factor=2.0,
+        )
         self._watchdog_timer = self.create_timer(0.25, self._watchdog_callback)
         # One ROS subscription only. Multiple subscriptions to /scan caused the
         # same scan to be processed repeatedly and distorted confirmation logic.
@@ -1903,9 +1936,12 @@ class LidarDistanceReader(Node):
     def _lidar_is_stale(self):
         # Safety has no startup grace: until the first scan is received the path
         # is unknown and therefore STOP. Driver supervision has its own grace.
+        # Once scans flow, the stale window adapts to the observed cadence so a
+        # throttled-but-alive stream is not reported stale; true silence still
+        # lapses at the 0.8 s floor.
         if not self._first_scan_received or self._last_scan_time <= 0.0:
             return True
-        return (time.monotonic() - self._last_scan_time) > LIDAR_STALE_TIMEOUT_S
+        return (time.monotonic() - self._last_scan_time) > self._scan_stale_tolerance.tolerance_s()
 
     def _watchdog_callback(self):
         if not self._lidar_is_stale():
@@ -2011,7 +2047,16 @@ class LidarDistanceReader(Node):
             ble_send_queue.put_nowait(path_msg, urgent=True)
 
     def scan_callback(self, msg: LaserScan):
-        self._last_scan_time = time.monotonic()
+        now = time.monotonic()
+        previous_scan_time = self._last_scan_time
+        if self._lidar_stale_announced:
+            # Stream is recovering from an outage; restart cadence from conservative floor
+            self._scan_stale_tolerance.reset()
+        elif previous_scan_time > 0.0:
+            gap = now - previous_scan_time
+            if gap <= self._scan_stale_tolerance.cap_s:
+                self._scan_stale_tolerance.observe(gap)
+        self._last_scan_time = now
         first_scan = not self._first_scan_received
         self._first_scan_received = True
         self._lidar_stale_announced = False

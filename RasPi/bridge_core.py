@@ -202,6 +202,55 @@ class ExponentialBackoff:
         self._next = self.initial_s
 
 
+class AdaptiveTolerance:
+    """Watchdog tolerance that adapts to the observed event cadence.
+
+    A fixed watchdog trips spuriously when a healthy producer is throttled
+    (slow CPU, stretched BLE connection interval). This helper tracks the
+    observed inter-event period and widens the tolerance up to a hard cap
+    while events keep arriving. The fixed floor still applies when no cadence
+    is known yet or after ``reset``, so the fail-closed guarantee is
+    unchanged: genuine silence always lapses at the floor.
+    """
+
+    def __init__(
+        self,
+        floor_s: float,
+        cap_s: float,
+        *,
+        alpha: float = 0.25,
+        margin_factor: float = 2.0,
+    ) -> None:
+        self.floor_s = max(0.01, float(floor_s))
+        self.cap_s = max(self.floor_s, float(cap_s))
+        self.alpha = min(1.0, max(0.01, float(alpha)))
+        self.margin_factor = max(1.0, float(margin_factor))
+        self._observed_s: float | None = None
+
+    def observe(self, interval_s: float | None) -> None:
+        """Fold one inter-event interval into the cadence estimate."""
+        if interval_s is None:
+            return
+        interval = float(interval_s)
+        if not math.isfinite(interval) or interval < 0.0:
+            return
+        if self._observed_s is None:
+            self._observed_s = interval
+        else:
+            self._observed_s = (
+                self.alpha * interval + (1.0 - self.alpha) * self._observed_s
+            )
+
+    def tolerance_s(self) -> float:
+        if self._observed_s is None:
+            return self.floor_s
+        widened = self._observed_s * self.margin_factor
+        return min(self.cap_s, max(self.floor_s, widened))
+
+    def reset(self) -> None:
+        self._observed_s = None
+
+
 class CoalescingUpdateWorker:
     """Background latest-value writer with bounded retry pressure.
 

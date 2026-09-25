@@ -100,10 +100,12 @@ Physical mounting is intentionally **hardware-unverified**. Configure `GARBY_LID
 | --- | ---: |
 | Front LiDAR stop threshold | 95 cm |
 | Back LiDAR stop threshold | 35 cm |
-| LiDAR stale timeout | 0.8 s |
+| LiDAR stale timeout | 0.8 s floor; adapts to observed scan cadence (2x EWMA, ≤2.0 s cap) while scans keep flowing |
 | Normal path/steering period | 0.25 s |
 | Sensor telemetry period | 1.0 s |
 | BLE queue bound | 12 latest/control entries |
+
+The stale timeout floor is the fail-closed guarantee: before the first scan, and whenever the stream truly stops, the path lapses to stale at 0.8 s. The adaptive cap only extends the window while scans keep arriving slowly (CPU throttling, executor contention), so a healthy-but-throttled stream is not reported stale.
 
 The driver supervisor may have startup/restart grace for process management, but the **path safety output does not**.
 
@@ -117,6 +119,8 @@ Service/characteristics:
 - Server name: `GarbyESP32`
 
 All GATT writes use one asyncio lock. Path/control messages use acknowledged writes. The queue coalesces old path, steering, and telemetry values so old CLEAR state cannot build up behind a new STOP. An unexpected connection-task exception is caught and rescheduled; a transient failed path write requests a **fresh sequence** instead of replaying an old path packet.
+
+Connection-throttling resilience: on connect the bridge requests a 30–50 ms connection interval (15–30 ms previously), which satisfies the 250 ms command cadence with fewer radio wakeups on throttled CPUs. Write failures escalate retry gaps (50 ms → 800 ms, 5 strikes) before a full reconnect instead of dropping the session after 3 fast retries, and the first reconnect attempt starts after 1 s.
 
 ## 5. Pi → bridge protocol
 
@@ -178,14 +182,14 @@ These sentinel values are represented as **UNAVAILABLE** in the main-controller 
 | Valid path timeout | 850 ms |
 | General BLE silence/reconnect timeout | 10 s |
 | Repeated stale STOP | 500 ms |
-| Path frame max age at ingress | 650 ms |
+| Path frame max age at ingress | 650 ms floor; adapts to observed path cadence (2x EWMA, ≤1550 ms cap) while frames keep flowing |
 | Steering frame max age | 500 ms |
 | Sensor frame max age | 2000 ms |
 | Clear packets needed at bridge | 2 |
 | MCU ACK timeout | 3000 ms |
 | Max tracked unacked MCU commands | 8 |
 
-BLE callbacks only copy bounded frames. Parsing, float math, logging, and UART writes run from `loop()`. Safety/control frames are processed before steering and telemetry. Steering and telemetry use latest-value mailboxes.
+BLE callbacks only copy bounded frames. Parsing, float math, logging, and UART writes run from `loop()`. Safety/control frames are processed before steering and telemetry. Steering and telemetry use latest-value mailboxes. The adaptive ingress window is the CPU/connection-throttling countermeasure: when either CPU is throttled or the connection interval stretches, valid-but-slow frames are drained instead of aged out, and the window falls back to its 650 ms floor whenever cadence is unknown or the connection/reboot epoch resets.
 
 ### 6.3 STOP release sequence
 
@@ -228,7 +232,7 @@ The main controller applies stricter execution caps: maximum 24% cut, maximum 11
 ## 8. Main-controller communication and motion gate
 
 - `shouldStop = true` at boot.
-- `PATH_COMMAND_TIMEOUT_MS = 800` independently stops movement if the bridge stops refreshing STOP/GO state.
+- `PATH_COMMAND_TIMEOUT_MS = 800` independently stops movement if the bridge stops refreshing STOP/GO state. The watchdog tolerance adapts to the observed STOP/GO cadence (2x EWMA, capped at 1200 ms) while commands keep arriving, so a throttled-but-alive bridge does not trip spurious STOPs; true bridge silence still lapses at the 800 ms floor.
 - `MCU_GO_CONFIRM_PACKETS = 2`.
 - `MOTION_GATE_TIMEOUT_MS = 900`.
 - Motion gate repeatedly sends `[REQUEST-STATUS]`; requests are rate-limited to 80 ms.
@@ -313,6 +317,7 @@ Load and gas are IDLE→RUNNING triggers, with repeated confirmation. The load t
 - execute `returnToPointB()` using the same live safety gates
 - finish with `fullReset()` to IDLE only after the return route reports success
 - if any return segment fails, latch a stationary route fault and do not replay `returnToPointB()` from the robot's now-unknown physical position; supervised physical recovery is required
+- a latched route fault stays stationary and keeps requesting status; an explicit `[RESET]` after supervised physical recovery is accepted and returns the robot to IDLE (retried `[RESET]` during an *active* return route remains an idempotent keepalive, not an abort)
 
 ## 13. Route limitation — physical direction is hardware-unverified
 

@@ -1,4 +1,4 @@
-# GARBY Validation Results — 2026-08-24 Return-Route Safety Follow-up
+# GARBY Validation Results — 2026-09-26 Throttling Resilience & Safety Validation
 
 This report covers the active root deployment set. Generated build/cache
 directories are not production source. Static and target builds do not replace
@@ -9,69 +9,64 @@ physical safety acceptance.
 Raspberry Pi syntax and tests:
 
 ```bash
-python3 -m py_compile bridge_core.py final_w_serial.py final_w_serial-simulator.py test_bridge_core.py
-python3 -m unittest -v test_bridge_core.py
+python -B -m unittest discover -s RasPi -p "test_*.py" -v
 ```
 
-Result: **18/18 PASS**. Coverage includes sensor unavailable/recovery states,
-backoff/coalescing, LiDAR sector assignment, closest-return safety, median wall
-steering, heading clamping, infinity handling, sparse steering fallback,
-telemetry/path isolation, and the direction-independent side-obstacle envelope.
+Result: **32/32 PASS**. Coverage includes sensor unavailable/recovery states,
+backoff/coalescing under CPU contention, LiDAR sector assignment, closest-return safety,
+median wall steering, heading clamping, infinity handling, sparse steering fallback,
+telemetry/path isolation, direction-independent side-obstacle envelope,
+adaptive watchdog tolerance under CPU/connection throttling (jittered cadence,
+bursty executor deliveries, boundary conditions, step-convergence), connection
+retry backoff pacing, telemetry cadence stretching, and thermal/voltage throttling flags.
 
 Coordinated static audit:
 
 ```bash
-python3 .github/skills/garby-robot-maintainer/scripts/audit_project.py .
+python -B .github/skills/garby-robot-maintainer/scripts/audit_project.py .
 ```
 
-Result: **71 PASS / 2 WARN / 0 FAIL**. The warnings are expected: physical
-route direction remains hardware-unverified, and generated Python bytecode is
-present from validation runs.
+Result: **72 PASS / 1 WARN / 0 FAIL**. The single remaining warning is expected: physical
+route direction remains hardware-unverified (`pointsRun.ino`), documented in Section 13.
+Package hygiene passed with zero stale compiled Python cache files.
 
 C/C++ and JSON structural sanity:
 
 ```bash
-python3 tools/source_sanity.py .
+python -B tools/source_sanity.py .
 ```
 
-Result: **PASS** for the active root sources and checked JSON. The checker also
-sees the ignored MCU Flasher cache mirror; that mirror is not a deployment
-source.
+Result: **PASS** (6 C/C++ files, 18 JSON files).
 
-## Nudge and obstacle follow-up
+## CPU and Connection Throttling Resilience
 
-- Bridge nudge tuning: 18 cm dead zone, 12 cm reversal hysteresis, 0.10 EMA,
-  35–60 ms taps, 8–18% requested cut, and 1200 ms cooldown.
-- Side LiDAR returns at ≤40 cm redirect away from the occupied side; ≤22 cm
-  reports a direction-independent STOP for people, bins, and wall-mounted
-  extinguishers.
-- Centered Servo+Ultrasonic stops on any fresh ≤60 cm echo before a nudge is
-  consumed. No echo remains UNKNOWN and cannot clear a local latch.
-- The simulator is non-production, but now models the same side hard-stop
-  envelope for scenario testing.
+- **Pi LiDAR Node:** Adaptive staleness tolerance (0.8 s floor, 2.0 s cap) with EWMA cadence
+  estimation. Outage recovery resets tolerance to the conservative 0.8 s floor.
+- **BLE Service:** Connection interval updated to 30–50 ms (24–40), reducing radio wakeups;
+  write retries pace exponentially (50 ms → 800 ms, 5 strikes) before session reset;
+  initial reconnect starts after 1.0 s.
+- **ESP32 BLE Bridge:** Adaptive ingress freshness window (650 ms floor, 1550 ms cap) drains
+  valid packets during CPU stalls; bounded inter-arrival period prevents outage inflation;
+  stale watchdog resets window to floor.
+- **ESP32 MCU Controller:** Adaptive path watchdog (800 ms floor, 1200 ms cap) prevents spurious
+  emergency stops on throttled bridge loops; UART RX budget enlarged to 512 bytes matching
+  the hardware buffer to absorb processing bursts without data loss.
+- **MCU Return-Route Fault Latch:** Incomplete return route segments latch stationary and fail-closed;
+  cleared explicitly by `fullReset()` on completed return or operator `[RESET]`.
 
-## Target compilation
+## Target compilation (arduino-cli)
 
-The active main controller compiled in a temporary PlatformIO fixture for
-`esp32dev` using ESP32Servo 3.2.1, FastAccelStepper 1.2.7, and HX711 0.6.4.
-The BLE bridge compiled for `esp32-s3-devkitm-1` using NimBLE-Arduino 2.5.1.
-The main controller used 8.5% RAM and 26.1% flash; the BLE bridge used 10.0%
-RAM and 15.5% flash. Strict `-Wall -Wextra` builds produced only third-party
-library warnings and no project-source warnings.
-No hardware was flashed.
+Both sketches compiled for `esp32:esp32:esp32` (ESP32 Dev Module, Core v3.3.11):
+- `BLE_Receiver-Final`: 610,180 bytes (46%) flash, 39,428 bytes (12%) RAM. 0 errors.
+- `NAPHTALI_CODE_V2`: 378,438 bytes (28%) flash, 26,216 bytes (8%) RAM. 0 errors.
 
-## Return-route safety follow-up
+## Android validation (Garby_MobileApp)
 
-- An incomplete `returnToPointB()` result now latches a stationary route fault.
-- The RETURNING state no longer replays the full route from an unknown chassis position.
-- Communication and sensor servicing continue while motion remains fail-closed.
-- The coordinated audit now fails if the RETURNING route call is no longer protected by the fault latch.
-
-## Android validation
-
-The existing Android validation remains successful: debug unit tests, debug
-assembly, release assembly, and the static quality checks passed. Android was
-not changed during this follow-up.
+Android unit tests executed via Gradle:
+```bash
+./gradlew test --rerun-tasks
+```
+Result: **13/13 unit tests passed** (ExampleUnitTest, SensorStatusTest, DatabaseSchemaTest, ResetStatusTest, SensorFreshnessTest). Build successful.
 
 ## Remaining physical acceptance
 

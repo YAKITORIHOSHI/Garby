@@ -4,6 +4,7 @@ import time
 import unittest
 
 from bridge_core import (
+    AdaptiveTolerance,
     CoalescingUpdateWorker,
     ExponentialBackoff,
     LIDAR_SECTOR_NAMES,
@@ -77,6 +78,166 @@ class BackoffTests(unittest.TestCase):
         self.assertEqual([backoff.next_delay() for _ in range(5)], [1.0, 2.0, 4.0, 4.0, 4.0])
         backoff.reset()
         self.assertEqual(backoff.next_delay(), 1.0)
+
+
+class AdaptiveToleranceTests(unittest.TestCase):
+    """Watchdog tolerance must adapt to throttling without weakening fail-closed."""
+
+    def make_tolerance(self):
+        return AdaptiveTolerance(0.8, 2.0, alpha=0.25, margin_factor=2.0)
+
+    def test_untoleranced_cadence_uses_floor(self):
+        tolerance = self.make_tolerance()
+        self.assertEqual(tolerance.tolerance_s(), 0.8)
+
+    def test_normal_fast_cadence_stays_at_floor(self):
+        tolerance = self.make_tolerance()
+        for _ in range(10):
+            tolerance.observe(0.25)
+        self.assertEqual(tolerance.tolerance_s(), 0.8)
+
+    def test_throttled_cadence_widens_and_caps(self):
+        tolerance = self.make_tolerance()
+        # Sustained 500 ms cadence (2x CPU throttling): EWMA converges to 0.5,
+        # tolerance widens to 1.0 s so the stream is not reported stale.
+        for _ in range(20):
+            tolerance.observe(0.5)
+        self.assertAlmostEqual(tolerance.tolerance_s(), 1.0)
+        # Extreme cadence clamps at the hard cap: never unbounded.
+        for _ in range(40):
+            tolerance.observe(5.0)
+        self.assertEqual(tolerance.tolerance_s(), 2.0)
+
+    def test_invalid_intervals_are_ignored(self):
+        tolerance = self.make_tolerance()
+        tolerance.observe(None)
+        tolerance.observe(float("nan"))
+        tolerance.observe(-1.0)
+        self.assertEqual(tolerance.tolerance_s(), 0.8)
+        tolerance.observe(1.0)
+        self.assertAlmostEqual(tolerance.tolerance_s(), 2.0)
+
+    def test_reset_returns_to_floor(self):
+        tolerance = self.make_tolerance()
+        for _ in range(10):
+            tolerance.observe(0.9)
+        tolerance.reset()
+        self.assertEqual(tolerance.tolerance_s(), 0.8)
+
+    def test_widening_never_drops_below_floor_mid_stream(self):
+        tolerance = self.make_tolerance()
+        tolerance.observe(1.5)
+        self.assertEqual(tolerance.tolerance_s(), 2.0)
+        # One fast sample narrows the EWMA but never under the floor.
+        tolerance.observe(0.25)
+        self.assertGreaterEqual(tolerance.tolerance_s(), 0.8)
+
+    def test_jittered_throttling_cadence(self):
+        tolerance = self.make_tolerance()
+        # Jitter between 0.3s and 0.6s (avg 0.45s). With margin 2.0x, tolerance stays between 0.8 and 1.2
+        for i in range(30):
+            interval = 0.3 if i % 2 == 0 else 0.6
+            tolerance.observe(interval)
+        self.assertGreaterEqual(tolerance.tolerance_s(), 0.8)
+        self.assertLessEqual(tolerance.tolerance_s(), 1.2)
+
+    def test_zero_interval_burst(self):
+        tolerance = self.make_tolerance()
+        tolerance.observe(0.5)
+        # Bursty executor delivery: several 0.0s intervals
+        for _ in range(5):
+            tolerance.observe(0.0)
+        self.assertGreaterEqual(tolerance.tolerance_s(), 0.8)
+
+    def test_boundary_floor_equals_cap(self):
+        tolerance = AdaptiveTolerance(1.0, 1.0)
+        tolerance.observe(0.1)
+        self.assertEqual(tolerance.tolerance_s(), 1.0)
+        tolerance.observe(5.0)
+        self.assertEqual(tolerance.tolerance_s(), 1.0)
+
+    def test_step_throttling_gradual_convergence(self):
+        tolerance = self.make_tolerance()
+        for _ in range(10):
+            tolerance.observe(0.25)
+        self.assertEqual(tolerance.tolerance_s(), 0.8)
+        for _ in range(25):
+            tolerance.observe(0.45)
+        self.assertAlmostEqual(tolerance.tolerance_s(), 0.9, places=2)
+
+
+class ThrottlingResilienceTests(unittest.TestCase):
+    """Test system components under simulated CPU and connection throttling."""
+
+    def test_backoff_pacing_under_connection_throttling(self):
+        # 50 ms base, 800 ms max, 5 strikes
+        backoff = ExponentialBackoff(0.05, 0.80, 2.0)
+        delays = [backoff.next_delay() for _ in range(6)]
+        self.assertAlmostEqual(delays[0], 0.05)
+        self.assertAlmostEqual(delays[1], 0.10)
+        self.assertAlmostEqual(delays[2], 0.20)
+        self.assertAlmostEqual(delays[3], 0.40)
+        self.assertAlmostEqual(delays[4], 0.80)
+        self.assertAlmostEqual(delays[5], 0.80)
+        backoff.reset()
+        self.assertAlmostEqual(backoff.next_delay(), 0.05)
+
+    def test_update_worker_coalescing_under_cpu_contention(self):
+        # When CPU is saturated, multiple sensor updates arrive before the worker flushes
+        flushes = []
+        barrier = threading.Barrier(2)
+
+        def delayed_worker(batch):
+            flushes.append(dict(batch))
+            try:
+                barrier.wait(timeout=0.5)
+            except threading.BrokenBarrierError:
+                pass
+
+        worker = CoalescingUpdateWorker(delayed_worker, batch_window_s=0.01)
+        worker.start()
+        worker.submit({"temp": 60.0, "seq": 1})
+        worker.submit({"temp": 65.0, "seq": 2})
+        worker.submit({"temp": 72.0, "seq": 3})
+        try:
+            barrier.wait(timeout=0.5)
+        except threading.BrokenBarrierError:
+            pass
+        worker.stop()
+        self.assertGreaterEqual(len(flushes), 1)
+        self.assertEqual(flushes[-1]["seq"], 3)
+        self.assertEqual(flushes[-1]["temp"], 72.0)
+
+    def test_sensor_tracker_cadence_stretching(self):
+        tracker = SensorTransitionTracker(stale_after_s=3.0, live_publish_period_s=1.0)
+        tracker.collect_due(0.0)
+        tracker.ingest("mq4", 50, now=0.0)
+        self.assertEqual(tracker.collect_due(0.0)["mq4"], 50)
+        # Ingested within live_publish_period_s (0.5s < 1.0s) -> rate-bounded
+        self.assertTrue(tracker.ingest("mq4", 55, now=0.5))
+        self.assertNotIn("mq4", tracker.collect_due(0.5))
+        # After publish period (1.5s - 0.0s = 1.5s >= 1.0s) -> due for refresh
+        self.assertTrue(tracker.ingest("mq4", 60, now=1.5))
+        self.assertEqual(tracker.collect_due(1.5)["mq4"], 60)
+        # Not stale yet at 4.0s (gap 2.5s < stale_after_s 3.0s)
+        self.assertTrue(tracker.is_link_fresh(4.0))
+        # Becomes stale after 3.0s of silence (at 4.6s, gap is 3.1s from 1.5s)
+        due = tracker.collect_due(4.6)
+        self.assertEqual(due.get("mq4"), -1)
+
+    def test_health_status_under_cpu_thermal_throttling(self):
+        # Bit 0: under-voltage, Bit 1: frequency capped, Bit 2: currently throttled
+        throttled_flags = 0x50005
+        status = build_health_status(
+            cpu_temperature_c=84.5,
+            throttled_flags=throttled_flags,
+            ble_connected=True,
+            lidar_healthy=True,
+            sensor_serial_connected=True,
+        )
+        self.assertTrue(status["thermalWarning"])
+        self.assertEqual(status["throttledFlags"], 0x50005)
+        self.assertEqual(status["cpuTemperatureC"], 84.5)
 
 
 class HealthTests(unittest.TestCase):

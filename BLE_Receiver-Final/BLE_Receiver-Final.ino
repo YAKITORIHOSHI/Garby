@@ -41,6 +41,12 @@ HardwareSerial ESP_Serial(1);
 #define CONTROL_QUEUE_DEPTH              8U
 #define CONTROL_DRAIN_BUDGET              4U
 #define PATH_FRAME_MAX_AGE_MS          650UL
+// Adaptive ingress freshness: a fixed window discards valid packets whenever
+// either CPU is throttled or the BLE connection interval stretches. The
+// observed path inter-arrival period widens the window up to this hard cap
+// while frames keep flowing; the 650 ms floor still applies when no cadence
+// is known, so the fail-closed guarantee is unchanged.
+#define PATH_INGRESS_ADAPT_CAP_MS     1550UL
 #define SIDES_FRAME_MAX_AGE_MS         500UL
 #define SENSOR_FRAME_MAX_AGE_MS       2000UL
 #define MCU_UART_LINE_MAX_BYTES         256U
@@ -225,6 +231,34 @@ static void sendMcuStopPair(const char* reason) {
 
 static void relayStop(const char* reason);
 
+// ── Adaptive ingress freshness (CPU/connection throttling resilience) ──
+// EWMA alpha = 1/4 over the inter-arrival period of accepted path packets.
+static uint32_t pathIngressEwmaMs  = 0;
+static uint32_t lastAcceptedPathMs = 0;
+
+static void notePathIngressInterval(uint32_t nowMs) {
+  if (lastAcceptedPathMs == 0) {
+    lastAcceptedPathMs = nowMs;
+    return;
+  }
+  uint32_t interval = nowMs - lastAcceptedPathMs;
+  lastAcceptedPathMs = nowMs;
+  if (interval > PATH_INGRESS_ADAPT_CAP_MS) interval = PATH_INGRESS_ADAPT_CAP_MS;
+  if (pathIngressEwmaMs == 0) {
+    pathIngressEwmaMs = interval;
+    return;
+  }
+  pathIngressEwmaMs = (interval + 3U * pathIngressEwmaMs) / 4U;
+}
+
+static uint32_t adaptiveIngressWindowMs() {
+  if (pathIngressEwmaMs == 0) return PATH_FRAME_MAX_AGE_MS;
+  const uint32_t widened = pathIngressEwmaMs * 2U;
+  if (widened < PATH_FRAME_MAX_AGE_MS) return PATH_FRAME_MAX_AGE_MS;
+  if (widened > PATH_INGRESS_ADAPT_CAP_MS) return PATH_INGRESS_ADAPT_CAP_MS;
+  return widened;
+}
+
 // ── Nudge state (cooldown + confirmation + startup grace + ramp + EMA corridor filter) ──
 unsigned long lastNudgeFireMs       = 0;
 int           lastFireDir           = 0;
@@ -248,6 +282,10 @@ static void resetNavigationState() {
   lastSidesSeq           = 0;
   lastPathDataReceived   = millis();
   lastStaleStopSent      = 0;
+  // Cadence estimates restart with each connection/reboot epoch so the
+  // adaptive windows fall back to their conservative floors.
+  pathIngressEwmaMs      = 0;
+  lastAcceptedPathMs     = 0;
   lastNudgeFireMs        = 0;
   lastFireDir            = 0;
   nudgeConfirmDir        = 0;
@@ -765,6 +803,7 @@ static void handlePathPacket(const String& raw) {
   havePathSeq = true;
   pathStreamSeen = true;
   lastPathDataReceived = millis();
+  notePathIngressInterval(lastPathDataReceived);
 
   const bool blocked = (frontCode != "C") || (backCode != "C");
   // H changes only the diagnostic STOP reason. Generic O has identical motion
@@ -1076,12 +1115,13 @@ static void processBleIngress() {
 
   BleFrame frame = {};
   uint8_t processedControls = 0;
+  const uint32_t ingressWindowMs = adaptiveIngressWindowMs();
   while (processedControls < CONTROL_DRAIN_BUDGET &&
          controlQueue != nullptr &&
          xQueueReceive(controlQueue, &frame, 0) == pdPASS) {
     processedControls++;
     if (!deviceConnected || frame.session != connectionSession) continue;
-    if (!frameIsCurrent(frame, PATH_FRAME_MAX_AGE_MS)) {
+    if (!frameIsCurrent(frame, ingressWindowMs)) {
       if (mcuReady) relayStop("STOP:STALE");
       continue;
     }
@@ -1136,8 +1176,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     NimBLEDevice::stopAdvertising();
 
     // Negotiate stable connection parameters.
-    // interval 12-24 = 15-30 ms, timeout 400 = 4000 ms.
-    pServer->updateConnParams(connInfo.getConnHandle(), 12, 24, 0, 400);
+    // interval 24-40 = 30-50 ms, timeout 400 = 4000 ms. The wider interval
+    // keeps the 250 ms command cadence comfortably satisfied while reducing
+    // radio wakeups and CPU/radio pressure when either side is throttled.
+    pServer->updateConnParams(connInfo.getConnHandle(), 24, 40, 0, 400);
 
     // If MCU has already finished setup, inform MCU that BLE link is established
     if (mcuReady) {
@@ -1454,6 +1496,8 @@ void loop() {
       now - lastStaleStopSent >= STALE_STOP_REPEAT_MS) {
     relayStop(pathStreamSeen ? "STOP:STALE" : "STOP:WAITING_DATA");
     lastStaleStopSent = now;
+    pathIngressEwmaMs = 0;
+    lastAcceptedPathMs = 0;
   }
 
   enforceMcuAckWatchdog(now);

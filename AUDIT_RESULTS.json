@@ -1,8 +1,8 @@
 {
   "root": "C:\\Users\\napht\\Documents\\GarbyMostLatest",
   "summary": {
-    "PASS": 71,
-    "WARN": 2,
+    "PASS": 72,
+    "WARN": 1,
     "FAIL": 0
   },
   "results": [
@@ -433,9 +433,9 @@
       "file": "SYSTEM_ARCHITECTURE.md"
     },
     {
-      "severity": "WARN",
+      "severity": "PASS",
       "check": "package hygiene",
-      "detail": "Compiled Python cache files present: 6",
+      "detail": "No compiled Python cache files in release",
       "file": ""
     },
     {
