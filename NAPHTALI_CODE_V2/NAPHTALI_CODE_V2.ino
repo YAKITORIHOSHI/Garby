@@ -112,7 +112,6 @@ void setup() {
 // LOOP
 // ============================================================
 void loop() {
-  static bool outboundComplete = false;
   static unsigned long lastIdleStatusRequestMs = 0;
   static unsigned long lastIdleSensorLogMs = 0;
   static unsigned long lastLoadSampleMs = 0;
@@ -224,6 +223,7 @@ void loop() {
       gasConfirmCount  = 0;
       outboundComplete = false;
       garbyState = GarbyState::RUNNING;
+      ESP_Serial.println("[RUNNING]");
       Serial.println("[STATE] IDLE -> RUNNING");
     } else {
       vTaskDelay(pdMS_TO_TICKS(newLoadSample ? 5 : 10));
@@ -247,16 +247,24 @@ void loop() {
         shouldStop = true;
         emergencyStopMotors();
         Serial.println("[RUN] Outbound segment incomplete; route fault latched");
+        reportRouteFault();
         vTaskDelay(pdMS_TO_TICKS(20));
       }
     }
 
     if (resetQueued) {
       resetQueued = false;
-      routeFaultLatched = false;
-      outboundComplete = false;
-      garbyState = GarbyState::RETURNING;
-      Serial.println("[STATE] RUNNING -> RETURNING (explicit reset)");
+      if (outboundComplete && !routeFaultLatched) {
+        outboundComplete = false;
+        garbyState = GarbyState::RETURNING;
+        ESP_Serial.println("[RETURNING]");
+        Serial.println("[STATE] RUNNING -> RETURNING (explicit reset)");
+      } else {
+        routeFaultLatched = true;
+        shouldStop = true;
+        emergencyStopMotors();
+        reportRouteFault();
+      }
     } else {
       // A completed route stays stopped at the destination. A route fault
       // also stays stopped until an explicit reset/recovery cycle.
@@ -280,6 +288,7 @@ void loop() {
         shouldStop = true;
         emergencyStopMotors();
         Serial.println("[RETURN] Route incomplete; route fault latched");
+        reportRouteFault();
         vTaskDelay(pdMS_TO_TICKS(20));
       }
     } else {

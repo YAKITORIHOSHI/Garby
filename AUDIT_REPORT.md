@@ -1,5 +1,9 @@
 # GARBY Full Project Investigation and Repair Report
 
+Historical report for the August revision. Current findings, implementation,
+and evidence are in [Project rundown](PROJECT_RUNDOWN.md),
+[Release notes](RELEASE_NOTES.md), and [Validation results](VALIDATION_RESULTS.md).
+
 **Audit/rework date:** 2026-08-21; nudge/safety follow-up: 2026-08-23  
 **Input:** 30 files from the supplied `GARBY.zip`  
 **Release principle:** treat Raspberry Pi + BLE bridge + main ESP32 as one coordinated control system; fail closed on uncertain motion permission.

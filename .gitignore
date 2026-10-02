@@ -50,3 +50,6 @@ firebase.json
 
 # Logs and generated reports
 *.log
+
+# Exported firmware and local verification artifacts
+/artifacts/

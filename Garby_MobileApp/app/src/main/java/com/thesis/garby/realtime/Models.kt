@@ -54,11 +54,13 @@ data class ResetCommand(
 /** Marker used to reject stale terminal states from a previous reset request. */
 data class ResetRequestMarker(
     val requestedBy: String,
-    val previousRequestedAtMs: Long
+    val previousRequestedAtMs: Long,
+    val requestedAtMs: Long = 0L
 ) {
     fun matches(command: ResetCommand): Boolean =
         command.requestedBy == requestedBy &&
-            command.requestedAtMs > previousRequestedAtMs
+            if (requestedAtMs > 0L) command.requestedAtMs == requestedAtMs
+            else command.requestedAtMs > previousRequestedAtMs
 }
 
 /**

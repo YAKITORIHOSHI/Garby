@@ -1,0 +1,4 @@
+# Pi deployment files must remain usable after a Windows checkout.
+*.sh text eol=lf
+*.env.example text eol=lf
+*.service.example text eol=lf

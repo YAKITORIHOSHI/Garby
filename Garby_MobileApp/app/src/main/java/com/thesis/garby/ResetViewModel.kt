@@ -7,6 +7,8 @@ import com.thesis.garby.network.NetworkConnectivityManager
 import com.thesis.garby.realtime.GarbyRealtimeDb
 import com.thesis.garby.realtime.ResetStatus
 import com.thesis.garby.realtime.RtdbConstants
+import com.thesis.garby.realtime.ConnectionState
+import com.thesis.garby.realtime.canRequestReturn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -14,6 +16,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration.Companion.milliseconds
@@ -46,14 +52,32 @@ class ResetViewModel : ViewModel() {
 
     init {
         viewModelScope.launch {
-            GarbyRealtimeDb.isReadyToReturn().collect { ready ->
-                _isReadyToReturn.value = ready
+            val clock = flow {
+                while (true) {
+                    emit(System.currentTimeMillis())
+                    delay(RtdbConstants.FRESHNESS_TICK_MS)
+                }
             }
+            combine(
+                GarbyRealtimeDb.isReadyToReturn(),
+                GarbyRealtimeDb.deviceStatus(RtdbConstants.DEFAULT_DEVICE_ID),
+                GarbyRealtimeDb.connectionState,
+                clock
+            ) { ready, status, connection, now ->
+                canRequestReturn(ready, status, connection is ConnectionState.Connected, now)
+            }.catch { error ->
+                if (error is CancellationException) throw error
+                emit(false)
+            }.collect { _isReadyToReturn.value = it }
         }
     }
 
     fun requestReset() {
         if (resetJob?.isActive == true) return
+        if (!_isReadyToReturn.value) {
+            _uiState.value = ResetUiState.Failed("Return requires a completed outbound route and a live robot connection.")
+            return
+        }
 
         val uid = firebaseAuth.currentUser?.uid?.takeIf { it.isNotBlank() }
         if (uid == null) {

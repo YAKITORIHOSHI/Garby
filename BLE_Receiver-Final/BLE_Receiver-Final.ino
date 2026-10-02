@@ -41,12 +41,6 @@ HardwareSerial ESP_Serial(1);
 #define CONTROL_QUEUE_DEPTH              8U
 #define CONTROL_DRAIN_BUDGET              4U
 #define PATH_FRAME_MAX_AGE_MS          650UL
-// Adaptive ingress freshness: a fixed window discards valid packets whenever
-// either CPU is throttled or the BLE connection interval stretches. The
-// observed path inter-arrival period widens the window up to this hard cap
-// while frames keep flowing; the 650 ms floor still applies when no cadence
-// is known, so the fail-closed guarantee is unchanged.
-#define PATH_INGRESS_ADAPT_CAP_MS     1550UL
 #define SIDES_FRAME_MAX_AGE_MS         500UL
 #define SENSOR_FRAME_MAX_AGE_MS       2000UL
 #define MCU_UART_LINE_MAX_BYTES         256U
@@ -68,17 +62,17 @@ HardwareSerial ESP_Serial(1);
 //   3. Proportional tap duration — small drift gets a short tap.
 //   4. Direction confirmation — a direction must persist across several
 //      fresh packets before a short correction is allowed.
-// Tuning note (2026-09-22): taps raised to 180-320 ms at 20-34% cut after
+// Tuning baseline: taps requested at 180-260 ms and 20-34% cut after
 // on-robot testing showed shorter/weaker taps produced no visible drift.
 // The 3-packet confirmation plus the strong-signal fast path remain the
 // anti-zigzag / instant-response guards.
 #define NUDGE_DEAD_ZONE_CM               12.0f
 #define NUDGE_HYSTERESIS_CM               8.0f
-// 2026-09-22: tap span raised (55-95 -> 180-320 ms, 12-22 -> 20-34% cut).
+// Both duration and cut stay within the MCU execution caps.
 // Earlier values commanded a sub-millimeter per-tap drift that was invisible.
 // Both stay within the MCU execution caps (35% cut, 260 ms hold).
 #define NUDGE_DURATION_MIN_MS            180UL
-#define NUDGE_DURATION_MAX_MS            320UL
+#define NUDGE_DURATION_MAX_MS            260UL
 #define NUDGE_INTENSITY_MIN_PCT           20U
 #define NUDGE_INTENSITY_MAX_PCT           34U
 #define NUDGE_ERROR_SCALE_CM              70.0f
@@ -114,6 +108,9 @@ volatile bool deviceConnected     = false;
 volatile bool sentConnectedMsg    = false;
 volatile bool bleBridgeSignalSent = false;  // Track if we told the MCU about BLE link
 volatile bool mcuReady            = false;  // Fail closed until explicit [MCU READY]
+static volatile bool bleSessionChanged = false;
+static volatile bool readyNoticePending = false;
+static volatile int lastDisconnectReason = 0;
 
 uint16_t      activeConnHandle = 0;
 volatile unsigned long lastDataReceived = 0;  // any bounded, non-empty BLE write
@@ -187,7 +184,7 @@ static bool commandRequiresLiveBle(const char* line) {
 static bool commandIsSafetyPriority(const char* line) {
   return strncmp(line, "STOP", 4) == 0 ||
          strncmp(line, "N:0", 3) == 0 ||
-         strcmp(line, "[RESET]") == 0;
+         strncmp(line, "[RESET", 6) == 0;
 }
 
 static void sendMcuLine(const char* line, bool expectsAck) {
@@ -231,34 +228,6 @@ static void sendMcuStopPair(const char* reason) {
 
 static void relayStop(const char* reason);
 
-// ── Adaptive ingress freshness (CPU/connection throttling resilience) ──
-// EWMA alpha = 1/4 over the inter-arrival period of accepted path packets.
-static uint32_t pathIngressEwmaMs  = 0;
-static uint32_t lastAcceptedPathMs = 0;
-
-static void notePathIngressInterval(uint32_t nowMs) {
-  if (lastAcceptedPathMs == 0) {
-    lastAcceptedPathMs = nowMs;
-    return;
-  }
-  uint32_t interval = nowMs - lastAcceptedPathMs;
-  lastAcceptedPathMs = nowMs;
-  if (interval > PATH_INGRESS_ADAPT_CAP_MS) interval = PATH_INGRESS_ADAPT_CAP_MS;
-  if (pathIngressEwmaMs == 0) {
-    pathIngressEwmaMs = interval;
-    return;
-  }
-  pathIngressEwmaMs = (interval + 3U * pathIngressEwmaMs) / 4U;
-}
-
-static uint32_t adaptiveIngressWindowMs() {
-  if (pathIngressEwmaMs == 0) return PATH_FRAME_MAX_AGE_MS;
-  const uint32_t widened = pathIngressEwmaMs * 2U;
-  if (widened < PATH_FRAME_MAX_AGE_MS) return PATH_FRAME_MAX_AGE_MS;
-  if (widened > PATH_INGRESS_ADAPT_CAP_MS) return PATH_INGRESS_ADAPT_CAP_MS;
-  return widened;
-}
-
 // ── Nudge state (cooldown + confirmation + startup grace + ramp + EMA corridor filter) ──
 unsigned long lastNudgeFireMs       = 0;
 int           lastFireDir           = 0;
@@ -282,10 +251,6 @@ static void resetNavigationState() {
   lastSidesSeq           = 0;
   lastPathDataReceived   = millis();
   lastStaleStopSent      = 0;
-  // Cadence estimates restart with each connection/reboot epoch so the
-  // adaptive windows fall back to their conservative floors.
-  pathIngressEwmaMs      = 0;
-  lastAcceptedPathMs     = 0;
   lastNudgeFireMs        = 0;
   lastFireDir            = 0;
   nudgeConfirmDir        = 0;
@@ -641,7 +606,7 @@ static void computeNudgeCommand(const String& sidesVal,
   // the robot react at once when it is already well off-center — the delayed
   // confirmation path remains as the anti-zigzag guard for weak drift.
   if (wantDir != 0 && wantDir == nudgeConfirmDir) {
-    nudgeConfirmCnt++;
+    if (nudgeConfirmCnt < NUDGE_CONFIRM_PACKETS) nudgeConfirmCnt++;
   } else {
     nudgeConfirmDir = wantDir;
     nudgeConfirmCnt = (wantDir != 0) ? 1 : 0;
@@ -656,12 +621,16 @@ static void computeNudgeCommand(const String& sidesVal,
   // ── Cooldown check ─────────────────────────────────────────
   bool periodOk = (millis() - lastNudgeFireMs >= NUDGE_COOLDOWN_MS);
 
-  if (!confirmed || !periodOk || wantDir == 0) {
-    ms = 0; intensity = 0; dir = "STABLE"; return;
+  if (wantDir == 0) return;
+  if (!confirmed || !periodOk) {
+    // No new tap is due. Do not cancel the bounded tap already executing.
+    dir = "HOLD";
+    return;
   }
 
   // ── Proportional duration & intensity scaling ───────────────
   float scale = (absErr - NUDGE_DEAD_ZONE_CM) / NUDGE_ERROR_SCALE_CM;
+  if (scale < 0.0f) scale = 0.0f;
   if (scale > 1.0f) scale = 1.0f;
 
   unsigned long baseDur = NUDGE_DURATION_MIN_MS +
@@ -675,9 +644,9 @@ static void computeNudgeCommand(const String& sidesVal,
   if (dur >= NUDGE_DURATION_MIN_MS) {
     ms        = dur;
     intensity = calcIntensity;
-    dir       = (error > 0.0f) ? "NUDGE_LEFT" : "NUDGE_RIGHT";
+    dir       = (wantDir > 0) ? "NUDGE_LEFT" : "NUDGE_RIGHT";
     lastNudgeFireMs    = millis();
-    lastFireDir        = (error > 0.0f) ? 1 : -1;
+    lastFireDir        = wantDir;
     nudgeConfirmCnt    = 0;  // require fresh confirmation for next tap
   } else {
     ms = 0; intensity = 0; dir = "STABLE";
@@ -748,6 +717,9 @@ static void sendStableNudge() {
 static void relayStop(const char* reason) {
   stopLatched = true;
   clearConfirmCount = 0;
+  nudgeConfirmCnt = 0;
+  nudgeConfirmDir = 0;
+  emaInitialized = false;
   sendMcuStopPair(reason);
 }
 
@@ -756,6 +728,7 @@ static bool validPathCode(const String& code) {
 }
 
 static bool parsePathBody(const String& body, String& frontCode, String& backCode) {
+  if (body.endsWith("|")) return false;
   bool haveFront = false;
   bool haveBack = false;
   int start = 0;
@@ -789,6 +762,7 @@ static void handlePathPacket(const String& raw) {
   }
   if (havePathSeq && !sequenceIsNewer(seq, lastPathSeq)) {
     if (VERBOSE_PROTOCOL_LOGS) Serial.println(">>> Rejected stale PATH packet");
+    relayStop("STOP:SEQUENCE");
     return;
   }
 
@@ -803,7 +777,6 @@ static void handlePathPacket(const String& raw) {
   havePathSeq = true;
   pathStreamSeen = true;
   lastPathDataReceived = millis();
-  notePathIngressInterval(lastPathDataReceived);
 
   const bool blocked = (frontCode != "C") || (backCode != "C");
   // H changes only the diagnostic STOP reason. Generic O has identical motion
@@ -875,6 +848,7 @@ static void sendComputedNudge(const String& sidesBody) {
   }
 
   computeNudgeCommand(sidesBody, nudgeMs, nudgeIntensity, nudgeDir);
+  if (nudgeDir == "HOLD") return;
 
   if (nudgeMs == 0 || nudgeDir == "STABLE") {
     // Preserve all stop/front/dead-zone/cooldown suppression as an explicit
@@ -975,8 +949,9 @@ static void processAndRelayMessage(const char* incoming) {
     sendMcuLine(raw, true);
     return;
   }
-  if (raw == "[RESET]") {
-    relayStop("STOP:RESET");
+  if (raw == "[RESET]" || raw.startsWith("[RESET:")) {
+    // The controller owns reset idempotency and brakes before a new return.
+    // Repeated delivery must not STOP an already-running return every 3 s.
     sendMcuLine(raw, true);
     return;
   }
@@ -1045,13 +1020,22 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
   frame.payload[length] = '\0';
   trimFrame(frame);
   if (frame.length == 0) return;
+  // A BLE frame is exactly one printable protocol line. Embedded newlines
+  // could otherwise inject UART GO/reset commands through SENSOR telemetry.
+  for (size_t i = 0; i < frame.length; ++i) {
+    const unsigned char c = (unsigned char)frame.payload[i];
+    if (c < 32U || c > 126U) {
+      ingressFaultCount++;
+      return;
+    }
+  }
 
   // A bounded, non-empty GATT write is sufficient for link liveness. Path
   // freshness is tracked separately and only advances after full validation.
   lastDataReceived = frame.receivedAtMs;
 
   const bool isControl = frameStartsWith(frame, "P:") ||
-                         strcmp(frame.payload, "[RESET]") == 0 ||
+                         frameStartsWith(frame, "[RESET") ||
                          strstr(frame.payload, "PATH:") != nullptr;
   if (isControl) {
     if (controlQueue == nullptr) {
@@ -1063,6 +1047,7 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
       xQueueReceive(controlQueue, &discarded, 0);
       xQueueSendToBack(controlQueue, &frame, 0);
       controlOverflowCount++;
+      ingressFaultCount++;
     }
     return;
   }
@@ -1090,9 +1075,7 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
   // These messages intentionally have no state effect. The ready token only
   // proves Pi-side startup and link liveness, already recorded above.
   if (strcmp(frame.payload, "[RASPI READY]") == 0) {
-    if (deviceConnected) {
-      sendConnectedNotice();
-    }
+    readyNoticePending = true;
     return;
   }
   unknownFrameCount++;
@@ -1110,12 +1093,13 @@ static void processBleIngress() {
     stopLatched = true;
     clearConfirmCount = 0;
     if (mcuReady) relayStop("STOP:PROTOCOL");
+    resetIngressQueues();
     return;
   }
 
   BleFrame frame = {};
   uint8_t processedControls = 0;
-  const uint32_t ingressWindowMs = adaptiveIngressWindowMs();
+  const uint32_t ingressWindowMs = PATH_FRAME_MAX_AGE_MS;
   while (processedControls < CONTROL_DRAIN_BUDGET &&
          controlQueue != nullptr &&
          xQueueReceive(controlQueue, &frame, 0) == pdPASS) {
@@ -1158,68 +1142,23 @@ static void processBleIngress() {
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pSvr, NimBLEConnInfo& connInfo) override {
     connectionSession++;
-    resetIngressQueues();
     deviceConnected      = true;
-    sentConnectedMsg     = false;
-    bleBridgeSignalSent  = false;
-
     activeConnHandle = connInfo.getConnHandle();
     lastDataReceived = millis();
-    resetNavigationState();
-    mcuAckPending = false;
-    mcuAckFault = false;
-    mcuBackpressureStopPending = false;
-    mcuUnackedCommands = 0;
-
-    Serial.print(">>> CONNECTED: ");
-    Serial.println(connInfo.getAddress().toString().c_str());
-    NimBLEDevice::stopAdvertising();
-
-    // Negotiate stable connection parameters.
-    // interval 24-40 = 30-50 ms, timeout 400 = 4000 ms. The wider interval
-    // keeps the 250 ms command cadence comfortably satisfied while reducing
-    // radio wakeups and CPU/radio pressure when either side is throttled.
-    pServer->updateConnParams(connInfo.getConnHandle(), 24, 40, 0, 400);
-
-    // If MCU has already finished setup, inform MCU that BLE link is established
-    if (mcuReady) {
-      sendMcuLine("[BLE CONNECTION ESTABLISHED]", false);
-      relayStop("STOP:WAITING_DATA");
-      bleBridgeSignalSent = true;
-      Serial.println(">>> BLE established; MCU held until fresh path data");
-    } else {
-      Serial.println(">>> BLE connected, waiting for [MCU READY] signal from MCU...");
-    }
+    bleSessionChanged = true;
   }
 
   void onDisconnect(NimBLEServer* pSvr,
                     NimBLEConnInfo& connInfo,
                     int reason) override {
+    lastDisconnectReason = reason;
     deviceConnected     = false;
-    bleBridgeSignalSent = false;
     connectionSession++;
-    resetIngressQueues();
-    Serial.printf(">>> DISCONNECTED  reason=0x%02X\n", reason);
-
-    resetNavigationState();
-    if (mcuReady) {
-      relayStop("STOP:LINK");
-    }
-    // ACK timing is meaningful only during an active BLE control session.
-    mcuAckPending = false;
-    mcuBackpressureStopPending = false;
-    mcuUnackedCommands = 0;
-    Serial.println(">>> Link lost; MCU latched in STOP");
-
-    NimBLEDevice::startAdvertising();
-    Serial.println(">>> Advertising restarted.");
+    bleSessionChanged = true;
   }
 
   void onConnParamsUpdate(NimBLEConnInfo& connInfo) override {
-    Serial.printf(">>> ConnParams: interval=%u latency=%u timeout=%u\n",
-                  connInfo.getConnInterval(),
-                  connInfo.getConnLatency(),
-                  connInfo.getConnTimeout());
+    // No console/UART I/O from the BLE host task.
   }
 };
 
@@ -1345,6 +1284,7 @@ static void handleMcuLine(const char* mcuMsg) {
     resetIngressQueues();
     resetNavigationState();
     Serial.println("[BRIDGE] MCU reported [MCU READY]");
+    sendNotification("[MCU READY]");
     if (deviceConnected) {
       sendMcuLine("[BLE CONNECTION ESTABLISHED]", false);
       relayStop("STOP:WAITING_DATA");
@@ -1482,6 +1422,34 @@ static void reportTransportStats(unsigned long now) {
 }
 
 void loop() {
+  // All navigation state and UART writes have one owner: this loop. Callbacks
+  // only invalidate the session immediately and post bounded work here.
+  if (bleSessionChanged) {
+    bleSessionChanged = false;
+    sentConnectedMsg = false;
+    bleBridgeSignalSent = false;
+    resetNavigationState();
+    mcuAckPending = false;
+    mcuAckFault = false;
+    mcuBackpressureStopPending = false;
+    mcuUnackedCommands = 0;
+    if (deviceConnected) {
+      if (pServer) pServer->updateConnParams(activeConnHandle, 24, 40, 0, 400);
+      sendConnectedNotice();
+    } else {
+      resetIngressQueues();
+      if (mcuReady) relayStop("STOP:LINK");
+      NimBLEDevice::startAdvertising();
+      Serial.printf("[BRIDGE] Link lost reason=0x%02X; STOP asserted, advertising restarted\n",
+                    (unsigned int)lastDisconnectReason);
+    }
+  }
+  if (readyNoticePending) {
+    readyNoticePending = false;
+    sentConnectedMsg = false;
+    sendConnectedNotice();
+    if (mcuReady) sendMcuLine("[ROBOT STATUS]", false);
+  }
   pollMcuUart();
   processBleIngress();
 
@@ -1496,8 +1464,6 @@ void loop() {
       now - lastStaleStopSent >= STALE_STOP_REPEAT_MS) {
     relayStop(pathStreamSeen ? "STOP:STALE" : "STOP:WAITING_DATA");
     lastStaleStopSent = now;
-    pathIngressEwmaMs = 0;
-    lastAcceptedPathMs = 0;
   }
 
   enforceMcuAckWatchdog(now);

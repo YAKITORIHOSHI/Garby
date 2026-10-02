@@ -453,7 +453,12 @@ class BleService(threading.Thread):
                 await asyncio.sleep(self.DRAIN_INTERVAL)
                 continue
             try:
-                acknowledged = msg.startswith(("P:", "[RESET]", "[RASPI READY]"))
+                acknowledged = (
+                    msg.startswith(("P:", "[RESET", "[RASPI READY]"))
+                    or len(msg.encode("utf-8")) > getattr(
+                        self._write_char, "max_write_without_response_size", 20
+                    )
+                )
                 async with self._write_lock:
                     await self._client.write_gatt_char(
                         self._write_char, msg.encode("utf-8"), response=acknowledged
@@ -473,7 +478,12 @@ class BleService(threading.Thread):
         if not self._client or not self._client.is_connected:
             return
         try:
-            acknowledged = msg.startswith(("P:", "[RESET]", "[RASPI READY]"))
+            acknowledged = (
+                msg.startswith(("P:", "[RESET", "[RASPI READY]"))
+                or len(msg.encode("utf-8")) > getattr(
+                    self._write_char, "max_write_without_response_size", 20
+                )
+            )
             async with self._write_lock:
                 await self._client.write_gatt_char(
                     self._write_char, msg.encode("utf-8"), response=acknowledged

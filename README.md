@@ -1,142 +1,79 @@
-# GARBY — Autonomous Waste-Collection Robot
+# GARBY — autonomous waste-collection robot
 
-GARBY is a three-node distributed embedded robotic system for autonomous waste collection in indoor corridor environments. Developed as an engineering thesis project, it integrates a main ESP32 motor controller, an ESP32 BLE bridge, a Raspberry Pi 4 supervisor/sensor hub, and an Android companion app.
+GARBY combines a Raspberry Pi LiDAR supervisor, an ESP32 BLE bridge, an ESP32
+motor controller, and an Android Firebase dashboard. It follows calibrated
+outbound and return routes for an indoor waste-collection thesis project.
 
-> **Safety Invariant:** The system is strictly **fail-closed**. Missing, stale, malformed, out-of-order, or disconnected path data immediately halts motion. The Android app monitors telemetry and sends reset/return intents; it never directly authorizes movement.
+The 2026-10-02 repair addresses obstacle recovery, nudging, motor command
+acceptance, BLE transport, and trustworthy return status across all four nodes.
+Software checks are recorded in [Validation results](VALIDATION_RESULTS.md).
+Physical operation still needs the [deployment and acceptance procedure](DEPLOYMENT_AND_ACCEPTANCE.md).
 
----
+## Start here
 
-## System Architecture
+- [Full project rundown](PROJECT_RUNDOWN.md): intended cycle, confirmed defects,
+  repairs, deployment boundaries, and remaining work.
+- [Architecture](SYSTEM_ARCHITECTURE.md): active source, protocols, timing,
+  sensors, motor parameters, and state ownership.
+- [Release notes](RELEASE_NOTES.md): compatibility and behavior changes.
+- [Deployment and acceptance](DEPLOYMENT_AND_ACCEPTANCE.md): Pi setup, flashing
+  order, lifted-wheel tests, and supervised route checks.
+- [Validation results](VALIDATION_RESULTS.md): commands and measured software results.
 
-```text
-Android Companion App (Kotlin / Jetpack Compose)
-       │
-       │ Firebase Realtime Database
-       ▼
-Raspberry Pi 4 Supervisor
-  ├── ROS 2 YDLIDAR (/scan processing & safety gating)
-  ├── Serial Sensor Board (MQ-4, MQ-135, MQ-137 gas + US)
-  └── BLE Central Client
-       │
-       │ BLE GATT (P: path packets, S: steering, SENSOR: telemetry)
-       ▼
-ESP32 BLE Bridge
-  ├── NimBLE Server & strict packet parser
-  ├── Hallway-centering & anti-zigzag nudge algorithm
-  └── Fail-closed STOP latch
-       │
-       │ UART @ 115200 baud (STOP/GO, N:<ms>:<pct>, SENSOR)
-       ▼
-Main ESP32 Motor Controller
-  ├── FastAccelStepper closed-loop stepper control
-  ├── Centered Servo + Ultrasonic obstacle detection
-  ├── HX711 Load Cell (bin capacity)
-  ├── Air780E LTE Modem (asynchronous SMS alerts)
-  └── IDLE / RUNNING / RETURNING route state machine
-```
+## Active deployment set
 
----
+| Node | Source | Role |
+| --- | --- | --- |
+| Pi | `RasPi/final_w_serial.py`, `bridge_core.py` | ROS 2 scans, path permission, geometry, BLE transport, telemetry, return relay |
+| BLE ESP32 | `BLE_Receiver-Final/` | Strict path parser, STOP latch, centering decisions, controller UART |
+| Main ESP32 | `NAPHTALI_CODE_V2/` | Motor targets, local sonar, load/gas triggers, route state, background SMS |
+| Android | `Garby_MobileApp/app/` | Authenticated dashboard and correlated operator return requests |
 
-## Repository Layout
+Deploy the entire Pi directory. `Garby_MobileApp/final_w_serial.py` is only a
+compatibility launcher. `RasPi/final_w_serial-simulator.py` is a manual bench
+producer with simplified sensing; `Test/Test.ino` is a serial test sketch.
 
-```text
-GARBY/
-├── BLE_Receiver-Final/        # ESP32 BLE bridge firmware (NimBLE, nudge calc, STOP latch)
-├── NAPHTALI_CODE_V2/          # Main ESP32 MCU firmware (steppers, sonar, HX711, Air780E)
-├── RasPi/                     # Raspberry Pi ROS 2 LiDAR supervisor & sensor bridge
-│   ├── bridge_core.py         # Core LiDAR parsing, coalescing mailbox & health helpers
-│   ├── final_w_serial.py      # Main production ROS 2 node & BLE client
-│   ├── requirements.txt       # Python dependencies
-│   └── test_bridge_core.py    # Host unit test suite (32 test cases)
-├── Garby_MobileApp/           # Android companion app (Kotlin, Firebase RTDB)
-├── tools/                     # Host sanity and verification scripts
-│   └── source_sanity.py       # Structural syntax and JSON integrity validator
-├── SYSTEM_ARCHITECTURE.md     # Authoritative system design & protocol specification
-├── DEPLOYMENT_AND_ACCEPTANCE.md# Hardware checklist & supervised deployment runbook
-├── VALIDATION_RESULTS.md      # Static, unit test, and compilation verification record
-├── AUDIT_REPORT.md            # Coordinated multi-node audit & defect repair log
-├── RELEASE_NOTES.md           # Multi-node throttling resilience & safety release notes
-└── .github/                   # Copilot/agent definitions & maintainer skills
-```
+Motor execution is open loop: there are no wheel encoders in this source.
+LiDAR supplies the outer centering correction. An ordinary obstacle wait keeps
+monitoring and resumes the remaining target after fresh clearance. Route faults
+require supervised recovery from a known physical position.
 
----
+## Verify the software
 
-## Node Summary
+Run from the repository root:
 
-| Node | Primary Files | Role |
-| :--- | :--- | :--- |
-| **Main ESP32 MCU** | `NAPHTALI_CODE_V2/` | Stepper execution (`FastAccelStepper`), centered ultrasonic interlock, load cell (`HX711`), background cellular modem (`Air780E`), route state machine (`IDLE` &rarr; `RUNNING` &rarr; `RETURNING`). |
-| **ESP32 BLE Bridge** | `BLE_Receiver-Final/` | NimBLE GATT server, uint32 sequence validation, hallway-centering nudge calculation, UART relay at 115200 baud to main MCU. |
-| **Raspberry Pi 4** | `RasPi/final_w_serial.py`<br>`RasPi/bridge_core.py` | ROS 2 YDLIDAR reader, sensor UART bridge (9600 baud), Firebase sync, BLE client, reset command bridge. |
-| **Android App** | `Garby_MobileApp/` | Real-time telemetry dashboard, sensor visualization, explicit reset and route return trigger. |
-
----
-
-## Key Protocols
-
-### 1. BLE Packet Protocol (Raspberry Pi &rarr; BLE Bridge)
-```text
-P:<seq>|F=<C|O|H|S>|B=<C|O|H|S>     # Path safety packet (C=Clear, O=Obstacle, H=Human, S=Stale)
-S:<seq>|L=..|R=..|F=..|B=..|...     # Steering geometry (bound to matching path seq)
-SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..# Environmental telemetry (US=999, gas=-1: unavailable)
-[RASPI READY]                       # Pi bridge liveness beacon
-[RESET]                             # Explicit operator reset intent
-```
-
-### 2. UART Command Protocol (BLE Bridge &rarr; Main MCU @ 115200 baud)
-```text
-STOP, STOP:HUMAN, STOP:STALE, STOP:LINK, STOP:WAITING_DATA, STOP:PROTOCOL
-GO                                  # Released only after 2+ consecutive clear packets
-N:<duration_ms>:<pct_cut>|<DIR>     # Steering correction tap (e.g., N:45:12|NUDGE_LEFT)
-SENSOR:...                          # Relayed sensor telemetry
-[MCU READY]                         # Main MCU boot epoch notification
-[REQUEST-STATUS]                    # Main MCU status request probe
-```
-
----
-
-## Quick Start & Verification
-
-### 1. Raspberry Pi Runtime
-```bash
-cd RasPi
-python3 -m pip install -r requirements.txt
-python3 final_w_serial.py --headless
-```
-
-### 2. Host Validation & Static Audit
-```bash
-# Run unit tests and syntax checks
-cd RasPi
-python3 -m unittest -v test_bridge_core.py
-python3 -m py_compile bridge_core.py final_w_serial.py final_w_serial-simulator.py test_bridge_core.py
-cd ..
-
-# Run structural sanity and coordinated multi-node audit
-python3 tools/source_sanity.py .
-python3 .github/skills/garby-robot-maintainer/scripts/audit_project.py .
-```
-
-### 3. Android Companion App
 ```powershell
-cd Garby_MobileApp
-.\gradlew.bat testDebugUnitTest assembleDebug assembleRelease
+python -B tools/verify_project.py
 ```
 
----
+This runs Python runtime/helper tests, executable tests of the actual firmware
+source, structural/audit checks, both ESP32 target builds, Android unit tests,
+debug/release assembly, and lint. ESP32 binaries go to `artifacts/firmware/`.
+It does not flash connected boards. See the validation report for tool versions.
 
-## Documentation
+For a machine without ESP32/Android toolchains:
 
-- [Release Notes](RELEASE_NOTES.md) — Multi-node throttling resilience, return-route fault latching, and verification results.
-- [System Architecture](SYSTEM_ARCHITECTURE.md) — Comprehensive technical architecture, watchdogs, timing parameters, and fail-closed state machines.
-- [Deployment & Acceptance Runbook](DEPLOYMENT_AND_ACCEPTANCE.md) — Step-by-step flashing order, wheels-lifted verification, and physical acceptance checklist.
-- [Validation Results](VALIDATION_RESULTS.md) — Host test results, static audit outputs, and target compilation details.
-- [Audit & Repair Report](AUDIT_REPORT.md) — In-depth investigation of communication, watchdog, and parser repairs.
-- [Raspberry Pi Node Guide](RasPi/README.md) — Pi environment setup, ROS 2 configuration, and systemd service installation.
+```powershell
+python -B tools/verify_project.py --host-only
+```
 
----
+Skipped checks are explicitly reported as unverified.
 
-## Hardware Safety Notice
+## Run on the Pi
 
-> [!WARNING]
-> Software verification and unit tests cannot certify real-world physical safety. Hardware safety depends on measured stopping distances under load, verified LiDAR orientation, confirmed route directions on lifted wheels, electrical/power integrity, and a verified hardwired emergency stop. Always conduct initial testing with wheels lifted before floor operations.
+Install ROS 2 and the YDLIDAR workspace, then install `RasPi/requirements.txt`
+into the Python that can import ROS packages. Configure the environment from
+`RasPi/garby-bridge.env.example`; source both ROS and the workspace overlay.
+
+```bash
+python3 RasPi/check_runtime.py --require-firebase
+bash RasPi/run_bridge.sh --headless
+```
+
+Follow the deployment guide for service installation and device paths. Verify
+LiDAR orientation, distinct LiDAR/sensor serial devices, actual wheel directions,
+and echo measurements before floor operation.
+
+Missing or stale path data stops movement. The app and telemetry cannot grant
+motion permission. Hardware acceptance includes a hardwired emergency stop and
+measured braking under the intended payload.

@@ -412,6 +412,10 @@ def partition_lidar_samples(
     """
     safety = {name: [] for name in LIDAR_SECTOR_NAMES}
     steering = {name: [] for name in LIDAR_SECTOR_NAMES}
+    if (not all(math.isfinite(v) for v in (angle_min, angle_increment, range_min, range_max))
+            or (angle_increment == 0.0 and len(ranges) > 1)
+            or range_min < 0.0 or range_max <= range_min):
+        return safety, steering, 0
     half_width_deg = (float(steering_half_width_deg) if steering_half_width_deg is not None
                       else max(0.0, float(steering_cone_deg)) / 2.0)
     steering_half_width = math.radians(half_width_deg)

@@ -9,7 +9,7 @@ User=garby
 WorkingDirectory=/home/garby/GARBY/RasPi
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/default/garby-bridge
-ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && exec /usr/bin/python3 /home/garby/GARBY/RasPi/final_w_serial.py --headless'
+ExecStart=/bin/bash /home/garby/GARBY/RasPi/run_bridge.sh --headless
 Restart=always
 RestartSec=5
 TimeoutStopSec=10

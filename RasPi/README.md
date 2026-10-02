@@ -15,13 +15,23 @@ ROS 2 (`rclpy`, `sensor_msgs`) and the YDLidar ROS 2 driver are system/ROS depen
 
 ## Start
 
+Source both ROS and the built YDLIDAR workspace overlay, and configure the
+variables from `garby-bridge.env.example`. Run from the repository root:
+
 ```bash
-python3 final_w_serial.py --headless
+python3 RasPi/check_runtime.py --require-firebase
+bash RasPi/run_bridge.sh --headless
 ```
+
+The launcher uses `GARBY_ROS_SETUP`, `GARBY_LIDAR_WORKSPACE_SETUP`, and
+`GARBY_PYTHON_BIN`. See [deployment and acceptance](../DEPLOYMENT_AND_ACCEPTANCE.md)
+for full setup and systemd installation. Direct execution is also possible after
+sourcing the same environments: `python3 RasPi/final_w_serial.py --headless`.
 
 ## Useful environment variables
 
 - `GARBY_SENSOR_SERIAL_PORT` — sensor UART device; auto-detected when unset
+- `GARBY_LIDAR_PORT` — explicit stable LiDAR device, distinct from the sensor board
 - `GARBY_SENSOR_SERIAL_BAUD` — default `9600`
 - `GARBY_BLE_ADDRESS` — optional fixed BLE MAC/address
 - `GARBY_BLE_DEVICE_NAME` — default `GarbyESP32`

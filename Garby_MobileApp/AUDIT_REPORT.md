@@ -1,5 +1,9 @@
 # GARBY Mobile App Full Audit Report
 
+Historical audit. The coordinated 2026-10-02 changes and validation supersede
+runtime/command details below: [Project rundown](../PROJECT_RUNDOWN.md),
+[Release notes](../RELEASE_NOTES.md), [Validation](../VALIDATION_RESULTS.md).
+
 ## Scope
 
 Audited the Android/Kotlin project from application architecture through Firebase control flow, lifecycle/state handling, security, networking, UI data integrity, performance, build configuration, and package hygiene.

@@ -500,25 +500,27 @@ object GarbyRealtimeDb {
                     ?: 0L
             }
 
-            val marker = ResetRequestMarker(
-                requestedBy = requestedBy,
-                previousRequestedAtMs = previousRequestedAt
-            )
-
-            withTimeout(RtdbConstants.WRITE_TIMEOUT_MS.milliseconds) {
-                // One atomic multi-location write prevents the structured
-                // command and deployed APP compatibility flag from briefly
-                // contradicting each other.
+            val requestedAt = withTimeout(RtdbConstants.WRITE_TIMEOUT_MS.milliseconds) {
+                // Structured commands are authoritative. Do not leave a
+                // compatibility boolean able to resurrect a terminal request.
                 database.reference.updateChildren(
                     mapOf(
                         "devices/$deviceId/commands/reset/requestedAt" to ServerValue.TIMESTAMP,
                         "devices/$deviceId/commands/reset/requestedBy" to requestedBy,
                         "devices/$deviceId/commands/reset/status" to "pending",
-                        "APP/isReadyToReset" to true
+                        "devices/$deviceId/commands/reset/ackAt" to null,
+                        "devices/$deviceId/commands/reset/doneAt" to null,
+                        "devices/$deviceId/commands/reset/failedAt" to null,
+                        "devices/$deviceId/commands/reset/reason" to null
                     )
                 ).await()
+                val written = resetRef.get().await()
+                check(written.child("requestedBy").getValue(String::class.java) == requestedBy)
+                val resolvedAt = written.child("requestedAt").getLongOrNull() ?: 0L
+                check(resolvedAt > previousRequestedAt) { "Return identity could not be confirmed" }
+                resolvedAt
             }
-            return Result.success(marker)
+            return Result.success(ResetRequestMarker(requestedBy, previousRequestedAt, requestedAt))
         } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
             database.purgeOutstandingWrites()
             Log.w(TAG, "Reset request timed out", error)
@@ -691,6 +693,8 @@ object GarbyRealtimeDb {
             }
             // Allow a small window for the initial RTDB sync to populate the local cache.
             delay(300.milliseconds)
+        } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+            Log.w(TAG, "Firebase warm-up timed out", error)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

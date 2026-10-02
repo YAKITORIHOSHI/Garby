@@ -7,9 +7,16 @@ import os, sys, time, queue, threading, asyncio, random, math, logging, signal, 
 from collections import deque
 from datetime import datetime
 from statistics import median
+from copy import copy
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("combined_app")
 
 from bridge_core import (
-    AdaptiveTolerance,
     CoalescingUpdateWorker,
     ExponentialBackoff,
     SENSOR_SPECS,
@@ -106,35 +113,39 @@ class FirebaseManager:
         self._update({"APP/resetState": reset_state}, urgent=True)
 
     def get_reset_command(self, device_id):
-        app_ready = db.reference("/APP/isReadyToReset").get()
         command = db.reference(f"/devices/{device_id}/commands/reset").get() or {}
-        return app_ready is True, command
+        # The structured request owns identity and status. A leftover legacy
+        # boolean must never resurrect a completed/failed request.
+        return command
+
+    def _transition_reset(self, device_id, requested_at, status, **fields):
+        ref = db.reference(f"/devices/{device_id}/commands/reset")
+        def transition(current):
+            if not isinstance(current, dict):
+                return current
+            if current.get("requestedAt", 0) != requested_at:
+                return current
+            if current.get("status") not in ("pending", "ack"):
+                return current
+            return {**current, "status": status, **fields}
+        result = ref.transaction(transition)
+        return isinstance(result, dict) and result.get("requestedAt") == requested_at and result.get("status") == status
 
     def mark_reset_ack(self, device_id, requested_at):
-        prefix = f"devices/{device_id}/commands/reset"
-        self._update({
-            f"{prefix}/requestedAt": requested_at,
-            f"{prefix}/status": "ack",
-            f"{prefix}/ackAt": int(time.time() * 1000),
-        }, urgent=True)
+        return self._transition_reset(device_id, requested_at, "ack", ackAt=int(time.time() * 1000))
 
     def mark_reset_done(self, device_id, requested_at):
-        prefix = f"devices/{device_id}/commands/reset"
-        self._update({
-            f"{prefix}/requestedAt": requested_at,
-            f"{prefix}/status": "done",
-            f"{prefix}/doneAt": int(time.time() * 1000),
-            "APP/isReadyToReset": False,
-        }, urgent=True)
+        return self._transition_reset(device_id, requested_at, "done", doneAt=int(time.time() * 1000))
 
     def mark_reset_failed(self, device_id, requested_at, reason):
-        prefix = f"devices/{device_id}/commands/reset"
+        return self._transition_reset(device_id, requested_at, "failed", failedAt=int(time.time() * 1000), reason=reason)
+
+    def update_robot_state(self, state):
+        ready = state == "AT_DESTINATION"
         self._update({
-            f"{prefix}/requestedAt": requested_at,
-            f"{prefix}/status": "failed",
-            f"{prefix}/failedAt": int(time.time() * 1000),
-            f"{prefix}/reason": reason,
-            "APP/isReadyToReset": False,
+            "RASPI/STATES/isReadyToReturn": ready,
+            f"devices/{RESET_DEVICE_ID}/status/isReadyToReturn": ready,
+            f"devices/{RESET_DEVICE_ID}/status/robotState": state,
         }, urgent=True)
 
     def update_mcu_states(self, is_blocked=None, is_fully_loaded=None,
@@ -319,6 +330,7 @@ RASPI_READY   = "[RASPI READY]"
 RESET_DEVICE_ID = "garby-bin-01"
 RESET_REQUEST_MAX_AGE_MS = 120_000
 RESET_REQUEST_FUTURE_TOLERANCE_MS = 30_000
+RESET_COMPLETION_TIMEOUT_S = 900.0
 
 firebase = None
 ser = None
@@ -352,6 +364,7 @@ class CoalescingBleQueue:
         self._maxlen = maxlen
         self._items = deque()
         self._lock = threading.Lock()
+        self._latest_path_seq = None
 
     @staticmethod
     def _kind(msg):
@@ -361,7 +374,7 @@ class CoalescingBleQueue:
             return "SIDES"
         if msg.startswith("SENSOR:"):
             return "SENSOR"
-        if msg == "[RESET]":
+        if msg == "[RESET]" or msg.startswith("[RESET:"):
             return "RESET"
         if msg == RASPI_READY:
             return "READY"
@@ -370,6 +383,13 @@ class CoalescingBleQueue:
     def put_nowait(self, msg, urgent=False):
         kind = self._kind(msg)
         with self._lock:
+            if msg.startswith("P:"):
+                seq = int(msg[2:].split("|", 1)[0])
+                if self._latest_path_seq is not None:
+                    delta = (seq - self._latest_path_seq) & 0xFFFFFFFF
+                    if delta == 0 or delta >= 0x80000000:
+                        return
+                self._latest_path_seq = seq
             if kind != "CONTROL":
                 self._items = deque(
                     item for item in self._items if self._kind(item) != kind
@@ -401,6 +421,7 @@ class CoalescingBleQueue:
     def clear(self):
         with self._lock:
             self._items.clear()
+            self._latest_path_seq = None
 
     def discard_kind(self, kind):
         with self._lock:
@@ -414,15 +435,12 @@ ble_recv_queue = queue.Queue(maxsize=100)
 _status_requested = threading.Event()
 _robot_running = threading.Event()
 _reset_completed = threading.Event()
+_reset_feedback = {}
+_reset_feedback_lock = threading.Lock()
+_ready_to_return = threading.Event()
+_robot_state = "UNKNOWN"
 front_disabled = threading.Event()
 back_disabled  = threading.Event()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
-)
-logger = logging.getLogger("combined_app")
 
 # Module‑level ble_service placeholder – will be set after BLE connects
 ble_service = None
@@ -633,6 +651,7 @@ def firebase_connection_loop(stop_event):
         try:
             manager = FirebaseManager()
             firebase = manager
+            manager.update_robot_state(_robot_state)
             try:
                 existing = manager.get_raspi_launch_time()
                 if not existing:
@@ -656,6 +675,7 @@ def firebase_reset_command_loop(stop_event):
     logger.info("Firebase reset command bridge started.")
     in_flight_requested_at = 0
     completed_requested_at = None
+    accepted_at = 0.0
     last_reset_relay_at = 0.0
     poll_backoff = ExponentialBackoff(2.0, 30.0)
 
@@ -666,7 +686,7 @@ def firebase_reset_command_loop(stop_event):
                 stop_event.wait(FIREBASE_RESET_POLL_S)
                 continue
 
-            app_ready, command = firebase.get_reset_command(RESET_DEVICE_ID)
+            command = firebase.get_reset_command(RESET_DEVICE_ID)
             poll_backoff.reset()
             is_command = isinstance(command, dict)
             status = str(command.get("status", "")).lower() if is_command else ""
@@ -676,10 +696,9 @@ def firebase_reset_command_loop(stop_event):
             except (TypeError, ValueError):
                 requested_at = 0
 
-            # Recover an acknowledged-but-incomplete reset after a Pi restart.
-            should_send = app_ready or status in ("pending", "ack")
+            should_send = status in ("pending", "ack")
             now_ms = int(time.time() * 1000)
-            if should_send and requested_at <= 0 and not app_ready:
+            if should_send and requested_at <= 0:
                 if requested_at != completed_requested_at:
                     firebase.mark_reset_failed(
                         RESET_DEVICE_ID,
@@ -690,14 +709,16 @@ def firebase_reset_command_loop(stop_event):
                     logger.warning("[RESET] Rejected timestamp-less Firebase reset request.")
                 stop_event.wait(FIREBASE_RESET_POLL_S)
                 continue
-            if should_send and requested_at <= 0:
-                requested_at = in_flight_requested_at or now_ms
             age_ms = now_ms - requested_at
             request_is_fresh = (
                 should_send and
-                -RESET_REQUEST_FUTURE_TOLERANCE_MS <= age_ms <= RESET_REQUEST_MAX_AGE_MS
+                -RESET_REQUEST_FUTURE_TOLERANCE_MS <= age_ms <= (
+                    int(RESET_COMPLETION_TIMEOUT_S * 1000) if status == "ack" else RESET_REQUEST_MAX_AGE_MS
+                )
             )
-            if should_send and not request_is_fresh:
+            # Acceptance freshness is checked once. A legitimate long return
+            # must not expire after 120 seconds while the MCU is still running.
+            if should_send and not request_is_fresh and requested_at != in_flight_requested_at:
                 if requested_at != completed_requested_at:
                     firebase.mark_reset_failed(
                         RESET_DEVICE_ID,
@@ -717,25 +738,40 @@ def firebase_reset_command_loop(stop_event):
                 requested_at != completed_requested_at
             )
             if is_new_request:
-                _reset_completed.clear()
-                ble_send_queue.put_nowait("[RESET]", urgent=True)
-                last_reset_relay_at = time.monotonic()
-                firebase.mark_reset_ack(RESET_DEVICE_ID, requested_at)
+                if in_flight_requested_at:
+                    firebase.mark_reset_failed(RESET_DEVICE_ID, requested_at, "return_already_in_progress")
+                    stop_event.wait(FIREBASE_RESET_POLL_S)
+                    continue
                 in_flight_requested_at = requested_at
-                logger.info("[RESET] Firebase request relayed to robot.")
+                accepted_at = time.monotonic()
+                last_reset_relay_at = 0.0
 
-            if (in_flight_requested_at and not _reset_completed.is_set() and
-                    time.monotonic() - last_reset_relay_at >= 3.0):
-                ble_send_queue.put_nowait("[RESET]", urgent=True)
-                last_reset_relay_at = time.monotonic()
-                logger.info("[RESET] Re-sent in-flight Firebase reset request.")
-
-            if in_flight_requested_at and _reset_completed.is_set():
-                firebase.mark_reset_done(RESET_DEVICE_ID, in_flight_requested_at)
+            with _reset_feedback_lock:
+                feedback = _reset_feedback.get(in_flight_requested_at)
+            if in_flight_requested_at and feedback in ("DONE", "FAILED"):
+                if feedback == "DONE":
+                    firebase.mark_reset_done(RESET_DEVICE_ID, in_flight_requested_at)
+                else:
+                    firebase.mark_reset_failed(RESET_DEVICE_ID, in_flight_requested_at, "controller_rejected_or_route_incomplete")
                 completed_requested_at = in_flight_requested_at
                 in_flight_requested_at = 0
-                _reset_completed.clear()
-                logger.info("[RESET] Robot returned to IDLE; Firebase marked done.")
+            elif in_flight_requested_at and feedback == "ACK":
+                if status != "ack":
+                    firebase.mark_reset_ack(RESET_DEVICE_ID, in_flight_requested_at)
+
+            # A notification can be lost while BLE reconnects at arrival.
+            # Re-query the same idempotent ID even after ACK so the MCU can
+            # return its remembered DONE/FAILED without restarting motion.
+            retry_interval = 10.0 if feedback == "ACK" else 3.0
+            if (in_flight_requested_at and ble_connected.is_set() and
+                    time.monotonic() - last_reset_relay_at >= retry_interval):
+                ble_send_queue.put_nowait(f"[RESET:{in_flight_requested_at}]", urgent=True)
+                last_reset_relay_at = time.monotonic()
+
+            if in_flight_requested_at and time.monotonic() - accepted_at > RESET_COMPLETION_TIMEOUT_S:
+                firebase.mark_reset_failed(RESET_DEVICE_ID, in_flight_requested_at, "completion_unverified")
+                completed_requested_at = in_flight_requested_at
+                in_flight_requested_at = 0
         except Exception as e:
             logger.error(f"Firebase reset bridge error: {e}")
             wait_s = poll_backoff.next_delay()
@@ -794,13 +830,39 @@ def on_demand_status_responder(lidar_node, stop_event):
 
 # ═══ BLE notification handler ═══
 def ble_notify_handler(msg: str):
-    global _last_load_cell_value, _last_load_cell_publish
+    global _last_load_cell_value, _last_load_cell_publish, _robot_state
     try:
         ble_recv_queue.put_nowait(msg)
     except queue.Full:
         pass
 
     stripped = msg.strip()
+    if stripped.startswith("[RESET ") and stripped.endswith("]"):
+        try:
+            outcome, request_id = stripped[7:-1].split(":", 1)
+            if outcome in ("ACK", "DONE", "FAILED") and request_id.isdecimal():
+                with _reset_feedback_lock:
+                    if _reset_feedback.get(int(request_id)) not in ("DONE", "FAILED"):
+                        _reset_feedback[int(request_id)] = outcome
+                    while len(_reset_feedback) > 32:
+                        del _reset_feedback[next(iter(_reset_feedback))]
+        except ValueError:
+            pass
+        return
+    states = {
+        "[MCU READY]": "UNKNOWN", "[RUNNING]": "OUTBOUND",
+        "[OUTBOUND COMPLETE]": "AT_DESTINATION", "[RETURNING]": "RETURNING",
+        "[IDLE]": "IDLE", "[ROUTE FAULT]": "FAULT", "[RETURN REJECTED]": "FAULT",
+    }
+    if stripped in states:
+        state = states[stripped]
+        _robot_state = state
+        if state == "AT_DESTINATION":
+            _ready_to_return.set()
+        else:
+            _ready_to_return.clear()
+        if firebase:
+            firebase.update_robot_state(state)
     if stripped in (REQUEST_TOKEN, "CONNECTED...", "[BLE CONNECTION ESTABLISHED]"):
         _robot_running.set()
         _status_requested.set()
@@ -974,7 +1036,7 @@ class BleService(threading.Thread):
 
     def _handle_disconnect(self, disconnected_client):
         # Ignore a late callback from an old session after a new one connected.
-        if self._client is not None and disconnected_client is not self._client:
+        if disconnected_client is not self._client:
             return
         self._client = None
         self._write_char = None
@@ -984,6 +1046,7 @@ class BleService(threading.Thread):
         _robot_running.clear()
         ble_connected.clear()
         ble_send_queue.clear()
+        _ready_to_return.clear()
         logger.info("BLE device disconnected.")
         self._schedule_retry("Disconnected")
 
@@ -1017,6 +1080,11 @@ class BleService(threading.Thread):
                     client = direct_client
                     self._cached_address = target_address
             except Exception as exc:
+                if 'direct_client' in locals():
+                    try:
+                        await asyncio.wait_for(direct_client.disconnect(), timeout=2.0)
+                    except Exception:
+                        pass
                 logger.info(f"Direct connect failed ({exc}); falling back to BLE scan.")
                 client = None
 
@@ -1173,13 +1241,16 @@ class BleService(threading.Thread):
         ):
             raise ConnectionError("BLE link is not writable")
         payload = msg.encode("utf-8")
-        if len(payload) > 180:
-            logger.warning("BLE payload is unexpectedly large (%d bytes): %s",
-                           len(payload), msg[:60])
-        # Safety/control messages use an acknowledged GATT write. Steering and
-        # telemetry may use write-without-response, but all writes share one
-        # lock so the GATT client is never called concurrently.
-        acknowledged = msg.startswith(("P:", "[RESET]", "[RASPI READY]"))
+        if not payload or len(payload) > 244 or any(c < 32 or c > 126 for c in payload):
+            raise ValueError("BLE packet must be one printable line of at most 244 bytes")
+        # The no-response limit can remain 20 bytes on older BlueZ versions or
+        # while MTU negotiation is pending. Larger steering/telemetry frames
+        # must use a write request rather than failing or being truncated.
+        no_response_limit = getattr(write_char, "max_write_without_response_size", 20)
+        acknowledged = (
+            msg.startswith(("P:", "[RESET", "[RASPI READY]"))
+            or len(payload) > no_response_limit
+        )
         async with self._write_lock:
             if client is not self._client or not client.is_connected:
                 raise ConnectionError("BLE session changed before write")
@@ -1223,7 +1294,7 @@ class BleService(threading.Thread):
                     # be queued. Ask the producer for a fresh sequenced snapshot.
                     if msg.startswith("P:"):
                         _status_requested.set()
-                    elif msg in ("[RESET]", RASPI_READY):
+                    elif msg.startswith("[RESET") or msg == RASPI_READY:
                         ble_send_queue.put_nowait(msg, urgent=True)
                     await asyncio.sleep(retry_delay)
                     continue
@@ -1238,13 +1309,12 @@ class BleService(threading.Thread):
 
     async def _urgent_write(self, msg):
         """Serialized, acknowledged safety write from the LiDAR callback."""
-        if msg.startswith("P:"):
-            ble_send_queue.discard_kind("PATH")
         try:
             await self._write_message(msg)
         except Exception as exc:
             logger.error(f"Urgent BLE write error: {exc}")
-            ble_send_queue.put_nowait(msg, urgent=True)
+            # Replaying this old sequence could replace a newer STOP snapshot.
+            _status_requested.set()
 
 # ═══ GUI ═══
 def init_gui():
@@ -1648,6 +1718,8 @@ def start_headless_key_listener():
 # ═══ LiDAR port / driver ═══
 def find_lidar_port():
     configured = os.environ.get("GARBY_LIDAR_PORT")
+    if configured:
+        return configured if os.path.exists(configured) else None
     candidates = ([configured] if configured else []) + sorted(
         glob.glob("/dev/serial/by-id/*ydlidar*")
         + glob.glob("/dev/serial/by-id/*YDLIDAR*")
@@ -1909,20 +1981,12 @@ class LidarDistanceReader(Node):
         self._path_seq = 0
         self._path_seq_lock = threading.Lock()
         self._history_lock = threading.RLock()
-        # LiDAR staleness adapts to the observed scan cadence: CPU throttling
-        # or executor contention can delay every callback uniformly, and a
-        # fixed 0.8 s window would then trip on a healthy-but-slow stream.
-        # Genuine stream loss still lapses at the 0.8 s floor.
-        self._scan_stale_tolerance = AdaptiveTolerance(
-            LIDAR_STALE_TIMEOUT_S,
-            2.0,
-            alpha=0.25,
-            margin_factor=2.0,
-        )
         self._watchdog_timer = self.create_timer(0.25, self._watchdog_callback)
         # One ROS subscription only. Multiple subscriptions to /scan caused the
         # same scan to be processed repeatedly and distorted confirmation logic.
-        self.create_subscription(LaserScan, '/scan', self.scan_callback, qos_profile_sensor_data)
+        scan_qos = copy(qos_profile_sensor_data)
+        scan_qos.depth = 1
+        self.create_subscription(LaserScan, '/scan', self.scan_callback, scan_qos)
         self.get_logger().info(
             f'Lidar Distance Reader started '
             f'(fail-closed, yaw offset {LIDAR_YAW_OFFSET_DEG:.1f} deg)'
@@ -1936,12 +2000,10 @@ class LidarDistanceReader(Node):
     def _lidar_is_stale(self):
         # Safety has no startup grace: until the first scan is received the path
         # is unknown and therefore STOP. Driver supervision has its own grace.
-        # Once scans flow, the stale window adapts to the observed cadence so a
-        # throttled-but-alive stream is not reported stale; true silence still
-        # lapses at the 0.8 s floor.
+        # CPU throttling must not extend permission to drive on an old scan.
         if not self._first_scan_received or self._last_scan_time <= 0.0:
             return True
-        return (time.monotonic() - self._last_scan_time) > self._scan_stale_tolerance.tolerance_s()
+        return (time.monotonic() - self._last_scan_time) > LIDAR_STALE_TIMEOUT_S
 
     def _watchdog_callback(self):
         if not self._lidar_is_stale():
@@ -1960,15 +2022,10 @@ class LidarDistanceReader(Node):
             ble_send_queue.put_nowait(path_msg, urgent=True)
 
     def _dispatch_urgent_path(self, path_msg):
-        service = self.ble_service
-        loop = service._loop if service else None
-        if not service or not loop or loop.is_closed() or not ble_connected.is_set():
-            return False
-        try:
-            asyncio.run_coroutine_threadsafe(service._urgent_write(path_msg), loop)
-            return True
-        except RuntimeError:
-            return False
+        # One mailbox owns ordering for periodic and urgent packets. A second
+        # direct-write path could race a newer STOP or create unbounded futures.
+        ble_send_queue.put_nowait(path_msg, urgent=True)
+        return True
 
     def _quick_min(self, side: str, window=5):
         valid = [v for v in self.history[side] if v is not None][-window:]
@@ -2047,15 +2104,11 @@ class LidarDistanceReader(Node):
             ble_send_queue.put_nowait(path_msg, urgent=True)
 
     def scan_callback(self, msg: LaserScan):
+        with self._history_lock:
+            self._scan_callback_locked(msg)
+
+    def _scan_callback_locked(self, msg: LaserScan):
         now = time.monotonic()
-        previous_scan_time = self._last_scan_time
-        if self._lidar_stale_announced:
-            # Stream is recovering from an outage; restart cadence from conservative floor
-            self._scan_stale_tolerance.reset()
-        elif previous_scan_time > 0.0:
-            gap = now - previous_scan_time
-            if gap <= self._scan_stale_tolerance.cap_s:
-                self._scan_stale_tolerance.observe(gap)
         self._last_scan_time = now
         first_scan = not self._first_scan_received
         self._first_scan_received = True
@@ -2088,6 +2141,12 @@ class LidarDistanceReader(Node):
             len(safety_dists[side]) >= self.MIN_VALID_POINTS
             for side in self.BACK_GROUP
         )
+        side_data_valid = all(
+            len(safety_dists[side]) >= self.MIN_VALID_POINTS
+            for side in self.SIDE_GROUP
+        )
+        front_data_valid = front_data_valid and side_data_valid
+        back_data_valid = back_data_valid and side_data_valid
         prior_quality = self._front_data_valid and self._back_data_valid
         self._front_data_valid = front_data_valid
         self._back_data_valid = back_data_valid
@@ -2189,9 +2248,7 @@ class LidarDistanceReader(Node):
             # resume in reverse while the same lateral object is still close.
             reported_front_blocked = front_blocked or side_blocked
             reported_back_blocked = back_blocked or side_blocked
-            bypass_allowed = (
-                ALLOW_RUNTIME_SAFETY_DISABLE or not _robot_running.is_set()
-            )
+            bypass_allowed = ALLOW_RUNTIME_SAFETY_DISABLE
             if bypass_allowed and not side_blocked:
                 if front_disabled.is_set():
                     reported_front_blocked = False
@@ -2233,6 +2290,10 @@ class LidarDistanceReader(Node):
         )
 
     def build_status_packets(self):
+        with self._history_lock:
+            return self._build_status_packets_locked()
+
+    def _build_status_packets_locked(self):
         seq = self._next_path_seq()
         if self._lidar_is_stale():
             self.last_sides_status = "SIDES:STABLE"
@@ -2254,7 +2315,7 @@ class LidarDistanceReader(Node):
             if not self._back_data_valid:
                 back_blocked, back_status = True, "LIDAR_UNAVAILABLE"
 
-            bypass_allowed = ALLOW_RUNTIME_SAFETY_DISABLE or not _robot_running.is_set()
+            bypass_allowed = ALLOW_RUNTIME_SAFETY_DISABLE
             if self._front_data_valid and bypass_allowed and front_disabled.is_set():
                 front_blocked, front_status = False, "CLEAR"
             if self._back_data_valid and bypass_allowed and back_disabled.is_set():

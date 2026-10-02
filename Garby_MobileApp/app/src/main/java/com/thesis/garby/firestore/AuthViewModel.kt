@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
 
 /**
  * Single source of truth for Firebase authentication.
@@ -84,18 +85,20 @@ class AuthViewModel : ViewModel() {
             var authenticated = firebaseAuth.currentUser != null
             try {
                 if (!authenticated) {
-                    firebaseAuth.signInAnonymously().await()
+                    withTimeout(SIGN_IN_TIMEOUT_MS) {
+                        firebaseAuth.signInAnonymously().await()
+                    }
                     authenticated = firebaseAuth.currentUser != null
                 }
                 // Warm up Firebase RTDB (lazy init + socket) before the
                 // dashboard is routed to, so the transition stays smooth.
                 com.thesis.garby.realtime.GarbyRealtimeDb.prewarm()
                 authenticated = firebaseAuth.currentUser != null
-            } catch (e: CancellationException) {
-                throw e
             } catch (_: TimeoutCancellationException) {
                 _signInError.value = "Firebase connection timed out. Check internet and try again."
                 authenticated = false
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: FirebaseAuthInvalidUserException) {
                 _signInError.value = "Firebase user is disabled or no longer exists."
                 authenticated = false

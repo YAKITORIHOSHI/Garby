@@ -321,7 +321,7 @@
     {
       "severity": "PASS",
       "check": "MCU sonar timeout",
-      "detail": "8000.0 us",
+      "detail": "18000.0 us",
       "file": "NAPHTALI_CODE_V2\\NAPHTALI_CODE_V2.h"
     },
     {

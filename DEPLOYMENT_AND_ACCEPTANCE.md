@@ -1,162 +1,144 @@
-# GARBY Deployment, Calibration, and Acceptance
+# GARBY deployment and acceptance — 2026-10-02
 
-**Updated:** 2026-08-23
-**Applies to:** the coordinated release described in `SYSTEM_ARCHITECTURE.md`
+Software checks do not establish physical safety. The local serial inventory
+showed COM1 only; neither ESP32 was available for flashing in this session.
+The physical route direction and LiDAR mount are hardware-unverified.
 
-Do not perform floor testing until wheels-lifted communication and STOP tests pass. Use a reachable hardwired latching emergency stop and a human spotter for first motion tests.
+## Build and prepare
 
-## 1. Build and deployment order
+Run from the repository root:
 
-1. **Main ESP32:** compile the sketch directory `NAPHTALI_CODE_V2/` so Arduino includes `NAPHTALI_CODE_V2.ino`, `pointsRun.ino`, `NAPHTALI_CODE_V2.cpp`, and `NAPHTALI_CODE_V2.h` in one build. Flash it first.
-2. **BLE bridge ESP32:** compile and flash `BLE_Receiver-Final/BLE_Receiver-Final.ino` with the installed NimBLE-Arduino/ESP32 core used on the target board.
-3. **Raspberry Pi:** deploy the entire `RasPi/` folder. Do not copy only `final_w_serial.py`; `bridge_core.py` is required source.
-4. Install Pi Python packages in `RasPi/requirements.txt`. ROS 2/rclpy, `sensor_msgs`, and the YDLidar ROS 2 driver must be installed through the Pi/ROS environment, not from that requirements file.
-5. Start from `RasPi/` with `python3 final_w_serial.py --headless`.
-6. Firebase is optional for motion safety. Set `GARBY_FIREBASE_CREDENTIALS` if the credential JSON is not at the legacy default location.
-7. Set `GARBY_LIDAR_YAW_OFFSET_DEG` only after physically checking LiDAR orientation. Do not guess.
-
-A systemd example is supplied as `RasPi/garby-bridge.service.example`; update its working path before enabling it.
-
-## 2. Expected healthy startup trace
-
-With the wheels lifted, the expected control sequence is:
-
-```text
-Main MCU -> bridge: [MCU READY]
-Bridge -> main: [BLE CONNECTION ESTABLISHED]
-Bridge -> main: STOP:WAITING_DATA
-Main -> bridge/Pi: [REQUEST-STATUS]
-Pi -> bridge: P:<seq>|F=...|B=...
-Pi -> bridge: S:<same-seq>|...
-Bridge -> main: STOP:CLEARING       (first clear while latched)
-Bridge -> main: GO                  (second clear path)
-Bridge -> main: GO                  (next fresh clear path)
-Main: Fresh path confirmed -- motion enabled
+```powershell
+python -B tools/verify_project.py
 ```
 
-Until a valid first LiDAR scan exists, the Pi must send `F=S|B=S`; seeing CLEAR before the first scan is a release failure.
+Verified target baseline: ESP32 core 3.3.11, NimBLE-Arduino 2.5.1,
+FastAccelStepper 1.2.7, ESP32Servo 3.2.1, HX711 0.6.4;
+FQBN `esp32:esp32:esp32`. Android uses the checked-in Gradle wrapper, Java21,
+and Android SDK36. Host behavioral tests require MSVC C++ Build Tools on Windows
+or g++/clang++ on Unix. Full validation exports each sketch's flashing binaries
+under `artifacts/firmware/<sketch>/` and builds debug plus unsigned release APKs.
 
-## 3. Communication checks — wheels lifted
+Flash the main controller, then BLE bridge, with wheels lifted and an accessible
+hardwired emergency stop. Deploy the entire `RasPi/` directory; a single Python
+file is insufficient. Install the new Android APK after updating all nodes.
+The correlated return protocol is a coordinated release, not compatible with
+old controller return acknowledgements.
 
-Record PASS/FAIL for every item.
+## Raspberry Pi configuration
 
-| Test | Required result |
+Install ROS2/rclpy, sensor_msgs, and a built YDLIDAR ROS2 driver workspace.
+Install `RasPi/requirements.txt` into the Python used by the service. Confirm
+that this Python can import ROS packages; an unrelated virtualenv can hide them.
+
+Copy `RasPi/garby-bridge.env.example` to `/etc/default/garby-bridge` and edit every
+deployment-specific path. Choose stable serial device paths and verify that
+sensor board and LiDAR resolve to **different** devices. Sensor UART = 9600;
+bridge-to-main UART = 115200. Set the Firebase service-account path privately;
+do not put it into the Android app or source control.
+
+```bash
+set -a
+source /etc/default/garby-bridge
+set +a
+source "$GARBY_ROS_SETUP"
+source "$GARBY_LIDAR_WORKSPACE_SETUP"
+python3 RasPi/check_runtime.py --require-firebase
+bash RasPi/run_bridge.sh --headless
+```
+
+The launcher sources both ROS and the workspace overlay. Its defaults are
+`/opt/ros/humble/setup.bash` and `/home/garby/ros2_ws/install/setup.bash`; override
+them for the actual installation. Merely sourcing the ROS distribution does
+not expose a workspace-built YDLIDAR package.
+
+Optional service:
+
+```bash
+sudo cp RasPi/garby-bridge.service.example /etc/systemd/system/garby-bridge.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now garby-bridge
+journalctl -u garby-bridge -f
+```
+
+Adjust User, WorkingDirectory, and ExecStart before installing if your account
+or checkout differs. The service starts headless and restarts on process failure.
+No echo and missing scans remain fail closed; restarting a process is not proof
+that sensors or communication are healthy.
+
+## Wheels-lifted acceptance
+
+Record board IDs, firmware versions, configuration, payload, and serial logs.
+
+1. Verify hardwired emergency-stop action, motor-driver reset/brownout behavior,
+   regulated supplies, common ground, UART crossing, and safe sonar echo voltage.
+2. Boot MCU/bridge with Pi absent: no wheel motion. Start Pi without scans:
+   `STOP:WAITING_DATA` or `STOP:STALE`, never GO.
+3. Verify `[MCU READY]`, BLE connection, and repeated-clear startup sequence.
+   Restart each node separately and confirm recovery starts stationary.
+4. Check LiDAR physical FRONT/LEFT/BACK/RIGHT with a target at known positions.
+   Set `GARBY_LIDAR_YAW_OFFSET_DEG` from observation, not assumptions.
+5. Confirm both motors accept short target moves. A motor command rejection
+   must stop both and report a route fault. Verify physical left/right wheel
+   assignment against the nudge commands.
+6. Measure sonar at 20, 45, 60, 72, 120, 150, and 250 cm. Check the new 18000 µs
+   echo window and center-servo settling. Disconnect echo: UNKNOWN must not
+   release a local obstacle latch.
+7. Trigger outbound. Introduce an obstacle while moving; verify braking and
+   ongoing five-second HALT diagnostics. Remove it to a position producing
+   **valid clear echoes** and clear LiDAR sectors. Confirm automatic resumption
+   toward the remaining original target. Repeat at least ten times.
+8. Block LiDAR alone, sonar alone, and both. Add a sonar obstacle while already
+   waiting on LiDAR. Clearance must satisfy both when local sonar was involved.
+   No manual reset should be needed for a normal cleared obstacle.
+9. Stop `/scan`, unplug LiDAR, disconnect BLE, reboot the bridge, and restore
+   each. Confirm STOP during loss and automatic segment recovery only after
+   fresh confirmations. Record disconnect reasons and supply measurements.
+10. Check nudges at steady offset and near a side object. A left-side threat
+    must request right correction even after leftward EMA history. Confirm
+    tap duration, both-wheel restoration, cooldown, and reversal hysteresis.
+11. Verify every outbound and return turn/distance with wheels lifted before
+    floor tests. The step signs/numbers in `pointsRun.ino` were preserved.
+12. At a completed destination, request return from Android. Confirm matching
+    ACK, RETURNING, and DONE after arrival. Duplicate the same request ID during
+    return: no extra STOP, restart, or second route. A generic `[IDLE]` must
+    not report completion of an unrelated request.
+13. Request return during incomplete outbound: stationary rejection/fault.
+    Force a return segment failure: stationary fault and matching FAILED.
+    Retries must not clear a route fault or replay the route.
+
+For a route fault, physically return the robot to its known base, then use the
+local supervised `[RESET]` recovery token. Do not use the app to guess its location.
+
+## Reduced-speed floor acceptance
+
+Perform these with supervision and a clear test boundary:
+
+- Measure stopping distance and payload stability for empty/max load, lowest
+  expected battery, and lowest-traction floor, including communication loss.
+- Confirm the 95 cm front, 35 cm rear, and 22 cm side envelopes cover the whole
+  chassis and worst measured stop distance with a margin.
+- Confirm motor trim and nudge signs, then evaluate correction strength. Source
+  numbers do not prove real steering performance.
+- Exercise open doors, wall protrusions, extinguishers, trash bins, narrow/wide
+  corridors, and a person passing at the side.
+- Complete several full load-trigger and gas-trigger cycles including monitored
+  obstacle clearance and operator return.
+- Verify live Firebase authorization/authentication, cached-value expiry,
+  return readiness, return failure display, and phone reconnection.
+- Verify SIM registration/SMS and any externally configured FCM sender separately.
+
+## Diagnosing a robot that stays stopped
+
+| Diagnostic | Check |
 | --- | --- |
-| Pi program starts | No `bridge_core` import error; process remains running |
-| Firebase SDK/credential/network unavailable | BLE/LiDAR safety process remains running; Firebase is disabled/retrying only |
-| Main boots while modem/network is absent | `[MCU READY]` is sent without waiting for cellular registration |
-| Bridge boots before main | Bridge waits fail-closed for `[MCU READY]` |
-| Main reboots while BLE stays connected | New `[MCU READY]` creates a fresh boot epoch; previous path permission is discarded |
-| BLE disconnect | `STOP:LINK`; no automatic `[RESET]` or return |
-| LiDAR has not produced first scan | `P:<seq>|F=S|B=S` |
-| LiDAR stream stops | Pi stale at 0.8 s; bridge path watchdog at 850 ms; controller independent freshness watchdog at 800 ms |
-| Fresh scan missing required front/back sectors | affected path side becomes `S`, never `C` |
-| Old/out-of-order `P:` | rejected; cannot clear a newer STOP |
-| `S:` sequence differs from newest `P:` | ignored/stable; no steering action |
-| malformed `P:` (duplicate field/unknown field/overflow sequence) | `STOP:PROTOCOL` |
-| `SENSOR:` during STOP | telemetry is accepted/forwarded but STOP remains latched |
-| malformed `N:` numeric field | rejected by controller |
-| MCU UART ACKs stop | bridge latches `STOP:MCU_LINK` |
-| communication recovers | STOP remains latched until fresh repeated path/GO confirmations complete |
+| `path=STALE` | `/scan` publication, ROS overlay, LiDAR serial port, Pi/BLE writes, UART wiring |
+| `path=BLOCKED` | Actual front/rear/side LiDAR target and sector orientation |
+| `sonar=UNKNOWN` | Echo voltage/wiring, servo settling, sonar supply, target angle/range; no echo cannot prove clear |
+| Valid clear path and sonar, confirmation below 3 | Look for intermittent bad echoes or STOP packets resetting the evidence |
+| `[MOTOR] Wheel target rejected` | Stepper connection, speed/acceleration setup, library/board selection, driver wiring |
+| `[ROUTE FAULT]` | Recover the physical position; do not replay the full route |
+| BLE disconnect | Capture reason and supply/radio data; proper nominal power alone does not establish radio or scheduling health |
 
-## 4. Local sonar tests — wheels lifted
-
-1. Verify servo center is physically forward at 80° and endpoints 40°/120° do not bind.
-2. Check known target distances with a ruler/tape.
-3. At ≤25 cm, one valid center reading must latch the emergency obstacle state.
-4. At ≤60 cm, two valid center samples must latch STOP.
-5. Remove the obstacle: three **valid** samples ≥72 cm are required before the local latch clears.
-6. While latched, disconnect the echo lead or force sonar timeout. The latch **must remain set**; timeout/no echo cannot count as clear.
-7. Verify no side-sonar steering occurs (`ENABLE_ULTRASONIC_SIDE_NUDGE=0`).
-
-Electrical requirements: regulated servo 5 V supply sized for stall current, common ground, local bulk capacitance, and a 3.3 V-safe ultrasonic echo input.
-
-## 5. LiDAR orientation and sector test
-
-The software default is 0° FRONT, 90° LEFT, 180° BACK, 270° RIGHT. Physical orientation has not been proven from source.
-
-1. Keep wheels lifted and place one object about 0.5–1.0 m directly in front.
-2. Confirm the GUI/log reports FRONT, not BACK/LEFT/RIGHT.
-3. Repeat at LEFT, BACK, RIGHT.
-4. If the entire mapping is rotated, set `GARBY_LIDAR_YAW_OFFSET_DEG` (for example 180 for a reversed sensor) and restart the Pi.
-5. Record the accepted offset in the test log and deployed environment.
-
-Do not compensate a mount-rotation error by swapping motor commands or rewriting nudge directions.
-
-## 6. Route direction test — wheels lifted
-
-`pointsRun.ino` cannot prove real-world route direction from sign alone.
-
-1. Mark both wheels and identify chassis FRONT.
-2. Trigger a supervised outbound sequence at reduced speed or step counts.
-3. Record every straight and turn direction in order.
-4. Verify the return sequence physically retraces/implements the intended route.
-5. Only after observation may route signs/turn steps be changed; if changed, update `SYSTEM_ARCHITECTURE.md` and retest all watchdogs.
-
-## 7. Straight-line calibration
-
-The wheel trim defaults are `MOTOR1_TRIM_PCT=0.0` and `MOTOR2_TRIM_PCT=0.0`.
-
-- Use a flat measured lane.
-- Disable/avoid active nudge influence during mechanical calibration.
-- Repeat at least three runs with the same payload.
-- Adjust trim in small increments only after identifying repeatable mechanical drift.
-- Do not hide tire, alignment, bearing, motor-current, or power faults with large software trim.
-
-## 8. Hallway-centering acceptance
-
-After wheel trim and LiDAR orientation are correct:
-
-- verify 18 cm dead zone prevents constant hunting;
-- verify direction needs five fresh packets;
-- verify 35–60 ms taps and 8–18% bridge-requested cut remain gentle;
-- verify 1200 ms cooldown and 220 ms controller settle prevent rapid reversals;
-- verify steering is fully suppressed at ≤60 cm front distance and attenuated through 60–120 cm;
-- verify a fresh Servo+Ultrasonic echo at ≤60 cm stops motion immediately and cannot be cleared by LiDAR alone;
-- verify a side return at ≤40 cm redirects only toward the clear side, while ≤22 cm blocks forward and reverse travel;
-- test open doors, pillars, protrusions, narrow/wide corridor sections, and a person walking near a side wall;
-- record sequence, left/right distances, combined error, direction, duration, and intensity when tuning.
-
-Change one tuning group at a time.
-
-## 9. Braking acceptance
-
-Software constants are not a stopping-distance certificate.
-
-Measure worst-case total stopping distance using:
-
-- empty and maximum expected payload;
-- highest allowed speed and caution speed;
-- full and low expected battery;
-- normal and lowest-traction floor;
-- repeated front and diagonal obstacle entries.
-
-The 95 cm front LiDAR threshold is acceptable only if the measured worst-case stop plus safety margin remains inside it. Otherwise reduce speed and/or increase stop distance before operation around people.
-
-## 10. Power and thermal endurance
-
-Run at least 30–60 minutes in the final enclosure while monitoring:
-
-- Pi undervoltage/throttling/restarts;
-- ESP32 brownouts/resets;
-- motor-driver and motor temperature;
-- servo supply dip/noise;
-- BLE reconnect count;
-- LiDAR health/stale events.
-
-A software reconnect loop cannot fix inadequate power distribution.
-
-## 11. Final release criteria
-
-Do not approve unattended corridor use until all are true:
-
-- hardwired emergency stop verified;
-- both ESP32 sketches compile in the actual target toolchain with the installed library versions;
-- Pi host tests and static audit pass;
-- complete wheels-lifted startup/disconnect/stale/malformed tests pass repeatedly;
-- LiDAR physical orientation is recorded;
-- route direction is physically verified;
-- sonar timeout cannot release a STOP;
-- maximum-payload braking distance is measured and safe;
-- corridor/open-door/person-side tests pass;
-- final constants, library/core versions, battery, payload, floor, and test results are recorded.
+Sign off with recorded evidence. Until then the software is built and host-tested,
+and physical operation remains unaccepted.

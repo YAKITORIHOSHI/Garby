@@ -8,8 +8,7 @@
 #include <HX711.h>
 #include <Arduino.h>
 
-// 240 MHz is ample for UART parsing and hardware-timed step pulses, while
-// reducing heat and current draw compared with forcing this executor to 240 MHz.
+// Main executor clock used for UART parsing and hardware-timed step pulses.
 #define EXECUTOR_CPU_MHZ 240
 
 // ============================================================
@@ -56,7 +55,7 @@ const float  CALIBRATION_FACTOR  = 100000.0f;
 // ============================================================
 #define TRIG_PIN  5
 #define ECHO_PIN  4
-#define ULTRASONIC_TIMEOUT_US           8000UL
+#define ULTRASONIC_TIMEOUT_US          18000UL
 #define ULTRASONIC_PING_INTERVAL_MS       40UL
 #define ULTRASONIC_BLOCK_CONFIRM_SAMPLES    2
 #define ULTRASONIC_CLEAR_CONFIRM_SAMPLES    3
@@ -265,6 +264,8 @@ extern bool       resetQueued;
 // never replayed from the robot's now-unknown physical position. Cleared by an
 // explicit [RESET] (supervised physical recovery) or on the next IDLE entry.
 extern bool       routeFaultLatched;
+extern bool       outboundComplete;
+void reportRouteFault();
 
 // ============================================================
 // NON-BLOCKING NUDGE STATE (execution-side only)

@@ -29,6 +29,13 @@ class ResetStatusTest {
     }
 
     @Test
+    fun resolvedMarkerCannotAcceptAnotherNewerRequestFromSameOperator() {
+        val marker = ResetRequestMarker("operator-1", 10_000L, 10_001L)
+        assertTrue(marker.matches(ResetCommand(10_001L, "operator-1", ResetStatus.Done)))
+        assertFalse(marker.matches(ResetCommand(10_002L, "operator-1", ResetStatus.Done)))
+    }
+
+    @Test
     fun compatibilityFlagCannotCompleteStructuredCommand() {
         assertEquals(
             ResetStatus.Pending,

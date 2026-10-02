@@ -52,6 +52,24 @@ ReceivedDatas data;
 GarbyState garbyState  = GarbyState::IDLE;
 bool       resetQueued = false;
 bool       routeFaultLatched = false;
+bool       outboundComplete = false;
+static String resetRequestId;
+enum class ResetOutcome { NONE, ACTIVE, DONE, FAILED };
+static ResetOutcome resetOutcome = ResetOutcome::NONE;
+
+static void sendResetOutcome(const String& id, ResetOutcome outcome) {
+  const char* label = outcome == ResetOutcome::DONE ? "DONE" :
+                      outcome == ResetOutcome::FAILED ? "FAILED" : "ACK";
+  ESP_Serial.println("[RESET " + String(label) + ":" + id + "]");
+}
+
+void reportRouteFault() {
+  ESP_Serial.println("[ROUTE FAULT]");
+  if (resetOutcome == ResetOutcome::ACTIVE) {
+    resetOutcome = ResetOutcome::FAILED;
+    sendResetOutcome(resetRequestId, resetOutcome);
+  }
+}
 
 // ── Non-blocking nudge ───────────────────────────────────────
 NudgeDir      activeNudge     = NudgeDir::NONE;
@@ -67,35 +85,6 @@ static unsigned long lastBridgeRxMs = 0;
 static unsigned long lastStatusRequestMs = 0;
 static unsigned long lastReadyRecoveryMs = 0;
 static uint32_t motionBaseSpeed = MAX_SPEED;
-
-// ── Adaptive path-command tolerance (CPU/connection throttling) ─────────
-// A fixed 800 ms watchdog trips spuriously when the bridge or Pi is throttled
-// and refreshes STOP/GO state more slowly than the normal 250 ms cadence.
-// Track the observed STOP/GO inter-arrival period (EWMA alpha = 1/4) and
-// widen the tolerance up to a hard cap while commands keep arriving. True
-// bridge silence still lapses at the 800 ms floor, so the fail-closed
-// guarantee is unchanged.
-#define PATH_TOLERANCE_ADAPT_CAP_MS  1200UL
-static uint32_t pathCommandEwmaMs = 0;
-
-static void notePathCommandArrival(unsigned long nowMs) {
-  if (lastPathCommandMs == 0) return;
-  unsigned long interval = nowMs - lastPathCommandMs;
-  // Ignore long latched/halted gaps so they cannot distort the cadence
-  // estimate; the tolerance cap bounds the effect anyway.
-  if (interval > PATH_TOLERANCE_ADAPT_CAP_MS) interval = PATH_TOLERANCE_ADAPT_CAP_MS;
-  pathCommandEwmaMs = (pathCommandEwmaMs == 0)
-    ? (uint32_t)interval
-    : (uint32_t)(((uint64_t)interval + 3ULL * pathCommandEwmaMs) / 4ULL);
-}
-
-static uint32_t pathCommandToleranceMs() {
-  if (pathCommandEwmaMs == 0) return PATH_COMMAND_TIMEOUT_MS;
-  const uint32_t widened = pathCommandEwmaMs * 2U;
-  if (widened < PATH_COMMAND_TIMEOUT_MS) return PATH_COMMAND_TIMEOUT_MS;
-  if (widened > PATH_TOLERANCE_ADAPT_CAP_MS) return PATH_TOLERANCE_ADAPT_CAP_MS;
-  return widened;
-}
 
 static portMUX_TYPE ultrasonicMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool ultrasonicAwaitingEcho = false;
@@ -449,7 +438,7 @@ static void noteBridgeRx() {
 
 bool pathCommandFresh() {
   return pathCommandSeen &&
-         (millis() - lastPathCommandMs <= pathCommandToleranceMs());
+         (millis() - lastPathCommandMs <= PATH_COMMAND_TIMEOUT_MS);
 }
 
 void enforcePathWatchdog() {
@@ -465,6 +454,14 @@ void enforcePathWatchdog() {
 }
 
 static void processESPMessage(const String& espMsg) {
+    if (espMsg == "[ROBOT STATUS]") {
+      if (routeFaultLatched) ESP_Serial.println("[ROUTE FAULT]");
+      else if (outboundComplete) ESP_Serial.println("[OUTBOUND COMPLETE]");
+      else if (garbyState == GarbyState::RETURNING) ESP_Serial.println("[RETURNING]");
+      else if (garbyState == GarbyState::RUNNING) ESP_Serial.println("[RUNNING]");
+      else ESP_Serial.println("[IDLE]");
+      return;
+    }
     if (espMsg == "[BLE CONNECTION ESTABLISHED]") {
       noteBridgeRx();
       shouldStop = true;
@@ -475,15 +472,27 @@ static void processESPMessage(const String& espMsg) {
       return;
     }
 
-    if (espMsg == "[RESET]") {
+    if (espMsg == "[RESET]" || espMsg.startsWith("[RESET:")) {
       noteBridgeRx();
-      // The Pi deliberately retries RESET until it receives [IDLE]. While the
-      // return route is actively running, that retry is an idempotent
-      // keepalive, not a request to abort the route and report a false
-      // completion. A latched route fault, however, is the supervised
-      // physical-recovery path: the operator has repositioned the robot and
-      // the explicit reset must return it to IDLE.
+      const bool correlated = espMsg != "[RESET]";
+      String id;
+      if (correlated) {
+        if (!espMsg.endsWith("]")) return;
+        id = espMsg.substring(7, espMsg.length() - 1);
+        // Millisecond epoch IDs fit in 16 decimal digits. Validate each digit
+        // without truncating the value into the ESP32's 32-bit unsigned long.
+        if (id.length() == 0 || id.length() > 16) return;
+        for (unsigned int i = 0; i < id.length(); ++i) {
+          if (id.charAt(i) < '0' || id.charAt(i) > '9') return;
+        }
+        if (id == resetRequestId && resetOutcome != ResetOutcome::NONE) {
+          sendResetOutcome(id, resetOutcome);
+          ESP_Serial.println(ACK_MSG);
+          return;
+        }
+      }
       if (garbyState == GarbyState::RETURNING && !routeFaultLatched) {
+        if (correlated) sendResetOutcome(id, ResetOutcome::FAILED);
         ESP_Serial.println(ACK_MSG);
         return;
       }
@@ -491,10 +500,29 @@ static void processESPMessage(const String& espMsg) {
       linkFaultActive = true;
       clearPathCommandCount = 0;
       path.reset();
-      if (garbyState == GarbyState::RUNNING) {
+      if (correlated) {
+        resetRequestId = id;
+        resetOutcome = ResetOutcome::ACTIVE;
+      }
+      if (garbyState == GarbyState::RUNNING && outboundComplete && !routeFaultLatched) {
         resetQueued = true;
+        if (correlated) sendResetOutcome(id, ResetOutcome::ACTIVE);
         Serial.println("[RESET] Explicit return/reset queued");
+      } else if (!correlated && routeFaultLatched) {
+        // Local supervised recovery after physically returning the robot to
+        // base. App retries cannot take this recovery branch.
+        emergencyStopMotors();
+        fullReset();
+      } else if (correlated || garbyState == GarbyState::RUNNING) {
+        if (garbyState == GarbyState::RUNNING) {
+          routeFaultLatched = true;
+          resetQueued = true;  // abort the incomplete segment, never run return
+        }
+        resetOutcome = ResetOutcome::FAILED;
+        if (correlated) sendResetOutcome(id, resetOutcome);
+        ESP_Serial.println("[RETURN REJECTED]");
       } else {
+        emergencyStopMotors();
         fullReset();
       }
       ESP_Serial.println(ACK_MSG);
@@ -506,7 +534,6 @@ static void processESPMessage(const String& espMsg) {
       const bool changed = !shouldStop || espMsg != lastStopReason;
       shouldStop = true;
       pathCommandSeen = true;
-      notePathCommandArrival(millis());
       lastPathCommandMs = millis();
       clearPathCommandCount = 0;
       linkFaultActive = espMsg.indexOf("LINK") >= 0 ||
@@ -524,13 +551,15 @@ static void processESPMessage(const String& espMsg) {
 
     if (espMsg == "GO") {
       noteBridgeRx();
+      if (!pathCommandFresh()) {
+        clearPathCommandCount = 0;
+      }
       pathCommandSeen = true;
-      notePathCommandArrival(millis());
       lastPathCommandMs = millis();
       if (clearPathCommandCount < MCU_GO_CONFIRM_PACKETS) {
         clearPathCommandCount++;
       }
-      if (clearPathCommandCount >= MCU_GO_CONFIRM_PACKETS) {
+      if (clearPathCommandCount >= MCU_GO_CONFIRM_PACKETS && !routeFaultLatched) {
         if (shouldStop) Serial.println("[GO] Fresh path confirmed -- motion enabled");
         shouldStop = false;
         linkFaultActive = false;
@@ -609,9 +638,14 @@ void pollESP() {
     }
 
     uartRxBuffer.trim();
+    const bool stopBoundary = uartRxBuffer.startsWith("STOP") ||
+                              uartRxBuffer.startsWith("[RESET") ||
+                              uartRxBuffer == "[BLE CONNECTION ESTABLISHED]";
     if (uartRxBuffer.length() > 0) processESPMessage(uartRxBuffer);
     // remove(0) retains the reserved allocation and prevents long-run heap churn.
     uartRxBuffer.remove(0);
+    // Let the moving loop brake before later queued GO lines can clear STOP.
+    if (stopBoundary) break;
   }
 }
 
@@ -630,10 +664,11 @@ void haltAndWait(const String& reason) {
   unsigned long lastBeep = millis();
   unsigned long lastRequestTime = 0;
   unsigned long lastLocalCheck = 0;
+  unsigned long lastDiagnosticMs = 0;
   uint8_t clearanceCount = 0;
   float localDist = 0.0f;
   unsigned long evaluatedPathCommandMs = 0;
-  const bool requiresLocal = frontObstacleDetected() ||
+  bool requiresLocal = frontObstacleDetected() ||
                              reason.indexOf("HUMAN") >= 0 ||
                              reason.indexOf("SONIC") >= 0;
 
@@ -650,24 +685,26 @@ void haltAndWait(const String& reason) {
     serviceBridgeRecovery();
     enforcePathWatchdog();
 
-    if (resetQueued) {
+    if (frontObstacleDetected()) requiresLocal = true;
+
+    if (resetQueued || routeFaultLatched) {
       blockedSMSSent = false;
       return;
     }
 
     bool newClearanceEvidence = false;
     bool localClear = true;
-    if (requiresLocal && now - lastLocalCheck >= 100UL) {
-      lastLocalCheck = now;
+    if (requiresLocal && frontSampleSequence != lastLocalCheck) {
+      lastLocalCheck = frontSampleSequence;
       localDist = latestFrontDistance();
       localClear = frontDistanceFresh() &&
                    !frontObstacleDetected() &&
-                   localDist > ULTRASONIC_CLEAR_DISTANCE_CM;
+                   localDist >= ULTRASONIC_CLEAR_DISTANCE_CM;
       newClearanceEvidence = true;
     } else if (requiresLocal) {
       localClear = frontDistanceFresh() &&
                    !frontObstacleDetected() &&
-                   localDist > ULTRASONIC_CLEAR_DISTANCE_CM;
+                   localDist >= ULTRASONIC_CLEAR_DISTANCE_CM;
     } else if (lastPathCommandMs != evaluatedPathCommandMs) {
       evaluatedPathCommandMs = lastPathCommandMs;
       newClearanceEvidence = true;
@@ -687,6 +724,14 @@ void haltAndWait(const String& reason) {
       Serial.println("[HALT] Clearance confirmed -- resuming");
       blockedSMSSent = false;
       return;
+    }
+
+    if (now - lastDiagnosticMs >= 5000UL) {
+      lastDiagnosticMs = now;
+      Serial.printf("[HALT] path=%s sonar=%s distance=%.1fcm confirmations=%u/%u\n",
+                    !pathCommandFresh() ? "STALE" : shouldStop ? "BLOCKED" : "CLEAR",
+                    frontDistanceFresh() ? "VALID" : "UNKNOWN",
+                    latestFrontDistance(), clearanceCount, ULTRASONIC_CLEAR_CONFIRM_SAMPLES);
     }
 
     if (now - lastBeep >= 5000UL) {
@@ -771,6 +816,7 @@ void fullReset() {
   loadcellSMSSent = false;
   resetQueued = false;
   routeFaultLatched = false;
+  outboundComplete = false;
   path.reset();
   activeNudge = NudgeDir::NONE;
   nudgeHoldStartMs = 0;
@@ -778,6 +824,10 @@ void fullReset() {
   garbyState = GarbyState::IDLE;
   Serial.println("[RESET] State cleared -- IDLE and fail-closed");
   ESP_Serial.println("[IDLE]");
+  if (resetOutcome == ResetOutcome::ACTIVE) {
+    resetOutcome = ResetOutcome::DONE;
+    sendResetOutcome(resetRequestId, resetOutcome);
+  }
   queueSMSAlert("[GARBY] Returned to base. Ready for next cycle.");
 }
 
@@ -833,6 +883,18 @@ static void controlledStopMotors(uint32_t deceleration,
   clearNudgeState();
 }
 
+static bool commandWheelTargets(long target1, long target2) {
+  const auto result1 = stepper1->moveTo(target1);
+  const auto result2 = stepper2->moveTo(target2);
+  if (result1 != MOVE_OK || result2 != MOVE_OK) {
+    // Never leave one wheel running when its partner rejected the command.
+    emergencyStopMotors();
+    Serial.println("[MOTOR] Wheel target rejected; both wheels stopped");
+    return false;
+  }
+  return true;
+}
+
 bool turnRight(int32_t step) {
   if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
   commandServoTracked(DEFAULT_VIEW);
@@ -842,8 +904,7 @@ bool turnRight(int32_t step) {
   stepper1->setAcceleration(ACCELERATION);
   stepper2->setSpeedInHz(TURN_SPEED);
   stepper2->setAcceleration(ACCELERATION);
-  stepper1->moveTo(target1);
-  stepper2->moveTo(target2);
+  if (!commandWheelTargets(target1, target2)) return false;
   while (motorsRunning()) {
     pollESP();
     serviceUltrasonic();
@@ -859,8 +920,7 @@ bool turnRight(int32_t step) {
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
       stepper2->setAcceleration(ACCELERATION);
-      stepper1->moveTo(target1);
-      stepper2->moveTo(target2);
+      if (!commandWheelTargets(target1, target2)) return false;
       continue;
     }
     if (frontObstacleDetected()) {
@@ -872,8 +932,7 @@ bool turnRight(int32_t step) {
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
       stepper2->setAcceleration(ACCELERATION);
-      stepper1->moveTo(target1);
-      stepper2->moveTo(target2);
+      if (!commandWheelTargets(target1, target2)) return false;
     }
     delay(1);
   }
@@ -891,8 +950,7 @@ bool turnLeft(int32_t step) {
   stepper1->setAcceleration(ACCELERATION);
   stepper2->setSpeedInHz(TURN_SPEED);
   stepper2->setAcceleration(ACCELERATION);
-  stepper1->moveTo(target1);
-  stepper2->moveTo(target2);
+  if (!commandWheelTargets(target1, target2)) return false;
   while (motorsRunning()) {
     pollESP();
     serviceUltrasonic();
@@ -908,8 +966,7 @@ bool turnLeft(int32_t step) {
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
       stepper2->setAcceleration(ACCELERATION);
-      stepper1->moveTo(target1);
-      stepper2->moveTo(target2);
+      if (!commandWheelTargets(target1, target2)) return false;
       continue;
     }
     if (frontObstacleDetected()) {
@@ -921,8 +978,7 @@ bool turnLeft(int32_t step) {
       stepper2->setSpeedInHz(TURN_SPEED);
       stepper1->setAcceleration(ACCELERATION);
       stepper2->setAcceleration(ACCELERATION);
-      stepper1->moveTo(target1);
-      stepper2->moveTo(target2);
+      if (!commandWheelTargets(target1, target2)) return false;
     }
     delay(1);
   }
@@ -977,17 +1033,8 @@ static bool startTargetMove(long target1, long target2) {
   stepper1->setAcceleration(ACCELERATION);
   stepper2->setSpeedInHz(motor2Speed);
   stepper2->setAcceleration(ACCELERATION);
-  stepper1->moveTo(target1);
-  stepper2->moveTo(target2);
+  if (!commandWheelTargets(target1, target2)) return false;
   movingForward = true;
-  const bool targetAlreadyReached =
-    stepper1->getCurrentPosition() == target1 &&
-    stepper2->getCurrentPosition() == target2;
-  if (!targetAlreadyReached && !motorsRunning()) {
-    movingForward = false;
-    Serial.println("[MOTOR] Target command was not accepted");
-    return false;
-  }
   return true;
 }
 
@@ -1196,8 +1243,10 @@ static void recordFrontSample(float distanceCm, bool validEcho = true) {
 
   if (!valid) {
     // No echo is UNKNOWN, not a clear reading. Preserve any existing obstacle
-    // latch/counters so sensor silence can never release a prior safety STOP.
+    // latch; reset confirmation streaks so silence cannot release safety STOP.
     latestFrontRawCm = 999.0f;
+    ultrasonicClearCount = 0;
+    ultrasonicBlockedCount = 0;
     return;
   }
 
@@ -1317,7 +1366,7 @@ bool frontObstacleDetected() {
   // confirmation latch remains responsible for persistence and recovery.
   return frontObstacleLatched ||
          (frontDistanceFresh() &&
-          latestFrontDistance() <= ULTRASONIC_STOP_DISTANCE_CM);
+          latestFrontRawCm <= ULTRASONIC_STOP_DISTANCE_CM);
 }
 
 bool frontEmergencyObstacleDetected() {
@@ -1342,8 +1391,7 @@ bool moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
     stepper1->setAcceleration(ACCELERATION);
     stepper2->setSpeedInHz(MAX_SPEED);
     stepper2->setAcceleration(ACCELERATION);
-    stepper1->moveTo(target1);
-    stepper2->moveTo(target2);
+    if (!commandWheelTargets(target1, target2)) return false;
     if (stepper1->getCurrentPosition() != target1 ||
         stepper2->getCurrentPosition() != target2) {
       if (!motorsRunning()) {

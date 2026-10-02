@@ -11,3 +11,8 @@ fun isFreshTimestamp(
     val ageMs = nowMs - updatedAtMs
     return ageMs in -futureToleranceMs..staleAfterMs
 }
+
+fun canRequestReturn(ready: Boolean, status: DeviceStatus?, connected: Boolean, nowMs: Long): Boolean =
+    ready && connected && status != null && status.online &&
+        status.bleConnected == true && status.lidarHealthy == true &&
+        isFreshTimestamp(status.lastSeenMs, nowMs = nowMs)

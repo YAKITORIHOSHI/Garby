@@ -1,331 +1,307 @@
-# GARBY Autonomous Waste-Collection Robot — Coordinated System Architecture
+# GARBY system architecture
 
-**Release baseline:** 2026-08-21 coordinated communication/stability repair
-**Status:** source-coordinated and host-tested; **hardware acceptance still required**
+Release: 2026-10-02. Software builds and behavioral tests are documented in
+`VALIDATION_RESULTS.md`; physical acceptance remains hardware-unverified.
+This file describes the active source. Older audit reports are historical.
 
-This file is the authoritative description of the deployable GARBY runtime. If a comment, old thesis note, editor file, or assistant instruction disagrees with the source files listed below, treat that disagreement as a defect and verify the source before deployment.
+## Components and ownership
 
-## 1. Active deployment set
-
-| Node | Active files | Ownership |
+| Component | Active source | Responsibility |
 | --- | --- | --- |
-| Raspberry Pi 4 | `RasPi/final_w_serial.py`, `RasPi/bridge_core.py` | LiDAR acquisition, path-state production, steering geometry, BLE client, sensor UART, optional Firebase/GUI |
-| BLE bridge ESP32 | `BLE_Receiver-Final/BLE_Receiver-Final.ino` | BLE server, strict protocol dispatch, path STOP latch, sequence validation, hallway-centering decision, UART forwarding |
-| Main/controller ESP32 | `NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino`, `.cpp`, `.h`, `pointsRun.ino` | guarded motor execution, local front sonar, load cell, gas-state evaluation, asynchronous modem/SMS, route state machine |
+| Raspberry Pi | `RasPi/final_w_serial.py`, `bridge_core.py` | ROS 2 LiDAR safety, wall geometry, BLE central, sensor serial input, asynchronous Firebase telemetry and correlated return relay |
+| BLE ESP32 | `BLE_Receiver-Final/BLE_Receiver-Final.ino` | BLE GATT server, path validation and STOP latch, centering decisions, controller UART transport |
+| Main ESP32 | `NAPHTALI_CODE_V2.ino/.cpp/.h`, `pointsRun.ino` | Motor targets, local sonar protection, load/gas triggers, route state, modem/SMS worker |
+| Android | `Garby_MobileApp/app/` | Authenticated Firebase dashboard, freshness display, explicit return request and matching completion |
 
-`RasPi/final_w_serial-simulator.py` is a simulator/test producer, not the production Pi entry point.
-
-## 2. Safety ownership and invariants
-
-1. Unknown, missing, stale, malformed, disconnected, or out-of-order **path** information never authorizes movement.
-2. Only a validated `P:` path packet can ultimately lead to `GO`.
-3. `SENSOR:` telemetry, Firebase, GUI state, notifications, and steering geometry cannot clear STOP.
-4. STOP is latched at the BLE bridge and motion starts fail-closed at the main controller.
-5. The bridge requires repeated clear path evidence; the controller independently requires repeated `GO` evidence.
-6. Steering geometry is sequence-bound to the newest accepted path packet and is ignored while STOP is latched.
-7. BLE/LiDAR loss keeps GARBY stationary. Link loss never starts an automatic return.
-8. LiDAR is the hallway-centering authority. Local servo ultrasonic is near-field stop/slowdown protection; side-sonar steering is disabled.
-9. Cellular/Firebase/GUI work is operational telemetry and may fail without blocking the motion-safety communication path.
-10. Software does not replace a hardwired emergency stop, power integrity, or measured stopping-distance validation.
-
-## 3. Runtime data flow
+The Android-directory Python file is a compatibility launcher into `RasPi/`;
+it no longer contains another implementation. The Pi simulator is a manual
+test producer, not production firmware. `Test/Test.ino` is a serial-only sketch.
 
 ```text
-YDLidar /scan
-   |
-   v
-Raspberry Pi final_w_serial.py
-   |  P:<seq>|F=...|B=...      safety, acknowledged BLE write
-   |  S:<seq>|...              steering geometry, latest-value
-   |  SENSOR:...               telemetry only
-   v
-ESP32 BLE bridge
-   |  strict dispatch + seq checks + STOP latch
-   |  STOP... / GO             safety permission
-   |  N:<ms>:<pct>|<dir>       precomputed steering tap
-   |  SENSOR:... / [RESET]
-   v  UART 115200
-Main ESP32
-   |  independent freshness gate + local sonar
-   v
-FastAccelStepper motor execution
+LaserScan -> Pi path + steering -> BLE bridge -> UART -> main ESP32 -> motors
+Sensor board -> Pi telemetry -> bridge -> main ESP32 gas trigger
+Main ESP32 load/state -> bridge notifications -> Pi -> Firebase -> Android
+Android return intent -> Firebase -> Pi -> bridge -> main ESP32
+Main ESP32 matching outcome -> bridge -> Pi -> Firebase -> Android
 ```
 
-The sensor-board UART into the Pi remains **9600 baud** by default. The bridge-to-main-controller UART is **115200 baud**. These are different interfaces and must not be confused.
+Motion remains gated independently of the app, Firebase, GUI, and SMS.
+FastAccelStepper executes commanded steps without wheel encoders: it is open
+loop motor control. LiDAR provides the outer centering correction; motor pulse
+counts alone do not prove physical distance or heading.
 
-## 4. Raspberry Pi behavior
+## Intended complete cycle
 
-### 4.1 Startup and dependencies
+1. Boot stationary. The main MCU initializes peripherals and sends `[MCU READY]`
+   before the background modem starts. The bridge starts fail closed.
+2. The Pi obtains usable scans and sends fresh path packets. Two clear packets
+   release the bridge latch; the MCU needs two GO commands. A fully latched
+   recovery therefore needs at least three Pi packets across both layers.
+3. While IDLE, two filtered load samples at or above 1.0 kg or three dangerous
+   gas telemetry packets trigger outbound execution. Every segment needs live
+   path permission; triggering the route never bypasses that gate.
+4. `runStart()` executes the calibrated route. An obstacle or link loss brakes
+   the motors and enters a monitoring wait. Local sonar and LiDAR continue to
+   be serviced. Fresh clearance resumes the **original absolute wheel targets**,
+   rather than replaying the full segment or restarting the whole route.
+5. Only completed targets produce `[OUTBOUND COMPLETE]`. The robot remains
+   stationary at the destination, and the Pi publishes readiness to the app.
+6. An explicit operator return request with a unique ID starts `returnToPointB()`.
+   The return uses the same motion gates and obstacle recovery.
+7. Only a completed return calls `fullReset()` and reports a matching DONE.
+   A failed segment latches a stationary route fault and reports FAILED.
 
-The production Pi source now includes `RasPi/bridge_core.py`. The previous package contained only version-specific `.pyc` cache files for that module, which could make `final_w_serial.py` fail at import before BLE or LiDAR started.
+An ordinary obstacle wait is recoverable. A rejected motor command or incomplete
+route is a fault requiring supervised physical recovery. These conditions must
+not be treated as equivalent.
 
-Critical runtime dependencies are ROS 2/rclpy + `sensor_msgs`, YDLidar ROS 2 driver, `pyserial`, and `bleak`. `firebase-admin` is optional: if it is missing or Firebase is unavailable, safety/BLE/LiDAR operation continues.
+## Safety and freshness
 
-Normal headless start:
-
-```bash
-python3 final_w_serial.py --headless
-```
-
-### 4.2 LiDAR coordinate convention and mount correction
-
-Software convention:
-
-| Direction | Angle |
-| --- | ---: |
-| FRONT | 0° |
-| FRONT_LEFT | 45° |
-| LEFT | 90° |
-| BACK_LEFT | 135° |
-| BACK | 180° |
-| BACK_RIGHT | 225° |
-| RIGHT | 270° |
-| FRONT_RIGHT | 315° |
-
-Physical mounting is intentionally **hardware-unverified**. Configure `GARBY_LIDAR_YAW_OFFSET_DEG` rather than editing sector code. Default is `0`. A value of `180` recreates the opposite-facing convention found in old documentation.
-
-### 4.3 Scan processing
-
-- One `/scan` ROS subscription uses `qos_profile_sensor_data`; duplicate subscriptions were removed.
-- Safety partitions the full circle into gap-free nearest 45° sectors.
-- Steering uses centered 22° slices and median wall geometry.
-- Positive `+inf` LaserScan samples mean “no return within sensor range” and are represented at `range_max`; NaN/negative infinity remain invalid.
-- Collision safety uses the **closest valid return** in each safety sector.
-- Current front/back scan quality must contain at least three samples in every required front/back safety sector. Fresh-but-incomplete safety data becomes `S`, not `C`.
-- Before the **first valid scan**, path state is stale/unknown. There is no safety startup grace that can report CLEAR blindly.
-
-### 4.4 Pi safety timing
-
-| Setting | Value |
-| --- | ---: |
-| Front LiDAR stop threshold | 95 cm |
-| Back LiDAR stop threshold | 35 cm |
-| LiDAR stale timeout | 0.8 s |
-| Normal path/steering period | 0.25 s |
-| Sensor telemetry period | 1.0 s |
-| BLE queue bound | 12 latest/control entries |
-
-The driver supervisor may have startup/restart grace for process management, but the **path safety output does not**.
-
-### 4.5 Pi BLE transport
-
-Service/characteristics:
-
-- Service: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-- Write: `beb5483e-36e1-4688-b7f5-ea07361b26a8`
-- Notify: `beb5483e-36e1-4688-b7f5-ea07361b26a9`
-- Server name: `GarbyESP32`
-
-All GATT writes use one asyncio lock. Path/control messages use acknowledged writes. The queue coalesces old path, steering, and telemetry values so old CLEAR state cannot build up behind a new STOP. An unexpected connection-task exception is caught and rescheduled; a transient failed path write requests a **fresh sequence** instead of replaying an old path packet.
-
-## 5. Pi → bridge protocol
-
-### 5.1 Path packet
-
-```text
-P:<uint32-seq>|F=<C|O|H|S>|B=<C|O|H|S>
-```
-
-- `C` clear
-- `O` obstacle
-- `H` legacy human-tagged obstacle; motion behavior is still STOP
-- `S` stale/unavailable/unknown
-
-The bridge parses the body as exact `F=` and `B=` tokens, rejects duplicates/unknown fields, and rejects decimal sequence overflow.
-
-### 5.2 Steering packet
-
-```text
-S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|T=..
-```
-
-or
-
-```text
-S:<same-seq>|STABLE
-```
-
-A steering packet is usable only when its sequence exactly equals the newest accepted `P:` sequence.
-
-### 5.3 Telemetry packet
-
-```text
-SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..
-```
-
-Sentinels:
-
-- `US=999`: unavailable trash-level ultrasonic telemetry
-- gas sensor `-1`: unavailable
-
-These sentinel values are represented as **UNAVAILABLE** in the main-controller telemetry model; they are not interpreted as “full” or “danger”.
-
-### 5.4 Control tokens
-
-- `[RASPI READY]`: Pi BLE session readiness/liveness token
-- `[RESET]`: explicit request to stop and transition to the deliberate return/reset workflow
-
-## 6. BLE bridge behavior
-
-### 6.1 Fail-closed startup
-
-`mcuReady` begins `false`; the bridge will not treat the controller as executable until it receives `[MCU READY]`. Every `[MCU READY]` is treated as a new controller boot epoch: queued ingress/navigation state is reset, the controller is told `[BLE CONNECTION ESTABLISHED]`, and `STOP:WAITING_DATA` is asserted until fresh path evidence arrives.
-
-### 6.2 Bridge watchdogs and queues
-
-| Setting | Value |
-| --- | ---: |
-| Valid path timeout | 850 ms |
-| General BLE silence/reconnect timeout | 10 s |
-| Repeated stale STOP | 500 ms |
-| Path frame max age at ingress | 650 ms |
-| Steering frame max age | 500 ms |
-| Sensor frame max age | 2000 ms |
-| Clear packets needed at bridge | 2 |
-| MCU ACK timeout | 3000 ms |
-| Max tracked unacked MCU commands | 8 |
-
-BLE callbacks only copy bounded frames. Parsing, float math, logging, and UART writes run from `loop()`. Safety/control frames are processed before steering and telemetry. Steering and telemetry use latest-value mailboxes.
-
-### 6.3 STOP release sequence
-
-From a latched STOP:
-
-1. clear path packet #1 → `STOP:CLEARING`
-2. clear path packet #2 → bridge releases latch and emits `GO` #1
-3. next fresh clear path packet → `GO` #2; main controller can then release its own latch
-
-Thus a normal fully-latched recovery requires at least **three fresh path packets** across both layers. The main movement gate now waits 900 ms and repeatedly requests status (request throttled to 80 ms), so this confirmation sequence can complete without the old 400 ms false timeout.
-
-### 6.4 BLE disconnect
-
-Disconnect resets navigation state, sends `STOP:LINK` when the MCU is ready, clears pending UART ACK accounting, and resumes advertising. It does **not** issue `[RESET]` and does not initiate a return route.
-
-## 7. Hallway centering
-
-The bridge alone converts LiDAR wall geometry into a nudge command.
+- Startup, absent scans, invalid geometry, missing sectors, stale path packets,
+  sequence violations, communication loss, and uncertain ingress produce STOP.
+- Only a validated path packet can produce GO. Telemetry cannot authorize motion.
+- Steering must match the latest accepted path sequence and is suppressed in STOP.
+- Freshness limits are fixed; CPU throttling does not extend permission to drive
+  on older data. BLE retries can be patient while the robot stays stopped.
+- A STOP UART line ends the current receive batch so subsequent queued GO lines
+  cannot erase it before the moving loop brakes.
+- A GO arriving after an expired gap starts a new confirmation streak.
+- BLE/LiDAR loss never starts an automatic return.
+- GUI front/back bypasses remain disabled in production, including while IDLE.
+- A new return is accepted only after a completed outbound route. Return from
+  an interrupted outbound or fault is rejected, rather than driving from an
+  unknown physical position.
 
 | Parameter | Value |
 | --- | ---: |
-| Lateral weight | 0.85 |
-| Heading weight | 0.15 |
-| EMA alpha | 0.10 |
-| Dead zone | 18 cm |
-| Reversal hysteresis | 12 cm |
-| Direction confirmation | 5 packets |
-| Nudge cooldown | 1200 ms |
-| Nudge duration | 35–60 ms |
-| Requested cut | 8–18% |
-| Startup steering grace | 8 packets |
-| Startup ramp | next 8 packets |
-| Front full suppression | ≤60 cm |
-| Front warning scaling | 60–120 cm |
-| Side object avoidance | ≤40 cm redirects away when the opposite side is clear |
-| Side hard stop | ≤22 cm blocks both travel directions |
+| Pi scan stale limit | 0.8 s |
+| Periodic path/steering production | 0.25 s; requests may refresh sooner |
+| Pi BLE mailbox | 12 entries; latest path/steering/telemetry; monotonic path replacement |
+| Bridge path watchdog | 850 ms |
+| Bridge ingress path age | 650 ms |
+| Bridge steering age | 500 ms |
+| Bridge sensor age | 2000 ms |
+| General BLE reconnect watchdog | 10 s; never a motion freshness limit |
+| Repeated stale STOP | 500 ms |
+| Main path watchdog | 800 ms |
+| Movement gate | 900 ms, then continuously monitored clearance wait |
+| Status request throttle | 80 ms |
+| Bridge control queue | 8 frames; overflow clears uncertain backlog and asserts STOP |
+| MCU ACK timeout / backlog cap | 3000 ms / 8 ordinary commands |
 
-The main controller applies stricter execution caps: maximum 24% cut, maximum 110 ms same-direction hold, and a 220 ms settle window. `ENABLE_ULTRASONIC_SIDE_NUDGE` remains `0`. When a valid, bridge-confirmed direction reversal arrives, the controller restores both wheel speeds and applies the new tap immediately; it no longer drops the correction and waits for another packet.
+Individual watchdogs are not a proof of total stopping time. Sensor age,
+transport delay, receive scheduling, braking, wheel slip, and load must be
+included in physical measurements.
 
-## 8. Main-controller communication and motion gate
+## LiDAR
 
-- `shouldStop = true` at boot.
-- `PATH_COMMAND_TIMEOUT_MS = 800` independently stops movement if the bridge stops refreshing STOP/GO state.
-- `MCU_GO_CONFIRM_PACKETS = 2`.
-- `MOTION_GATE_TIMEOUT_MS = 900`.
-- Motion gate repeatedly sends `[REQUEST-STATUS]`; requests are rate-limited to 80 ms.
-- Turns and distance moves re-check `pathCommandFresh()` before starting and continue polling UART/watchdogs while moving.
-- During straight motion, a fresh Servo+Ultrasonic stop echo is evaluated before a queued nudge can be applied; it brakes and waits for local-plus-LiDAR clearance.
-- Motion primitives return a completion result. A missing/unaccepted motor command or aborted segment cannot be reported as `[OUTBOUND COMPLETE]`; the state remains active until the route really completes or an explicit reset is received.
-- Malformed `N:` numeric fields are rejected with strict digit/overflow checks rather than permissive `String.toInt()` parsing.
-- Main UART line input is bounded and discards oversize lines until newline.
+Software angles are FRONT | 0°, FRONT_LEFT 45°, LEFT 90°, BACK_LEFT 135°,
+BACK 180°, BACK_RIGHT 225°, RIGHT 270°, FRONT_RIGHT 315°.
+`GARBY_LIDAR_YAW_OFFSET_DEG` corrects the physical mount; default 0 is
+hardware-unverified. Verify it before floor operation.
 
-## 9. Local servo ultrasonic
+Collision processing covers the full circle with nearest 45° sectors, using the
+closest valid return. Steering uses median estimates in centered 22° slices,
+falling back to the wider sector when the slice is sparse. Positive infinity
+means no return within `range_max`; NaN/negative infinity are invalid.
+At least three samples must exist in each front, rear, and side sector.
+An invalid side sector blocks both directions. Invalid angular/range metadata
+cannot crash the ROS callback or become CLEAR.
 
-Servo geometry:
-
-- right: **40°**
-- center: **80°**
-- left: **120°**
-- center cone: ±18°
-
-Current automatic safety sampling remains centered; side steering is disabled.
-The side-mounted LiDAR sectors provide the lateral object envelope for people,
-bins, and wall-mounted extinguishers; the centered Servo+Ultrasonic remains an
-independent near-field interlock.
-
-| Setting | Value |
+| Envelope | Threshold |
 | --- | ---: |
-| Echo timeout | 8000 µs |
+| Front sectors | 95 cm |
+| Rear sectors | 35 cm |
+| Side hard envelope | 22 cm, blocks both travel directions |
+
+One sensor-data subscription with depth 1 avoids a backlog of old scans.
+Scan history and path snapshots share a lock. Periodic and urgent path messages
+share one mailbox; an older clear packet cannot overwrite a newer STOP, including
+across uint32 sequence wrap. No unbounded urgent-write futures are spawned.
+
+## BLE and UART protocol
+
+BLE name: `GarbyESP32`.
+Service: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`.
+Write: `beb5483e-36e1-4688-b7f5-ea07361b26a8`.
+Notify: `beb5483e-36e1-4688-b7f5-ea07361b26a9`.
+Requested connection interval: 30–50 ms, supervision timeout 4 s.
+
+```text
+Pi -> bridge:
+P:<uint32-seq>|F=<C|O|H|S>|B=<C|O|H|S>
+S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|T=..
+S:<same-seq>|STABLE
+SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..
+[RASPI READY]
+[RESET:<requestedAt-ms>]
+
+Bridge -> main, newline-delimited UART at 115200 baud:
+STOP[:reason]
+GO
+N:<duration-ms>:<percent-cut>|<NUDGE_LEFT|NUDGE_RIGHT|STABLE>
+SENSOR:...
+[BLE CONNECTION ESTABLISHED]
+[ROBOT STATUS]
+[RESET:<requestedAt-ms>]
+
+Main -> Pi through bridge notifications:
+[MCU READY], [RUNNING], [OUTBOUND COMPLETE], [RETURNING], [ROUTE FAULT], [IDLE]
+[RESET ACK:<id>], [RESET DONE:<id>], [RESET FAILED:<id>]
+LOAD_CELL:<kg>
+[REQUEST-STATUS]
+```
+
+`C` = clear, `O` = obstacle, `H` = legacy human-tagged obstacle, `S` = stale/unknown.
+Strict path fields reject duplicates, unknown fields, uint32 overflow, and
+trailing delimiters. Old or duplicate path sequences assert `STOP:SEQUENCE`.
+Legacy combined `PATH:` input remains isolated for old bench tools; production
+and the sequenced simulator use `P:`/`S:` only.
+
+Each GATT payload is a single printable line, maximum 244 bytes. Embedded NUL,
+newline, or control bytes are rejected, so SENSOR cannot inject UART commands.
+All Pi writes share one asyncio lock; path, readiness, and correlated return
+writes are acknowledged. Steering/telemetry exceeding the characteristic's
+negotiated write-without-response limit also use acknowledged writes; this
+handles a 20-byte limit during MTU negotiation or on older BlueZ. Failed safety
+writes request a fresh snapshot.
+Bridge BLE callbacks copy/post bounded data only. Parsing, UART, notifications,
+navigation resets, and connection-parameter work run in `loop()`.
+
+Sensor-board UART into the Pi is **9600 baud**, separate from the 115200 bridge
+UART. Its firmware is not provided here. `US=999` and gas `-1` mean UNAVAILABLE,
+not full/danger/clearance. Trash-level ultrasonic telemetry is not path sonar.
+
+## Centering and nudging
+
+| Parameter | Value |
+| --- | ---: |
+| Lateral / heading weights | 0.85 / 0.15 |
+| EMA | 0.15 |
+| Dead zone / reversal hysteresis | 12 / 8 cm |
+| Direction confirmation | 3 packets; strong-signal fast path retained |
+| Cooldown | 1000 ms |
+| Requested tap | 180–260 ms, 20–34% cut |
+| MCU cut / hold cap | 35% / 260 ms |
+| MCU post-tap settle | 220 ms |
+| Startup grace / ramp | 8 / 8 packets |
+| Front suppress / warning zone | ≤60 cm / 60–120 cm |
+| Side avoidance / hard envelope | 40 / 22 cm |
+
+The selected avoidance direction, rather than the old EMA sign, determines the
+transmitted command. Duration scaling cannot underflow when avoidance overrides
+a small lateral error. Cooldown/confirmation wait emits no new tap and does not
+cancel a tap already running. Invalid/unsafe/centered geometry still sends STABLE
+to cancel a correction. STOP clears direction confirmation and stale EMA state.
+The MCU restores both wheel speeds at tap expiry and applies bounded corrections
+symmetrically. Ultrasonic side nudging stays disabled (`ENABLE_ULTRASONIC_SIDE_NUDGE=0`).
+
+## Local sonar and recovery
+
+Servo endpoints are right 40°, center 80°, left 120°; production automatic
+sampling remains centered, with a ±18° center cone. The servo must settle before
+pinging. Echo capture uses an interrupt; safety loops do not call blocking scans.
+
+| Parameter | Value |
+| --- | ---: |
+| Echo listening window | 18000 µs, roughly 3.1 m at the nominal sound speed |
 | Ping period | 40 ms |
-| Slowdown | ≤90 cm |
-| Immediate STOP | Any fresh valid sample at ≤60 cm |
-| Stop latch | 2 valid samples at ≤60 cm |
+| Fresh echo age | 180 ms |
+| Slowdown / full-speed resume | 90 / 105 cm |
+| Immediate close echo STOP | ≤60 cm, using raw echo rather than delayed median |
+| Persistent obstacle confirmation | 2 valid blocked echoes |
 | Immediate emergency latch | ≤25 cm |
-| Clear threshold | ≥72 cm |
-| Clear confirmation | 3 valid samples |
-| Full-speed resume zone | ≥105 cm |
-| Fresh sample age | 180 ms |
+| Clear threshold / confirmation | ≥72 cm / 3 valid echoes |
 
-A timeout/no echo is **UNKNOWN**, not CLEAR. It cannot increment the clear counter or release a prior local obstacle latch. If the robot is halted because of local sonar, resume still needs valid local clear evidence plus fresh LiDAR permission.
+A timeout/no echo is UNKNOWN. It never clears a previous local obstacle latch,
+and breaks consecutive-clear confirmation. A blocked wait continues UART,
+watchdogs, sonar sampling, and status requests. It counts distinct new sonar
+samples and needs fresh LiDAR GO as well. An obstacle discovered during a
+LiDAR-only wait activates the local-clear requirement too.
+If no valid clear echoes return, the robot stays stopped and prints five-second
+diagnostics indicating path state, sonar validity, distance, and confirmations.
+The 18000 µs window replaces the old 8000 µs window that could not receive an
+echo beyond approximately 1.4 m; it must be checked on the installed sonar.
 
-## 10. Motor and braking configuration
+## Motors and routes
 
-| Setting | Value |
+Main step/direction pins: wheel 1 = 21/22; wheel 2 = 13/12.
+Main and bridge UART pins: RX18/TX19, crossed TX-to-RX with common ground.
+Servo23, sonar trig5/echo4, HX711 data33/clock32, buzzer25,
+Air780 RX16/TX17/PWRKEY26. Verify electrical levels and boot-strapping pins.
+
+| Parameter | Value |
 | --- | ---: |
-| Normal max step rate | 5600 steps/s |
-| Caution step rate | 3900 steps/s |
-| Turn rate | 3000 steps/s |
+| Normal / caution / turn speed | 5600 / 3900 / 3000 steps/s |
 | Normal acceleration | 4800 steps/s² |
-| Gentle-stop deceleration | 6500 steps/s² |
-| Safety-stop deceleration | 14000 steps/s² |
-| Wheel steps/rev | 1600 |
-| Wheel diameter | 65 mm |
-| Wheelbase | 150 mm |
+| Gentle / safety stop deceleration | 6500 / 14000 steps/s² |
+| Nudge acceleration | 9000 steps/s² |
+| Wheel steps/rev / diameter / wheelbase | 1600 / 65 mm / 150 mm |
+| Motor trim | 0% each, pending chassis calibration |
 
-Safety stopping requests controlled deceleration first; force stop is a timeout fallback. No deliberate reverse-torque braking pulse is used.
+Both `moveTo()` results are checked. One rejected wheel command stops both
+wheels; success is not guessed from immediate `isRunning()` state. Target moves
+and turns poll safety continuously. Safety stops use controlled deceleration,
+with hard force stop as a timeout fallback; no reverse braking pulse is used.
 
-These numbers are **not proof of stopping distance**. Floor traction, load, battery voltage, driver current, wheel slip, and mechanical compliance must be measured on the real chassis.
+`pointsRun.ino` contains physically calibrated turn/distance sequences, including
+long positive moves in outbound and return. Signs and numbers were preserved:
+the physical route direction is hardware-unverified and must not be inferred
+from function names. Wheel pulse counts cannot detect lost steps or wheel slip.
 
-## 11. Modem, load, gas, Firebase, and GUI
+## Firebase, app, and return identity
 
-The Air780E modem no longer gates the MCU communication handshake. `[MCU READY]` is emitted first, then modem initialization runs in a FreeRTOS background task. SMS requests are ignored while the modem is unavailable/busy; modem delays cannot block STOP processing.
+Firebase writes for telemetry are background, coalesced multi-location updates.
+Sensor values publish roughly every 5 s; steady weight refreshes every 30 s;
+the Pi heartbeat is every 30 s. The MCU modem initializes in a background task;
+SMS cannot block motion safety. Delivery requires actual network/SIM acceptance.
 
-Load and gas are IDLE→RUNNING triggers, with repeated confirmation. The load trigger is `LOAD_TRIGGER_KG = 1.0 kg` and requires two filtered samples; it starts the route state machine but does not bypass the independent fresh-path motion gate. Gas telemetry becomes non-triggering when stale/unavailable. Firebase is asynchronous/coalesced on the Pi and is not a motion authority. GUI controls cannot override unavailable LiDAR data while active-operation safety is enforced.
+The app writes `devices/garby-bin-01/commands/reset` with server `requestedAt`,
+operator `requestedBy`, and status `pending`. The Pi polls every 2 s, accepts a
+new pending request only within 120 s (future tolerance 30 s), and relays
+`[RESET:<requestedAt>]`. The MCU validates and remembers the ID. Duplicate IDs
+return the remembered outcome and do not brake/restart an active return.
+Before ACK the Pi retries the same ID every 3 s; after ACK it queries every 10 s.
+This recovers a lost completion notification through the MCU's remembered
+outcome, including after BLE reconnect, without replaying the route.
 
-## 12. State machine
+ACK means the **MCU accepted** the return, not that the Pi queued a message.
+DONE requires matching MCU completion after the route succeeds; uncorrelated
+`[IDLE]` never completes an app command. Firmware/route failure yields matching
+FAILED. Accepted returns have a 15-minute completion window; they are not
+rejected at the 120-second acceptance limit mid-route. A timeout means completion
+is unverified, and never implies physical arrival. The app uses the same
+15-minute window, replacing its former 60-second timeout.
 
-### IDLE
+Firebase command transitions are conditional transactions on the expected ID;
+an old completion cannot overwrite a newer operator request. The app tracks the
+exact server-issued request timestamp, including successive requests by the
+same operator. Structured status
+is authoritative; the obsolete APP boolean cannot resurrect terminal commands.
+The app requires a live connection, fresh heartbeat, BLE and LiDAR health, and
+confirmed destination readiness to enable return. Cached sensor/status data
+becomes stale after 90 s, with 30 s future-clock tolerance.
 
-- fail-closed motor state
-- request status periodically
-- collect load/gas evidence
-- start outbound workflow only after trigger confirmation
+Manual `[RESET]` is reserved for local supervised recovery: after a route fault,
+physically reposition the robot to its known base, then issue it to clear state.
+It must not be used to blindly return from an incomplete route. Correlated app
+retries cannot enter this recovery branch. Deploy Pi and both ESP32s together;
+old firmware cannot acknowledge the new correlated return workflow.
 
-### RUNNING
+FCM receiving exists in the app, but this repository does not include a deployed
+cloud notification sender or production RTDB authorization rules. Live Firebase
+permissions, anonymous-auth configuration, push delivery, and SIM/SMS delivery
+remain external acceptance items, not verified build results.
 
-- execute `runStart()` once
-- only a successful `runStart()` completion is reported as outbound complete; interrupted/incomplete segments remain in RUNNING
-- every movement passes the fresh-path gate
-- after route completion, remain stationary
-- transition to RETURNING only on explicit `[RESET]`
+## Verification and release
 
-### RETURNING
+Run `python -B tools/verify_project.py` for Python syntax/tests, executable firmware
+behavioral tests, source audit, ESP32 target builds, Android tests/builds/lint.
+Exports go to `artifacts/firmware/`; Android APKs remain in Gradle outputs.
+`--host-only` explicitly skips target and Android builds.
 
-- execute `returnToPointB()` using the same live safety gates
-- finish with `fullReset()` to IDLE only after the return route reports success
-
-## 13. Route limitation — physical direction is hardware-unverified
-
-`pointsRun.ino` contains turns plus long positive step moves for both outbound and return portions. Source alone cannot prove which real-world direction the chassis travels after each turn. **Do not change signs based on function names or old documentation.** Verify the full sequence with wheels lifted and record the observed direction before floor tests.
-
-## 14. Required deployment order
-
-1. Compile/flash the main-controller sketch (`NAPHTALI_CODE_V2`).
-2. Compile/flash the BLE bridge (`BLE_Receiver-Final`).
-3. Deploy the Pi `RasPi/` source, including `bridge_core.py`.
-4. Start the Pi bridge in headless mode.
-5. With wheels lifted, verify `[MCU READY]` → `[BLE CONNECTION ESTABLISHED]` → `STOP:WAITING_DATA` → repeated clear evidence → GO sequence.
-6. Only then perform reduced-speed supervised physical tests described in `DEPLOYMENT_AND_ACCEPTANCE.md`.
-
-## 15. Release rule
-
-Any change to protocol strings, UUIDs, baud rates, watchdogs, STOP/GO logic, LiDAR orientation/filtering, nudge tuning, sonar thresholds, braking, state transitions, or route behavior must update this file and be revalidated as a coordinated three-node release.
+Deployment order: main controller, BLE bridge, complete Pi `RasPi/` directory,
+then Android. Follow `DEPLOYMENT_AND_ACCEPTANCE.md` with wheels lifted. A hardwired
+emergency stop and measured stopping distance are required before claiming safe
+operation around people. All changes to motion, protocol, or timing must update
+this architecture and its maintainer reference copy in the same release.

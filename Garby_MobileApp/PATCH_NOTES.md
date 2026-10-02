@@ -1,5 +1,12 @@
 # GARBY Mobile App - Patch Notes
 
+## 2026-10-02 coordinated repair
+
+See [release notes](../RELEASE_NOTES.md) and [current architecture](../SYSTEM_ARCHITECTURE.md).
+Return uses exact server-issued IDs and actual MCU ACK/DONE/FAILED, fresh live
+readiness gates, and a 15-minute completion window. The obsolete APP flag is no
+longer written with commands. Historical sections below describe earlier releases.
+
 ## 2026-08-11 deployed-database integration
 
 - Mapped each dashboard metric to the exact legacy path in the supplied
