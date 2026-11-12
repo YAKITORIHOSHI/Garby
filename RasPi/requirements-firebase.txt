@@ -1,0 +1,3 @@
+# Full runtime: local BLE/UART plus cloud telemetry and remote return requests.
+-r requirements.txt
+firebase-admin>=6.0

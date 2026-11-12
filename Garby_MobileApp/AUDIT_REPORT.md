@@ -1,6 +1,6 @@
 # GARBY Mobile App Full Audit Report
 
-Historical audit. The coordinated 2026-10-02 changes and validation supersede
+Historical audit. The coordinated 2026-10-04 changes and validation supersede
 runtime/command details below: [Project rundown](../PROJECT_RUNDOWN.md),
 [Release notes](../RELEASE_NOTES.md), [Validation](../VALIDATION_RESULTS.md).
 

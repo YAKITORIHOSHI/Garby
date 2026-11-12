@@ -1,0 +1,24 @@
+# Hidden from Claude's Grep/Glob and any ripgrep search. This tree is not a git
+# repository, so .gitignore has no effect here. Explicit reads still work unless
+# .claude/settings.json denies them, so the dated evidence in artifacts/ and
+# .mcu_flasher_build_cache/project_state.json stay readable on purpose.
+build/
+.gradle/
+.idea/
+.kotlin/
+node_modules/
+.mcu_flasher_build_cache/
+.opencode/
+artifacts/
+__pycache__/
+*.elf
+*.map
+*.bin
+*.apk
+*.aab
+*.jar
+*.a
+*.o
+*.dblite
+*.zip
+Garby_MobileApp/debug_log.txt

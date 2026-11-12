@@ -1,4 +1,4 @@
-# GARBY Android integration — 2026-10-02
+# GARBY Android integration — 2026-10-04
 
 The complete Pi, bridge, controller, and Android source are present in this
 workspace. [Root architecture](../SYSTEM_ARCHITECTURE.md) is authoritative for
@@ -38,9 +38,15 @@ must be upgraded with the app for this protocol.
 ## Freshness and startup
 
 Dashboard values expire after 90 s, with 30 s future-clock tolerance. Unknown
-values remain unavailable rather than synthetic zeros. Connectivity and
+values remain unavailable rather than synthetic zeros. Negative weight/gas
+sentinels use zero freshness and an unavailable dashboard message. Connectivity and
 readiness errors disable return. Auth initialization has a bounded wait;
 best-effort prewarming handles timeout separately from actual cancellation.
+
+The current Android Firebase client file and credential boundaries are recorded
+in [Firebase configuration](FIREBASE_CONFIGURATION.md). The Android client
+configuration is synced from `RasPi/Firebase/google-services.json`; service
+account keys and account passwords stay out of the APK.
 
 The app has no embedded service-account credential, trust-all TLS client,
 direct motor API, or Firebase disk persistence in the active implementation.

@@ -8,7 +8,10 @@ handling testable on any host before deployment to the Raspberry Pi.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import math
+import queue
+from collections import deque
 import threading
 import time
 from typing import Callable, Iterable, Mapping, MutableMapping, Sequence
@@ -275,6 +278,9 @@ class CoalescingUpdateWorker:
         self._pending: dict[str, object] = {}
         self._closing = False
         self._flush_on_close = True
+        self._close_deadline = None
+        self._discarded = False
+        self._in_flight = 0
         self._urgent = False
         self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
         self._thread.start()
@@ -296,28 +302,51 @@ class CoalescingUpdateWorker:
     def submit(self, values: Mapping[str, object]) -> None:
         self.enqueue(values)
 
-    def close(self, *, flush: bool = True, timeout: float = 2.0) -> None:
+    def _abort_locked(self):
+        self._discarded = self._discarded or bool(self._pending) or bool(self._in_flight)
+        self._pending.clear()
+        self._flush_on_close = False
+        self._cv.notify_all()
+
+    def _expired_locked(self):
+        if self._closing and self._close_deadline is not None and time.monotonic() >= self._close_deadline:
+            self._abort_locked()
+        return self._closing and not self._flush_on_close
+
+    def pending_count(self):
+        with self._cv:
+            return len(self._pending) + self._in_flight
+
+    def close(self, *, flush: bool = True, timeout: float = 2.0) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout))
         with self._cv:
             self._closing = True
-            self._flush_on_close = bool(flush)
+            self._close_deadline = min(self._close_deadline, deadline) if self._close_deadline is not None else deadline
             if not flush:
-                self._pending.clear()
+                self._abort_locked()
             self._cv.notify_all()
         if self._thread.is_alive():
-            self._thread.join(timeout=max(0.0, float(timeout)))
+            self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        with self._cv:
+            if self._thread.is_alive():
+                # Cannot interrupt an in-flight network call. Prevent any retry
+                # or additional write once that call returns.
+                self._abort_locked()
+            return not self._discarded and not self._thread.is_alive()
 
-    def stop(self, timeout: float = 2.0) -> None:
-        self.close(flush=False, timeout=timeout)
+    def stop(self, timeout: float = 2.0) -> bool:
+        return self.close(flush=False, timeout=timeout)
 
     def _wait_until(self, deadline: float) -> bool:
         with self._cv:
             while True:
+                if self._expired_locked():
+                    return False
                 now = time.monotonic()
                 if now >= deadline:
                     return True
-                if self._closing and not self._flush_on_close:
-                    return False
-                self._cv.wait(timeout=deadline - now)
+                effective_deadline = min(deadline, self._close_deadline) if self._close_deadline is not None else deadline
+                self._cv.wait(timeout=max(0.0, effective_deadline - now))
 
     def _run(self) -> None:
         retry_not_before = 0.0
@@ -325,7 +354,7 @@ class CoalescingUpdateWorker:
             with self._cv:
                 while not self._pending and not self._closing:
                     self._cv.wait()
-                if self._closing and (not self._flush_on_close or not self._pending):
+                if self._expired_locked() or (self._closing and not self._pending):
                     return
                 urgent = self._urgent
                 self._urgent = False
@@ -339,17 +368,24 @@ class CoalescingUpdateWorker:
                     return
 
             with self._cv:
+                if self._expired_locked():
+                    return
                 if not self._pending:
                     if self._closing:
                         return
                     continue
                 batch = dict(self._pending)
                 self._pending.clear()
+                self._in_flight = len(batch)
 
             try:
                 self._update_func(batch)
             except Exception:
                 with self._cv:
+                    self._in_flight = 0
+                    if self._expired_locked():
+                        self._discarded = True
+                        return
                     # A newer value already pending wins over the failed old one.
                     for key, value in batch.items():
                         self._pending.setdefault(key, value)
@@ -358,6 +394,8 @@ class CoalescingUpdateWorker:
                 retry_not_before = time.monotonic() + self._backoff.next_delay()
                 continue
 
+            with self._cv:
+                self._in_flight = 0
             self._backoff.reset()
             retry_not_before = 0.0
 
@@ -395,6 +433,17 @@ def nearest_lidar_sector(angle_rad: float) -> tuple[str, float]:
     return LIDAR_SECTOR_NAMES[index], _angular_error_rad(angle, center)
 
 
+@lru_cache(maxsize=32)
+def _lidar_ray_geometry(count: int, angle_min: float, angle_increment: float):
+    """Reuse only immutable angles, never ranges, validity or clearance.
+
+    Without fixed resolution the X3's scan length follows its motor speed
+    (667-672 points measured on 2026-11-12), so several lengths alternate.
+    """
+    return tuple(nearest_lidar_sector(angle_min + index * angle_increment)
+                 for index in range(count))
+
+
 def partition_lidar_samples(
     ranges: Sequence[float],
     *,
@@ -420,6 +469,12 @@ def partition_lidar_samples(
                       else max(0.0, float(steering_cone_deg)) / 2.0)
     steering_half_width = math.radians(half_width_deg)
     valid_points = 0
+    # Bound retained geometry even for unusual drivers. Geometry changes select
+    # a different key; every ray's distance/validity is still checked every scan.
+    count = len(ranges)
+    geometry = (_lidar_ray_geometry(count, angle_min, angle_increment)
+                if count <= 4096 and math.isfinite(angle_min + max(0, count - 1) * angle_increment)
+                else None)
 
     for index, raw_distance in enumerate(ranges):
         try:
@@ -429,17 +484,20 @@ def partition_lidar_samples(
         # ROS LaserScan commonly uses +inf for "no return within range". For
         # collision safety that is a valid clear sample at range_max; NaN and
         # negative infinity remain invalid and do not count toward scan health.
-        if math.isinf(distance) and distance > 0.0:
+        no_return = math.isinf(distance) and distance > 0.0
+        if no_return:
             distance = float(range_max)
         elif not math.isfinite(distance):
             continue
-        if distance < range_min or distance > range_max:
+        if distance <= 0.0 or distance < range_min or distance > range_max:
             continue
-        angle = angle_min + index * angle_increment
-        name, error = nearest_lidar_sector(angle)
+        name, error = (geometry[index] if geometry is not None else
+                       nearest_lidar_sector(angle_min + index * angle_increment))
         valid_points += 1
         safety[name].append(distance)
-        if error <= steering_half_width:
+        # A clear ray is useful for collision clearance, but it is not a
+        # measured wall. L/R centering requires finite lateral wall returns.
+        if error <= steering_half_width and not (no_return and name in ("LEFT", "RIGHT")):
             steering[name].append(distance)
     return safety, steering, valid_points
 
@@ -592,3 +650,278 @@ def build_health_status(
     else:
         status["thermalWarning"] = None
     return status
+
+
+class ManualStartControl:
+    """Track an operator start without depending on scale or sensor readings.
+
+    Readiness and IDLE must be confirmed by the executor in the current BLE
+    session. Starts expire in the outgoing queue and are never auto-retried.
+    """
+
+    READY_TIMEOUT_S = 7.5  # Executor status is queried every five seconds.
+    QUEUE_TIMEOUT_S = 2.0
+    ACK_TIMEOUT_S = 5.0
+    QUERY_INTERVAL_S = 1.0
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._last_id = 0
+        self.reset()
+
+    def reset(self):
+        with self._lock:
+            self._ready_at = self._state_at = None
+            self._state = "UNKNOWN"
+            self._pending = None
+            self._sent_at = self._last_query_at = None
+            self._message = ""
+
+    def note_ready(self, now=None):
+        with self._lock:
+            self._ready_at = time.monotonic() if now is None else now
+
+    def note_state(self, state, now=None):
+        with self._lock:
+            if self._message.startswith("Start unconfirmed") or (state == "IDLE" and self._state != "IDLE"):
+                self._message = ""
+            self._state = state
+            self._state_at = time.monotonic() if now is None else now
+
+    def _fresh(self, timestamp, now):
+        return timestamp is not None and 0 <= now - timestamp <= self.READY_TIMEOUT_S
+
+    def status(self, connected, now=None):
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if self._pending and now - self._pending[1] > self.ACK_TIMEOUT_S:
+                self._pending = None
+                self._state_at = None  # Require new state after an uncertain write.
+                self._message = "Start unconfirmed; waiting for controller status"
+            if not connected:
+                reason = "Waiting for BLE connection"
+            elif not self._fresh(self._ready_at, now):
+                reason = "Waiting for both controllers"
+            elif self._pending:
+                reason = "Start requested; waiting for acknowledgement"
+            elif not self._fresh(self._state_at, now):
+                reason = "Waiting for controller status"
+            elif self._state != "IDLE":
+                reason = "Robot must be idle to start"
+            else:
+                reason = "Ready: bypass scale and bin sensors"
+            enabled = (connected and self._fresh(self._ready_at, now)
+                       and self._fresh(self._state_at, now)
+                       and self._state == "IDLE" and self._pending is None)
+            message = reason
+            if self._message and connected and self._fresh(self._ready_at, now) and not self._pending:
+                message = self._message
+            return {"enabled": bool(enabled), "pending": self._pending is not None,
+                    "message": message}
+
+    def request(self, connected, now=None):
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if not self.status(connected, now)["enabled"]:
+                return None
+            self._last_id = max(self._last_id + 1, int(time.time() * 1000))
+            self._pending = (str(self._last_id), now)
+            self._sent_at = self._last_query_at = None
+            self._message = ""
+            return f"[START:{self._last_id}]"
+
+    def can_send(self, packet, connected, now=None):
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if (not self._pending or packet != f"[START:{self._pending[0]}]"
+                    or self._sent_at is not None):
+                return False
+            valid = (connected and self._fresh(self._ready_at, now)
+                     and self._fresh(self._state_at, now) and self._state == "IDLE"
+                     and 0 <= now - self._pending[1] <= self.QUEUE_TIMEOUT_S)
+            if not valid:
+                self._pending = None
+                self._message = "Start cancelled; check connections and try again"
+            return bool(valid)
+
+    def mark_sent(self, packet, now=None):
+        """Record an attempted write, including one with an uncertain result."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if self._pending and packet == f"[START:{self._pending[0]}]":
+                self._sent_at = self._last_query_at = now
+
+    def next_query(self, connected, now=None):
+        """Ask for the pending result; never repeat the motion command."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if (not self.status(connected, now)["pending"] or not connected
+                    or self._sent_at is None
+                    or now - self._last_query_at < self.QUERY_INTERVAL_S):
+                return None
+            self._last_query_at = now
+            return f"[START STATUS:{self._pending[0]}]"
+
+    def can_query(self, packet, connected, now=None):
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            return bool(self.status(connected, now)["pending"] and connected
+                        and self._sent_at is not None
+                        and packet == f"[START STATUS:{self._pending[0]}]")
+
+    def outcome(self, request_id, accepted, reason=""):
+        with self._lock:
+            if not self._pending or request_id != self._pending[0]:
+                return False
+            self._pending = None
+            self._message = "Manual start accepted" if accepted else f"Start rejected: {reason}"
+            # The next state report decides whether another start is allowed.
+            self._state_at = None
+            return True
+
+
+THROTTLE_UNDERVOLTAGE_NOW = 0x1
+_THROTTLE_FLAG_NAMES: tuple[tuple[int, str], ...] = (
+    (THROTTLE_UNDERVOLTAGE_NOW, "undervoltage-now"),
+    (0x2, "arm-capped-now"),
+    (0x4, "throttled-now"),
+    (0x8, "soft-temp-limit-now"),
+    (0x10000, "undervoltage-since-boot"),
+    (0x20000, "arm-capped-since-boot"),
+    (0x40000, "throttled-since-boot"),
+    (0x80000, "soft-temp-limit-since-boot"),
+)
+
+
+def describe_throttle_flags(flags: int | None) -> str:
+    """Readable form of the Raspberry Pi firmware ``get_throttled`` bit field."""
+    if flags is None:
+        return "unknown"
+    return ", ".join(name for bit, name in _THROTTLE_FLAG_NAMES if flags & bit) or "none"
+
+
+class CoalescingBleQueue:
+    """Small latest-value mailbox for BLE traffic.
+
+    PATH, SIDES, and SENSOR messages replace older messages of the same kind,
+    preventing stale clear-path packets from accumulating behind newer STOP
+    packets. Control messages are retained. Urgent safety messages are placed
+    before ordinary traffic, with operator ESTOP first. Sequenced paths other
+    than all-clear get STOP priority on every replacement, including polls.
+    """
+    def __init__(self, maxlen=12):
+        self._maxlen = maxlen
+        self._items = deque()
+        self._lock = threading.Lock()
+        self._latest_path_seq = None
+
+    @staticmethod
+    def _kind(msg):
+        if msg.startswith(("P:", "PATH:")):
+            return "PATH"
+        if msg.startswith(("S:", "SIDES:")):
+            return "SIDES"
+        if msg.startswith("SENSOR:"):
+            return "SENSOR"
+        if msg.startswith("[HEALTH:"):
+            return "HEALTH"
+        if msg == "[RESET]" or msg.startswith("[RESET:"):
+            return "RESET"
+        if msg == "[RASPI READY]":
+            return "READY"
+        if msg.startswith("[START:"):
+            return "START"
+        if msg.startswith("[START STATUS:"):
+            return "START_STATUS"
+        return "CONTROL"
+
+    @staticmethod
+    def _operator_estop(msg):
+        # Priority hint only; both firmware nodes still validate the command.
+        return msg.startswith("[OP:") and msg.endswith(":ESTOP]")
+
+    def put_nowait(self, msg, urgent=False, expires_at=None):
+        kind = self._kind(msg)
+        is_estop = self._operator_estop(msg)
+        urgent = urgent or is_estop
+        if expires_at is not None:
+            try:
+                expires_at = float(expires_at)
+            except (TypeError, ValueError, OverflowError):
+                expires_at = 0.0
+            if not math.isfinite(expires_at):
+                expires_at = 0.0
+        entry = (msg, expires_at)
+        with self._lock:
+            if msg.startswith("P:"):
+                seq = int(msg[2:].split("|", 1)[0])
+                if self._latest_path_seq is not None:
+                    delta = (seq - self._latest_path_seq) & 0xFFFFFFFF
+                    if delta == 0 or delta >= 0x80000000:
+                        return
+                self._latest_path_seq = seq
+                # Recognize only ordinary all-clear here, not the complete wire
+                # grammar. Blocked, stale or malformed bodies need prompt bridge
+                # validation/STOP; a periodic replacement must not demote them.
+                # The optional T= turn-sweep token is part of all-clear only
+                # when it is itself C; slow (F=W) keeps STOP-class priority.
+                tokens = msg.partition("|")[2].split("|")
+                urgent = urgent or sorted(tokens) not in (
+                    ["B=C", "F=C"], ["B=C", "F=C", "T=C"])
+            if kind != "CONTROL":
+                retained = deque()
+                for item in self._items:
+                    if self._kind(item[0]) != kind:
+                        retained.append(item)
+                self._items = retained
+            while len(self._items) >= self._maxlen:
+                # Never discard the next urgent PATH/RESET just to retain stale
+                # steering or telemetry. Search from the tail (newest/lowest
+                # priority) for an expendable item first.
+                remove_index = None
+                for index in range(len(self._items) - 1, -1, -1):
+                    item = self._items[index][0]
+                    if (not self._operator_estop(item) and self._kind(item) in
+                            ("SIDES", "SENSOR", "HEALTH", "READY", "CONTROL")):
+                        remove_index = index
+                        break
+                if remove_index is None:
+                    # Even an urgent PATH cannot evict a queued emergency stop.
+                    remove_index = next((index for index in range(len(self._items) - 1, -1, -1)
+                                         if not self._operator_estop(self._items[index][0])), None)
+                if remove_index is None:
+                    if not is_estop:
+                        return
+                    remove_index = len(self._items) - 1
+                del self._items[remove_index]
+            if urgent:
+                # ESTOP admission keeps emergency entries at the front. Other
+                # urgent traffic starts immediately after that emergency prefix.
+                index = 0
+                if not is_estop:
+                    while index < len(self._items) and self._operator_estop(self._items[index][0]):
+                        index += 1
+                self._items.insert(index, entry)
+            else:
+                self._items.append(entry)
+
+    def get_entry_nowait(self):
+        """Return ``(message, monotonic_deadline)`` for the BLE writer."""
+        with self._lock:
+            if not self._items:
+                raise queue.Empty
+            return self._items.popleft()
+
+    def get_nowait(self):
+        return self.get_entry_nowait()[0]
+
+    def clear(self):
+        with self._lock:
+            self._items.clear()
+            self._latest_path_seq = None
+
+    def discard_kind(self, kind):
+        with self._lock:
+            self._items = deque(
+                item for item in self._items if self._kind(item[0]) != kind
+            )

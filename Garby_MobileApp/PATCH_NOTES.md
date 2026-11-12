@@ -1,5 +1,14 @@
 # GARBY Mobile App - Patch Notes
 
+## 2026-10-31 Firebase client configuration review
+
+- Synced `app/google-services.json` from `RasPi/Firebase/google-services.json`.
+  Both files currently match byte-for-byte and register `com.thesis.garby`.
+- Kept the existing anonymous-authentication flow. The provided Admin SDK
+  private key and plaintext account password were not copied into Android.
+- See [Firebase configuration](FIREBASE_CONFIGURATION.md) for the project and
+  database consistency checks and credential handling.
+
 ## 2026-10-02 coordinated repair
 
 See [release notes](../RELEASE_NOTES.md) and [current architecture](../SYSTEM_ARCHITECTURE.md).

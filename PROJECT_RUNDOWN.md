@@ -1,4 +1,4 @@
-# GARBY project rundown — 2026-10-02
+# GARBY project rundown — 2026-10-04
 
 ## Assessment
 
@@ -46,9 +46,9 @@ stationary fault requiring supervised recovery from a known physical position.
 
 | Component | Source and interfaces | Role and boundary |
 | --- | --- | --- |
-| Pi | `RasPi/final_w_serial.py`, `bridge_core.py`; ROS 2 `/scan`, sensor serial 9600 baud, BLE, Firebase | Fresh clearance, geometry, transport, readiness, telemetry; no direct motor output |
+| Pi | `RasPi/final_w_serial.py`, `bridge_core.py`, `ble_support.py`, `runtime_support.py`; ROS 2 `/scan`, sensor serial 9600 baud, BLE, Firebase | Fresh clearance, geometry, transport, exclusive process ownership, readiness, telemetry; no direct motor output |
 | BLE ESP32 | `BLE_Receiver-Final/BLE_Receiver-Final.ino`; NimBLE GATT, UART 115200 baud | Strict framing/sequence checks, independent STOP latch, nudging, controller transport |
-| Main ESP32 | `NAPHTALI_CODE_V2.ino/.cpp/.h`, `pointsRun.ino`; FastAccelStepper, sonar/servo, HX711, Air780 | Motion targets, local obstacle protection, route state, load/gas triggers, SMS worker |
+| Main ESP32 | `MAIN_EXECUTOR_CODE.ino/.cpp/.h`, `pointsRun.ino`; FastAccelStepper, sonar/servo, HX711, Air780 | Motion targets, local obstacle protection, route state, load/gas triggers, SMS worker |
 | Android | `Garby_MobileApp/app/`; Compose, Firebase Auth/RTDB, FCM receiver | Dashboard, freshness, readiness, correlated operator return intent |
 | External sensor board | Firmware not supplied; sensor UART into Pi | Bin-fill ultrasonic and MQ readings; these are telemetry, not path sonar |
 | External services | Firebase project/configuration, deployed rules, SIM/network, optional push sender | Must be verified against the actual deployment |
@@ -62,7 +62,7 @@ bench producer. It does not validate the production raw-scan geometry.
 
 ### Obstacle stops and permanent waits
 
-In `NAPHTALI_CODE_V2.cpp`, `haltAndWait()` used a fixed decision about whether
+In `MAIN_EXECUTOR_CODE.cpp`, `haltAndWait()` used a fixed decision about whether
 local sonar clearance was required and counted cached readings repeatedly.
 Bad echoes did not reliably break consecutive-clear evidence. The 8000 µs echo
 window also made targets beyond about 1.4 m unavailable, so removing an obstacle
@@ -109,6 +109,9 @@ A GO after a stale gap could reuse an old confirmation streak.
 Both `moveTo()` results now determine acceptance; a rejection stops both.
 Target start no longer depends on immediate running-state propagation. STOP
 ends its receive batch, and freshness expiration resets GO confirmation.
+The continued review also found that queued GO lines in the following batch
+could count twice immediately. Confirmations now require at least 80 ms between
+them. Overflow or non-printable UART data latches STOP before further commands.
 Outbound completion is explicit and globally tracked. A failed route cannot be
 cleared by GO or an app retry, replayed, or treated as a known return position.
 
@@ -116,6 +119,20 @@ Calibrated route distances/signs and motor speeds/trim were preserved because
 their physical meaning cannot be inferred from function names. FastAccelStepper
 controls pulses without encoders: lost steps, slip, torque, driver setup, and
 mechanical direction cannot be proved by these software tests.
+
+### Load-cell stalls and unavailable readings
+
+The converter was read and tared in boot/IDLE code. A stalled HX711 could delay
+controller readiness or control polling; invalid values could contaminate the
+load filter, and old cached weight could continue to look current.
+
+A background worker now owns converter I/O. It retries a five-sample tare and
+publishes weight only after calibration succeeds. Valid readings must be finite,
+within 20 kg, and less than one second old. Invalid/stale readings clear the
+filter and confirmation count. Two new samples recover triggering after an
+outage. An unavailable weight is sent as `-1`, published with zero freshness,
+and shown as unavailable by Android. Boot with an empty bin and verify the
+scale calibration/range on hardware.
 
 ### BLE stability and path integrity
 
@@ -141,6 +158,27 @@ with throttling; reconnect retries remain tolerant while the robot is stationary
 Real disconnect causes still require reason codes, radio observations, and
 supply measurements during servo/motor loads.
 
+The second review found another connection failure path: discovery passed only
+an address to BleakClient, triggering implicit scanning under a short connection
+deadline. Notification setup had only 3 s, and the bridge's 10 s initial silence
+watchdog could interrupt setup. The Pi now passes the scanned device, uses
+12/30/8 s discovery/connection/subscription deadlines, validates GATT properties,
+and reports connected only after an acknowledged readiness write. BlueZ
+StartNotify is explicit for Bleak 3.0.0/3.0.1 compatibility. Failed setup,
+shutdown, persistent write errors, and callbacks from old sessions have bounded
+cleanup and cannot leave false readiness or block reconnect.
+
+The bridge now allows 45 s initial setup before the first valid write while
+retaining its independent 850 ms path STOP watchdog and 10 s established-link
+silence limit. Advertising recovery, explicit scan response, calmer advertising
+intervals, and delayed connection tuning reduce avoidable setup interference.
+Notifications fit the default 20-byte payload with Pi reassembly, so correlated
+return outcomes and long status lines cannot depend on MTU negotiation. Periodic
+MCU state queries recover missing readiness. The bench producer shares these
+helpers and the bounded mailbox. The standalone probe and troubleshooting steps
+are in [BLE connection guide](BLE_CONNECTION_GUIDE.md). These are source-backed
+failure paths; the particular radio failure still requires Pi/ESP32 logs.
+
 ### Pi sensing and deployment
 
 The ROS subscription now holds only the latest scan. Scan processing and status
@@ -150,8 +188,16 @@ blocks both directions. Invalid yaw configuration can log safely during startup.
 An explicitly missing LiDAR device cannot silently select the sensor board.
 Production GUI safety bypasses remain disabled even in IDLE.
 
+Production, the bench producer, and the connection probe now share an OS lock,
+so they cannot fight over the same bridge. The LiDAR launcher owns a dedicated
+process group and cleans up its wrapper/children on failure, restart, or exit.
+The old host-wide process killing, GPIO cleanup, ROS daemon stopping, and DDS
+file deletion were removed. A configured LiDAR port cannot resolve to the
+sensor UART. Existing unrelated ROS jobs are outside GARBY's process ownership.
+
 The new read-only preflight checks ROS/Python dependencies, the YDLIDAR overlay,
 distinct accessible serial devices, and optional Firebase configuration.
+It also validates BLE UUID overrides and checks Linux BlueZ adapter power.
 The launcher/service source both ROS and the workspace overlay. Those checks
 must run on the Pi; the local Windows host does not establish Pi runtime readiness.
 
@@ -186,7 +232,8 @@ sizes, Android results, and tool versions. The verification command executes:
   ROS/BLE/Firebase adapters replaced.
 - Native C++ harnesses that include the actual firmware source, including a
   connected bridge/controller UART flow. These check obstacle recovery and BLE
-  reconnect recovery, not merely matching constants or copied algorithms.
+  reconnect recovery, the complete outbound/return route, and a subsequent
+  trigger cycle, not merely matching constants or copied algorithms.
 - Structural/audit checks, both ESP32 builds with installed board libraries,
   Android unit tests, debug/release builds, and lint.
 

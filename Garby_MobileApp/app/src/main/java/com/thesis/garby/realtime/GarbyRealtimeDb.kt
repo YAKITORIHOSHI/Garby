@@ -145,7 +145,7 @@ object GarbyRealtimeDb {
             ?: 0L
         val isOfflineSentinel = when (sensorKey) {
             SensorKey.Level -> rawVal >= 999.0
-            SensorKey.Weight -> false
+            SensorKey.Weight -> rawVal < 0.0
             SensorKey.Mq135, SensorKey.Mq137, SensorKey.Mq4 -> rawVal < 0.0
         }
         val updatedAt = if (isOfflineSentinel) 0L else rawUpdatedAt
@@ -205,10 +205,8 @@ object GarbyRealtimeDb {
             val legacy = legacySnapshot?.let {
                 extractReadingFromSnapshot(it, sensorKey)
             }
-            // During a rolling deployment both paths may exist. Prefer the
-            // newest timestamp, with the device path winning an equal/missing
-            // timestamp tie. This prevents an older compatibility copy from
-            // overriding fresh device telemetry.
+            // A present device record owns the reading, including unavailable
+            // sentinels. Legacy snapshots are retained only while it is absent.
             val reading = when {
                 primary == null -> legacy
                 legacy == null -> primary
@@ -255,27 +253,59 @@ object GarbyRealtimeDb {
                 trySend(event)
             }
 
+            // The device schema is authoritative when present (including invalid
+            // or unavailable values). Only absent records subscribe to legacy.
+            var legacyAttached = false
+            var closed = false
+            var legacyListener: ValueEventListener? = null
+
+            fun detachLegacy() {
+                legacyAttached = false
+                legacyListener?.let { legacyRef.removeEventListener(it) }
+                legacyListener = null
+                legacySnapshot = null
+                legacyLoaded = false
+            }
+
+            fun attachLegacy() {
+                if (legacyAttached || closed) return
+                legacyAttached = true
+                legacyLoaded = false
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        synchronized(snapshotLock) {
+                            if (closed || legacyListener !== this) return
+                            legacySnapshot = snapshot
+                            legacyLoaded = true
+                            publishSnapshots()
+                        }
+                    }
+                    override fun onCancelled(error: DatabaseError) {
+                        synchronized(snapshotLock) {
+                            if (!closed && legacyListener === this) {
+                                close(RtdbCancelledException(error.code, error.message))
+                            }
+                        }
+                    }
+                }
+                legacyListener = listener
+                legacyRef.addValueEventListener(listener)
+            }
+
             val primaryListener = object : ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     synchronized(snapshotLock) {
+                        if (closed) return
                         primarySnapshot = snapshot
                         primaryLoaded = true
+                        if (snapshot.exists()) {
+                            detachLegacy()
+                            legacyLoaded = true // no fallback is needed
+                        } else {
+                            attachLegacy()
+                        }
+                        publishSnapshots()
                     }
-                    publishSnapshots()
-                }
-
-                override fun onCancelled(error: DatabaseError) {
-                    close(RtdbCancelledException(error.code, error.message))
-                }
-            }
-
-            val legacyListener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    synchronized(snapshotLock) {
-                        legacySnapshot = snapshot
-                        legacyLoaded = true
-                    }
-                    publishSnapshots()
                 }
 
                 override fun onCancelled(error: DatabaseError) {
@@ -284,10 +314,12 @@ object GarbyRealtimeDb {
             }
 
             primaryRef.addValueEventListener(primaryListener)
-            legacyRef.addValueEventListener(legacyListener)
             awaitClose {
-                primaryRef.removeEventListener(primaryListener)
-                legacyRef.removeEventListener(legacyListener)
+                synchronized(snapshotLock) {
+                    closed = true
+                    primaryRef.removeEventListener(primaryListener)
+                    detachLegacy()
+                }
             }
         }
             .onStart { emit(SensorEvent.Loading) }

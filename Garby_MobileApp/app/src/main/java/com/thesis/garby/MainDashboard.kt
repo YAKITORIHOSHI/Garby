@@ -32,6 +32,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +76,12 @@ fun MainDashboard(
     onSignOut: () -> Unit = {},
     deviceViewModel: DeviceViewModel = viewModel()
 ) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, deviceViewModel) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            deviceViewModel.observeWhileVisible()
+        }
+    }
     val state by deviceViewModel.uiState.collectAsState()
 
     Scaffold(
@@ -273,6 +283,12 @@ private fun MetricSensorPanel(
     val reading = state.reading
     when {
         state.isLoading -> LoadingPlaceholder(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(125.dp)
+        )
+        reading != null && reading.value < 0f -> ErrorPlaceholder(
+            message = "$label unavailable",
             modifier = Modifier
                 .fillMaxWidth()
                 .height(125.dp)

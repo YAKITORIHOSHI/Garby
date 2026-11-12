@@ -1,0 +1,114 @@
+ESP32-S3 BLE bridge with calibrated MPU heading (current: NAV-20261111, 2026-11-11)
+
+Design, calibration and bench steps: docs/navigation-2026-11-11.md (system root).
+Flash this sketch and MAIN_EXECUTOR_CODE together, and deploy the whole RasPi/
+directory: the bridge<->executor UART lines changed (M without offset, new W,
+GO:SLOW, STOP:TURN; no N: taps). An old executor rejects the new M lines and an
+old Pi sends no T= turn clearance (turns then hold STOP:TURN_UNKNOWN).
+
+Source target: ESP32-S3 Dev Module (esp32:esp32:esp32s3), 8 MB flash, PSRAM off.
+This does not identify a currently selected/connected board. Keep NimBLE-Arduino;
+Wire is built into the ESP32 core.
+
+Wire while unpowered; use GPIO labels, not physical header positions:
+  MPU VCC -> compatible 3.3V breakout supply; GND -> S3 GND
+  SDA -> S3 GPIO8; SCL -> S3 GPIO9; pull-ups must be at 3.3V
+  AD0 -> GND (0x68); 0x69 also detected; INT/XDA/XCL unused
+  S3 GPIO17 TX -> main ESP32 GPIO18 RX
+  S3 GPIO18 RX <- main ESP32 GPIO19 TX; common ground; 115200 baud
+  S3 GPIO19/20 remain available for native USB.
+
+BOOT: keep the robot still and level, MPU +Z up, for about 3 s. 200 fresh samples:
+gravity, spread and offset are checked; the gyro bias vector and the gravity
+direction are stored. Yaw rate = calibrated gyro vector . measured up axis, times
+GYRO_SCALE (MpuHeading.h; 1.0 until measured, see calibration step 2). A failed
+calibration holds STOP:MPU and retries by itself.
+
+HEADING: one continuous reference from boot, streamed to the executor every 20 ms:
+  M,<seq>,<heading cdeg>,<rate cdeg/s>,<epoch>,<allow>*<xor>
+<epoch> changes only when the reference does (boot, recovery after more than
+500 ms blind, or R on this console while stopped). Segment notices never re-zero it.
+Without a valid heading it sends MPU:FAULT every 200 ms and every path packet
+becomes STOP:MPU. A single bad read is skipped; 100 ms without good data faults.
+Bias is re-measured while the wheels are held (STOP latched >= 1 s, or the executor
+reporting IDLE / OUTBOUND COMPLETE / ROUTE FAULT >= 1 s; never in a turn), at most
+0.2 deg/s per 1.5 s window and 1 deg/s from boot.
+
+LIDAR: per new acquisition A of an S frame the bridge (a) sets the <allow> bits
+from nearest clearance: CF or F <= 60 cm or a wall median <= 22 cm -> no steering;
+a side with CL, L, FL or BL (CR, R, FR, BR) <= 40 cm -> no steering toward it, and
+(b) forwards the wall line fit to the executor with its total age:
+  W,<acq>,<age ms>,<flags>,<left mm>,<right mm>,<heading cdeg>*<xor>
+Malformed or out-of-order frames withdraw permission; a repeated A refreshes
+nothing. STOP, operator stop and turns withdraw permission. P frames: F=W gives
+GO:SLOW; T= must be C between [TURN:START] and [TURN:END] (STOP:TURN otherwise).
+
+CONSOLE (USB 115200): H prints heading, rate, bias, tilt and epoch (yaw-sign bench
+check: turn the robot left by hand, heading must rise). R requests a new reference
+while stopped. The Pi log gets [BRIDGE DIAG ...] and, 2 s later,
+[BRIDGE MPU VALID|INVALID bias= tilt= refresh= epoch= walls=].
+
+Tunables: SteeringAssist.h (permission, timing), MpuHeading.h (MPU). Centring
+tunables are in the executor's HeadingControl.h.
+
+Earlier sections below are dated history. The tap/centering design they describe
+was replaced on 2026-11-11.
+
+References:
+https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Datasheet.pdf
+https://cdn.sparkfun.com/datasheets/Sensors/Accelerometers/RM-MPU-6000A.pdf
+https://github.com/gin66/FastAccelStepper
+
+2026-10-30 BLE/manual-start repair:
+New START commands rejected by UART backpressure now report UART_BUSY
+to the Pi. START STATUS:<id> (inside square brackets) only queries the
+executor result; it never repeats a START. If a query cannot cross the
+transport, it does not invent a rejection of an already accepted start.
+The Pi repeats only result queries, within its existing five-second deadline.
+Executor MOTION diagnostics expose MPU/path/local-sonar holds on the Pi.
+Upload both updated sketches and restart the updated RasPi runtime together.
+
+2026-10-30 motor/BLE follow-up:
+Firmware ID MOTORBLE-20261030 is sent after the Pi/controller handshake, along
+with the boot reset reason. Serial logs also identify reset reason, heap,
+negotiated BLE parameters, disconnect reason/age and notification queue failures.
+NimBLE 2.5.1 notifications now use the explicit data-and-connection overload:
+the no-data overload schedules a future characteristic read, which could read
+the final fragment repeatedly after the fragmentation loop overwrote the value.
+This preserves whole START/return outcomes and status lines at the default MTU.
+TX power uses an explicit 9 dBm value; the ESP-IDF ESP_PWR_LVL_P9 enum was numeric
+12 and does not match NimBLE's dBm-based setPower() argument.
+These corrections do not establish a physical disconnect cause. Watchdog,
+stale-scan, obstacle, UART and MPU holds remain active. A source/build pass does
+not update a powered standalone board; upload the new source to deploy it.
+
+2026-10-30 steering stability (STRAIGHT-20261030):
+Deploy the complete updated Pi directory with this sketch, MpuHeading.h and
+SteeringAssist.h. The current executor source is unchanged by this revision;
+retain its matching heading/operator/SMS firmware. Numeric S frames now require
+nearest-object CF/CL/CR clearance and independent acquisition A. Old numeric
+frames suppress nudging. Repeated scans cannot earn confirmation or refresh age.
+Gyro-rate prediction only ends/suppresses a tap; it cannot initiate reversal.
+Hallway targets need three agreeing independent scans over >=400 ms, change at
+<=2 deg/s and remain capped +/-4 deg. Obstacle vetoes bypass target smoothing.
+Keep the 95 cm Pi front/diagonal stop envelope: some narrow corridors legitimately
+stop before centering can run. See docs/nudging-2026-10-30.md from the system
+root for evidence, measured tuning and physical limitations. No upload or floor
+acceptance is implied by a host test or target build.
+
+2026-11-04 link and heading resilience (LINKFIX-20261104C):
+An MPU fault or failed boot calibration holds STOP:MPU, then recalibrates while still and
+resumes with no console or reset. [BRIDGE DIAG] mpu=<now>/<last fault> names the cause.
+[MCU ALIVE] is the controller's recovery ping during a route and keeps the heading;
+[MCU READY] means the controller restarted and drops it. About 2 s after each Pi
+connection, MPU fault or link-parameter change the bridge sends one [BRIDGE DIAG ...]
+line that appears in the Pi log. fw= shows what is really flashed. reset=BROWNOUT or a
+small up_s after a drop points at supply, not radio; reset=SOFTWARE is the monitor's
+Reboot button. See docs/ble-nudge-review-2026-11-04.md.
+
+2026-11-11 navigation redesign (NAV-20261111):
+Replaces the N: tap steering and the per-segment FRONT reference with a continuous
+heading stream and forwarded wall fits; adds tilt compensation, GYRO_SCALE, bias
+refresh while held, the spin-sweep gate, GO:SLOW and the H console command. Source
+implemented, host tested (tools/firmware_tests) and compiled for ESP32-S3; not
+uploaded or floor tested. See docs/navigation-2026-11-11.md.

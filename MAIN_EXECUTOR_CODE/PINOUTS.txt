@@ -1,0 +1,126 @@
+GARBY PINOUTS AND WIRING REFERENCE
+================================
+Based on the active source definitions, 2026-10-29.
+
+Main sketch: MAIN_EXECUTOR_CODE.ino / .h / .cpp
+Bridge sketch: BLE_Receiver-Final/BLE_Receiver-Final.ino and MpuHeading.h
+Pi runtime: RasPi/final_w_serial.py and garby-bridge.env.example
+
+All ESP32 numbers below are GPIO labels, NOT physical header pin numbers.
+The main ESP32 and the ESP32-S3 bridge are separate boards. A GPIO number on
+one board is unrelated to the same GPIO number on the other board.
+This reference describes the code configuration, not verified installed wiring.
+
+1. MAIN EXECUTOR — ESP32
+-----------------------
+Function / code name      Main GPIO   Connects to
+Motor 1 STEP / STEP_PIN1  21 output   Motor driver 1 STEP/PUL signal input
+Motor 1 DIR / DIR_PIN1    22 output   Motor driver 1 DIR signal input
+Motor 2 STEP / STEP_PIN2  13 output   Motor driver 2 STEP/PUL signal input
+Motor 2 DIR / DIR_PIN2    12 output   Motor driver 2 DIR signal input
+Bridge RX / ESP_RX       18 input    Bridge ESP32-S3 GPIO17 TX
+Bridge TX / ESP_TX       19 output   Bridge ESP32-S3 GPIO18 RX
+Sonar servo / SERVO_PIN  23 output   Servo signal/control lead
+Sonar trigger / TRIG_PIN  5 output   Obstacle ultrasonic sensor TRIG
+Sonar echo / ECHO_PIN     4 input    Obstacle ultrasonic sensor ECHO
+Load data / LOADCELL_DOUT_PIN
+                         33 input    HX711 DT/DOUT
+Load clock / LOADCELL_SCK_PIN
+                         32 output   HX711 SCK/PD_SCK
+Buzzer / BUZZER_PIN       25 output   Buzzer input or its driver control input
+Modem RX / AIR_RX         16 input    Air780E module TX (through suitable interface)
+Modem TX / AIR_TX         17 output   Air780E module RX (through suitable interface)
+Modem power key / PWRKEY_PIN
+                         26 output   Air780E PWRKEY control interface
+GND                      GND         Common signal ground for connected interfaces
+
+Motor assignment:
+- Direction polarity is set by two constants in MAIN_EXECUTOR_CODE.h, not by these pins.
+  Since 2026-11-09, motor 1 counts up on DIR LOW and motor 2 counts up on DIR HIGH.
+  This supersedes the November 7 true/false pair after the owner confirmed that its
+  forward leg still drove backward. GPIO22 rests LOW and GPIO12 HIGH after setup.
+- Motor 1 = left / motor 2 = right remains a model assumption, not established by
+  the latest forward-only floor report. Verify each wheel and named turns/nudges
+  separately with wheels lifted before floor operation.
+  Connector placement and coil colours cannot be determined from this source.
+- The firmware defines no motor-driver ENABLE pin and no encoder inputs.
+- STEP/DIR are driver control signals, not connections to motor windings.
+  Match driver input topology (including +/- terminals) to its own manual.
+
+Servo settings: 50 Hz, attach pulse range 500–2500 microseconds.
+Forward view = 70 degrees; configured left = 140, right = 0.
+These are servo commands; verify physical bracket orientation and travel.
+Since 2026-11-12 the servo sweeps (SonarSweep.h): forward/+25/forward/-25 while
+driving, forward between +-25/+-50/+-70 while stopped in a route, forward only while
+spinning, idle or parked. Sweep limits are SCAN_RIGHT..SCAN_LEFT; a true +-90 degree
+sweep needs the horn re-mounted so straight ahead is command 90.
+
+HX711: connect the load cell to the amplifier's E+/E-/A+/A- terminals according
+to the actual cell datasheet. Wire colours, bridge polarity and B-channel usage
+are not specified by this project; the cell does not connect directly to GPIO.
+
+Air780E UART: 115200 baud, 8 data bits, no parity, 1 stop bit.
+Main-to-bridge UART: 115200 baud, 8 data bits, no parity, 1 stop bit.
+Main debug Serial: 115200 baud; no custom debug RX/TX pins assigned here.
+
+2. BLE / HEADING BRIDGE — ESP32-S3
+--------------------------------
+Function / code name      S3 GPIO     Connects to
+Executor RX / ESP_RX      18 input    Main ESP32 GPIO19 TX
+Executor TX / ESP_TX      17 output   Main ESP32 GPIO18 RX
+MPU SDA / MPU_SDA_PIN      8          MPU6050 SDA (I2C data)
+MPU SCL / MPU_SCL_PIN      9          MPU6050 SCL (I2C clock)
+GND                      GND         Main ESP32 GND and MPU6050 GND
+MPU supply               3.3 V       Compatible MPU breakout VCC
+
+MPU details from bridge wiring notes / implementation:
+- I2C pull-ups must be to 3.3 V.
+- AD0 to GND selects 0x68; the code also probes address 0x69.
+- MPU INT, XDA and XCL are unused by this firmware.
+- Mount +Z up and keep the chassis still and level for boot calibration.
+- S3 GPIO19 and GPIO20 are left available for native USB.
+- Bridge debug Serial uses 115200 baud.
+
+Cross-board wiring, written explicitly to avoid RX/TX confusion:
+  MAIN GPIO19 TX  ---------->  S3 GPIO18 RX
+  MAIN GPIO18 RX  <----------  S3 GPIO17 TX
+  MAIN GND       -----------  S3 GND
+Do not connect TX to TX or RX to RX.
+
+3. RASPBERRY PI, LIDAR AND SENSOR BOARD
+-------------------------------------
+Pi <-> S3 bridge: Bluetooth LE; there are no Pi-to-S3 UART wires in this design.
+
+LiDAR -> Pi: serial device selected by GARBY_LIDAR_PORT.
+  Example configuration uses a /dev/serial/by-id/... device path.
+  GARBY_LIDAR_BAUDRATE defaults to 115200 in the supplied configuration.
+  The code does not define a Pi GPIO pinout for the LiDAR.
+  Follow the installed LiDAR adapter/board wiring, then set its actual device.
+
+External bin/gas sensor board -> Pi: separate serial device selected by
+  GARBY_SENSOR_SERIAL_PORT; GARBY_SENSOR_SERIAL_BAUD defaults to 9600.
+  The example names /dev/ttyAMA0, but that is a device setting, not proof of
+  the installed Pi header wiring. Exact header pins and UART routing depend
+  on the Pi model/configuration and are not specified in this source.
+  This board supplies bin ultrasonic, MQ4, MQ137 and MQ135 readings.
+  Its firmware/pin definitions are not supplied here, so its sensor GPIOs
+  cannot be documented accurately from this repository.
+
+The main controller's obstacle sonar on GPIO5/GPIO4 is distinct from the bin
+ultrasonic reading delivered through the Pi's sensor serial connection.
+LiDAR and the sensor board must use distinct serial devices.
+
+4. POWER AND HARDWARE DETAILS NOT DEFINED IN CODE
+-----------------------------------------------
+- Match signal levels to each board/module. In particular, condition a sonar's
+  ECHO if its output exceeds the ESP32 input rating; do not assume direct wiring.
+- Supply motors, servo and modem from appropriately rated power circuitry.
+  GPIOs are control signals, not power outputs for these loads.
+- Verify the Air780E breakout's UART levels and PWRKEY interface before wiring;
+  the code's GPIO assignment does not specify its required interface circuit.
+- Main GPIO12 and GPIO5 need board-specific boot-strapping checks.
+- Driver model, supply voltage/current, enable wiring, load-cell wire colours,
+  connector positions, Pi header assignments and emergency-stop wiring are
+  not defined by the provided source. Consult the actual hardware documents.
+- Connect with power removed. Confirm common grounds, levels, motor direction,
+  servo direction and echo behavior before an on-floor run.

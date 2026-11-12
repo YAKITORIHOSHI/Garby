@@ -1,6 +1,6 @@
 # GARBY Mobile App - Validation Results
 
-Historical Android validation. Use the [2026-10-02 coordinated validation](../VALIDATION_RESULTS.md)
+Historical Android validation. Use the [2026-10-04 coordinated validation](../VALIDATION_RESULTS.md)
 for current test/build/lint results. The older toolchain limitations below do
 not describe the current verified checkout.
 

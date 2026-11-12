@@ -53,3 +53,6 @@ firebase.json
 
 # Exported firmware and local verification artifacts
 /artifacts/
+
+# Firebase Admin credentials read by the Pi bridge (RasPi/firebase_support.py): never published
+RasPi/Firebase/

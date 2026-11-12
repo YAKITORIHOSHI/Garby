@@ -1,0 +1,9 @@
+{
+  "include": ["RasPi", "tools"],
+  "exclude": ["**/__pycache__", "**/build", "RasPi/artifacts"],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportUndefinedVariable": "error",
+  "pythonVersion": "3.12"
+}

@@ -20,8 +20,12 @@ def main():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('#pragma once\n#include "Arduino.h"\n')
         environment = os.environ.copy()
-        if os.name == "nt":
+        compiler = os.environ.get("CXX") or shutil.which("g++")
+        use_msvc = False
+        if os.name == "nt" and not compiler:
             vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
+            if not vswhere.exists():
+                raise SystemExit("Set CXX to a working g++/clang++ compiler, or install MSVC C++ Build Tools")
             installation = subprocess.check_output([str(vswhere), "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], text=True).strip()
             if not installation:
                 raise SystemExit("MSVC C++ Build Tools are required for host firmware tests")
@@ -34,13 +38,16 @@ def main():
                     key, value = line.split("=", 1)
                     environment[key] = value
             compiler = shutil.which("cl.exe", path=environment.get("Path", environment.get("PATH")))
-        else:
+            use_msvc = True
+        elif not compiler:
             compiler = shutil.which("g++") or shutil.which("clang++")
         if not compiler:
             raise SystemExit("No host C++ compiler available")
+        compiler_path = shutil.which(compiler) or compiler
+        environment["PATH"] = str(Path(compiler_path).resolve().parent) + os.pathsep + environment.get("PATH", "")
         for source in sorted(TESTS.glob("test_*.cpp")):
             executable = build / (source.stem + (".exe" if os.name == "nt" else ""))
-            if os.name == "nt":
+            if use_msvc:
                 command = [compiler, "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/W3", f"/I{TESTS / 'stubs'}", f"/I{build}", str(source), f"/Fe:{executable}", f"/Fo:{build / (source.stem + '.obj')}"]
             else:
                 command = [compiler, "-std=c++17", "-I", str(TESTS / "stubs"), "-I", str(build), str(source), "-o", str(executable)]

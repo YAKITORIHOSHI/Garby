@@ -2,7 +2,9 @@ package com.thesis.garby.realtime
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -51,21 +53,25 @@ class DeviceViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(DeviceUiState())
     val uiState: StateFlow<DeviceUiState> = _uiState.asStateFlow()
 
-    init {
-        collectConnection()
+    /** Called inside repeatOnLifecycle(STARTED); cancellation detaches all listeners. */
+    suspend fun observeWhileVisible(): Unit = coroutineScope {
+        // Never show cached pre-background data as ready before fresh callbacks.
+        _uiState.value = DeviceUiState()
+        collectConnection(this)
         // Stagger subscription times so container hydration (and the first
         // compose burst) is spread out instead of hitting one frame at once.
-        collectSensor(SensorKey.Level, startupDelayMs = 0L)
-        collectSensor(SensorKey.Weight, startupDelayMs = 80L)
-        collectSensor(SensorKey.Mq135, startupDelayMs = 160L)
-        collectSensor(SensorKey.Mq137, startupDelayMs = 240L)
-        collectSensor(SensorKey.Mq4, startupDelayMs = 320L)
-        collectDeviceStatus()
-        startFreshnessTicker()
+        collectSensor(this, SensorKey.Level, startupDelayMs = 0L)
+        collectSensor(this, SensorKey.Weight, startupDelayMs = 80L)
+        collectSensor(this, SensorKey.Mq135, startupDelayMs = 160L)
+        collectSensor(this, SensorKey.Mq137, startupDelayMs = 240L)
+        collectSensor(this, SensorKey.Mq4, startupDelayMs = 320L)
+        collectDeviceStatus(this)
+        startFreshnessTicker(this)
+        awaitCancellation()
     }
 
-    private fun collectConnection() {
-        viewModelScope.launch(Dispatchers.Default) {
+    private fun collectConnection(scope: CoroutineScope) {
+        scope.launch(Dispatchers.Default) {
             GarbyRealtimeDb.connectionState
                 .catch { error ->
                     if (error is CancellationException) throw error
@@ -90,8 +96,8 @@ class DeviceViewModel : ViewModel() {
         }
     }
 
-    private fun collectSensor(key: SensorKey, startupDelayMs: Long = 0L) {
-        viewModelScope.launch(Dispatchers.Default) {
+    private fun collectSensor(scope: CoroutineScope, key: SensorKey, startupDelayMs: Long = 0L) {
+        scope.launch(Dispatchers.Default) {
             if (startupDelayMs > 0L) delay(startupDelayMs.milliseconds)
             GarbyRealtimeDb.sensorValue(deviceId, key).collect { state ->
                 when (state) {
@@ -123,8 +129,8 @@ class DeviceViewModel : ViewModel() {
         }
     }
 
-    private fun collectDeviceStatus() {
-        viewModelScope.launch(Dispatchers.Default) {
+    private fun collectDeviceStatus(scope: CoroutineScope) {
+        scope.launch(Dispatchers.Default) {
             GarbyRealtimeDb.deviceStatus(deviceId)
                 .catch { error ->
                     if (error is CancellationException) throw error
@@ -156,8 +162,8 @@ class DeviceViewModel : ViewModel() {
         }
     }
 
-    private fun startFreshnessTicker() {
-        viewModelScope.launch(Dispatchers.Default) {
+    private fun startFreshnessTicker(scope: CoroutineScope) {
+        scope.launch(Dispatchers.Default) {
             while (isActive) {
                 delay(RtdbConstants.FRESHNESS_TICK_MS.milliseconds)
                 val now = System.currentTimeMillis()

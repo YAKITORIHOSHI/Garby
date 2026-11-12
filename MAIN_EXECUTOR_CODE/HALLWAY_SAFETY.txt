@@ -1,0 +1,46 @@
+Hallway seats and motion reliability — 2026-10-29
+
+Repairs in this change:
+- Clear-sonar confirmation and the median filter restart after invalid readings
+  or a sample gap longer than 180 ms. Old evidence cannot release an obstacle.
+- Straight, adjustment and turn loops check each wheel's software step counter.
+  A running counter with no change for 2 seconds stops both motors and latches
+  ROUTE FAULT. Steering retargets do not refresh this timeout. Stops/waits and
+  legitimate resumptions restart monitoring; a completed wheel is not a stall.
+- Existing STOP priority, path expiry, MPU heading reference preservation during
+  obstacle waits, and remaining-route-target recovery remain in place.
+
+Handling seats with the existing route:
+LiDAR checks the route and can veto MPU steering. The servo keeps the ultrasonic
+sensor looking ahead while moving, providing an independent close-object stop.
+MPU maintains the straight-segment heading; it does not measure free space.
+Keep these roles separate: turning the sonar away during travel removes its
+forward coverage, and steering toward a single long side range does not prove
+that the robot's whole body fits between a chair and the wall.
+
+For now the robot stops, continues sampling, reports/beeps while blocked and
+resumes the remaining target after clearance. A stationary chair can therefore
+keep it waiting indefinitely by design. This is not an automatic chair bypass.
+Existing LiDAR radial thresholds can also stop in narrow halls; do not lower
+these solely to get past chairs without measuring body clearance and braking.
+
+Automatic bypass needs overall body width/length (including projections), sensor
+heights/orientation, minimum available gap, measured braking distance and a way
+of recovering route position after the detour. A proposed next design is:
+stop -> stationary servo sonar sweep + fresh LiDAR body-clearance assessment ->
+bounded, MPU-monitored maneuver -> verify corridor and route re-entry.
+If measurements are unavailable or neither side fits, remain stopped and report
+blocked. A scan's apparent gap alone must not authorize a turn or blind reverse.
+No bypass behavior or new scan/maneuver protocol was implemented in this change.
+
+Limits and acceptance:
+The new watchdog detects a stuck software pulse executor, not a mechanically
+stalled wheel that still receives pulses. There are no wheel encoders here.
+MPU yaw alone cannot prove forward travel or correct step loss. Chairs' legs,
+seat overhangs and surfaces outside the LiDAR/sonar sensing height can be missed.
+Verify sensor placement physically; no code-only change eliminates those gaps.
+Test wheels lifted first: each-wheel executor fault, STOP during turns, link
+loss, and sonar dropout. Then supervise chair/leg/overhang tests at low speed,
+measure loaded stopping distance, and verify route completion after clearance.
+No firmware was flashed and no physical motion was tested in this session.
+A latched motion fault needs supervised recovery from a known route position.

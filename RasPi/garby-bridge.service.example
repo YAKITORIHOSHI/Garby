@@ -1,19 +1,24 @@
 [Unit]
 Description=GARBY LiDAR, BLE, sensor, and Firebase bridge
-After=bluetooth.target
-Wants=bluetooth.target
+After=bluetooth.service network-online.target
+Wants=bluetooth.service network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=garby
+# video: vcgencmd throttle flags via /dev/vcio. dialout: LiDAR and sensor UART.
+SupplementaryGroups=video dialout
 WorkingDirectory=/home/garby/GARBY/RasPi
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/etc/default/garby-bridge
+EnvironmentFile=/etc/default/garby-bridge
+ExecStartPre=/bin/bash /home/garby/GARBY/RasPi/run_bridge.sh --check-runtime
 ExecStart=/bin/bash /home/garby/GARBY/RasPi/run_bridge.sh --headless
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStopSec=10
 KillSignal=SIGTERM
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

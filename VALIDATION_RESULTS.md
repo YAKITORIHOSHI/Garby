@@ -1,19 +1,37 @@
-# GARBY validation — 2026-10-02
+# GARBY validation — 2026-10-04
+
+Latest scoped evidence: [2026-11-12 holds, sonar sweep, prediction](artifacts/obstacle-sweep-hold-2026-11-12/validation.md):
+new executor tests failed 5/5 on the unchanged firmware (the stuck-forever paths, the idle servo)
+and pass after; a self-review found and fixed 5 more defects (each proven); firmware host checks
+556 PASS; Pi 442 OK with Tk on a private Xvfb (none skipped); ESP32 executor target build passes
+(bridge source unchanged); a real-LiDAR isolated bench recording replays with no false holds and
+is now a unit test. Not uploaded or floor tested.
+
+Earlier scoped evidence: [2026-11-11 navigation redesign](artifacts/navigation-2026-11-11/validation.md):
+Pi 396 tests OK (28 Tk skips, run separately on Xvfb: 53 OK), firmware host checks all
+pass, source sanity pass, ESP32-S3 and ESP32 target builds pass. Not uploaded.
+
+Earlier scoped evidence: [2026-11-09 BLE discovery investigation](artifacts/ble-establish-2026-11-09/validation.md).
+373 Python cases ran: 345 passed, 28 Tk display skips. Source sanity passed.
+The Pi diagnostic correction preserves matching/readiness; firmware is unchanged.
+Owner-reported USB success/battery failure narrows standalone power/startup; physical
+repair and acceptance remain pending. No hardware upload or service restart.
+The counts below remain the historical 2026-10-04 coordinated repair results.
 
 This report covers the coordinated runtime repair. Earlier reports are historical.
 Results below are from this checkout; hardware was not connected for acceptance.
 
 | Check | Result |
 | --- | --- |
-| Pi helpers and production runtime tests | 50 tests passed: 32 helper tests, 18 production-runtime tests |
-| Executable firmware behavior tests | 35 assertions passed across bridge, controller, and connected-system harnesses |
-| ESP32 main target compilation | Passed: 380218 bytes flash (29%), 26224 bytes globals (8%) |
-| ESP32 BLE bridge target compilation | Passed: 609812 bytes flash (46%), 39428 bytes globals (12%) |
+| Pi helpers, runtime, BLE, diagnostic, and bench tests | 89 tests passed |
+| Executable firmware behavior tests | 66 assertions passed: 20 bridge, 38 controller, 8 connected-system |
+| ESP32 main target compilation | Passed: 380762 bytes flash (29%), 26256 bytes globals (8%) |
+| ESP32 BLE bridge target compilation | Passed: 610660 bytes flash (46%), 39444 bytes globals (12%) |
 | Android unit tests | 18 tests passed; 0 failures/errors/skips across 6 suites |
 | Android debug and release assembly | Passed; debug APK and unsigned release APK produced |
 | Android lint | 0 errors; 24 warnings (dependency versions and resource packaging/unused resources) |
-| Source audit | 72 passed, 1 warning, 0 failed; warning requires physical route-direction verification |
-| Structural sanity | Passed: 11 C/C++ files, 18 JSON files |
+| Source audit | 75 passed, 1 warning, 0 failed; warning requires physical route-direction verification |
+| Structural sanity | Passed: 11 C/C++ files, 9 JSON files |
 | Android source quality checker | Passed: 22 Kotlin files and 3 bundled fonts |
 | Git whitespace/error check | `git diff --check` passed |
 | Physical route, braking, radio, sonar | Not tested on hardware |
@@ -41,7 +59,7 @@ Build outputs:
 
 - `artifacts/firmware/BLE_Receiver-Final/`: sketch, bootloader, partition, and merged binaries.
 - `artifacts/firmware/NAPHTALI_CODE_V2/`: sketch, bootloader, partition, and merged binaries.
-- `Garby_MobileApp/app/build/outputs/apk/debug/app-debug.apk`: 23346688 bytes.
+- `Garby_MobileApp/app/build/outputs/apk/debug/app-debug.apk`: 23346834 bytes.
 - `Garby_MobileApp/app/build/outputs/apk/release/app-release-unsigned.apk`: 3252782 bytes; production signing is not configured here.
 - Android unit XML: `Garby_MobileApp/app/build/test-results/testDebugUnitTest/`.
 - Android lint: `Garby_MobileApp/app/build/reports/lint-results-debug.html` and `.txt`.
@@ -65,6 +83,31 @@ coalescing across sequence wrap, serialized GATT writes, stale-client callbacks,
 conditional Firebase transitions, readiness publication, and return completion
 after the acceptance window. They also verify MTU-aware steering writes and
 recovery of a lost completion notification through an idempotent outcome query.
+
+The follow-up BLE suite covers nameless UUID discovery, strict address matching,
+scanned-device connection, subscription/readiness success and failure, setup
+timeouts, missing/incorrect GATT properties, old-session notification rejection,
+fragment reassembly, cancellation/shutdown cleanup, and reconnect despite a
+failed BlueZ disconnect. Diagnostic tests check phase errors and readiness-only
+writes. Bench tests check shared discovery/framing and shutdown during setup.
+Firmware tests cover advertising recovery, delayed connection tuning, 45 s setup
+grace while STOP remains active, and complete outbound/return/next-trigger cycles
+through the actual bridge/controller sources. The simulated full route does not
+establish wheel directions or physical arrival.
+
+The continued audit verifies spaced GO evidence after STOP, UART overflow/control
+character rejection, valid CRLF compatibility, and rejection of embedded carriage
+returns. Load tests cover invalid/out-of-range/stale readings, confirmation reset,
+cached-helper access without converter waits, and background tare retry/recovery.
+Pi tests cover actual host OS lock exclusion/release, serial-device collision
+rejection, unavailable-weight freshness, and cleanup of owned driver children on
+startup failure, cancellation, early exit, and parent exit. Linux/BlueZ/process
+group behavior still requires Pi acceptance; Windows host substitutes do not
+establish its deployment behavior.
+
+Full command output: `artifacts/verification-2026-10-04.log`. The standalone
+diagnostic is host-tested and CLI/syntax checked; it has not been run against a
+live Pi/ESP32 radio. Follow `BLE_CONNECTION_GUIDE.md` for that acceptance.
 
 Use `DEPLOYMENT_AND_ACCEPTANCE.md` for the remaining wheels-lifted and floor tests.
 No software-only result certifies stopping distance or real-world human safety.

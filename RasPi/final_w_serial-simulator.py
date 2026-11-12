@@ -24,18 +24,15 @@ from bridge_core import (
     lidar_status_code,
     clamp_heading_error_cm,
     side_obstacle_names,
+    CoalescingBleQueue,
 )
 
 # pyrefly: ignore [missing-import]
 from bleak import BleakScanner, BleakClient
-
-# Custom modules (optional)
-try:
-    # pyrefly: ignore [missing-import]
-    from GPIO_RESET import kill_gpio_users
-except ImportError:
-    def kill_gpio_users():
-        print("[GPIO] kill_gpio_users not available, skipping...")
+from runtime_support import SingleInstanceGuard
+from firebase_support import resolve_firebase_credentials
+from ble_support import (NotificationDecoder, configured_uuid, adapter_options,
+                         discover_robot, robot_characteristics, subscribe)
 
 # ═══ Firebase Manager ═══
 # pyrefly: ignore [missing-import]
@@ -45,9 +42,7 @@ from firebase_admin import credentials, db
 
 class FirebaseManager:
     def __init__(self):
-        cred = credentials.Certificate(
-            "/home/garby/Desktop/garby-thesis-firebase-adminsdk-fbsvc-54fb448489.json"
-        )
+        cred = credentials.Certificate(resolve_firebase_credentials())
         firebase_admin.initialize_app(cred, {
             "databaseURL": "https://garby-thesis-default-rtdb.asia-southeast1.firebasedatabase.app"
         })
@@ -123,11 +118,11 @@ class ExecutorService:
                 self.queue.task_done()
 
 # ═══ Configuration ═══
-SERVICE_UUID     = os.environ.get("GARBY_BLE_SERVICE_UUID", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
-WRITE_CHAR_UUID  = os.environ.get("GARBY_BLE_WRITE_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a8")
-NOTIFY_CHAR_UUID = os.environ.get("GARBY_BLE_NOTIFY_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a9")
-DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32")
-BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", None)
+SERVICE_UUID     = configured_uuid("GARBY_BLE_SERVICE_UUID", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+WRITE_CHAR_UUID  = configured_uuid("GARBY_BLE_WRITE_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+NOTIFY_CHAR_UUID = configured_uuid("GARBY_BLE_NOTIFY_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a9")
+DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32").strip() or "GarbyESP32"
+BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", "").strip() or None
 
 THRESHOLD_CM      = 95.0                  # front stop distance (increased from 50cm for 1.05m/s travel speed reaction time)
 BACK_THRESHOLD_CM = 35.0                  # 35 cm back threshold
@@ -146,8 +141,8 @@ latest_sensor_readings = {"ultrasonic": 999.0, "mq4": -1, "mq137": -1, "mq135": 
 sensor_readings_lock = threading.Lock()
 
 serial_stop = threading.Event()
-ble_send_queue = queue.Queue()
-ble_recv_queue = queue.Queue()
+ble_send_queue = CoalescingBleQueue(maxlen=12)
+ble_recv_queue = queue.Queue(maxsize=256)
 
 _status_requested = threading.Event()
 _robot_running = threading.Event()
@@ -246,250 +241,181 @@ def ble_notify_handler(msg: str):
     if stripped in ("[RESET]", "[IDLE]"):
         _robot_running.clear()
 
-# ═══ BLE Service with urgent direct write ═══
+# ═══ BLE bench service ═══
+
 class BleService(threading.Thread):
-    RETRY_DELAY     = 3.0
-    SCAN_TIMEOUT    = 5.0
-    CONNECT_TIMEOUT = 6.0
-    DRAIN_INTERVAL  = 0.1
+    """Manual bench transport; one task owns discovery, GATT, and reconnect."""
+    RETRY_DELAY = 3.0
+    SCAN_TIMEOUT = 12.0
+    CONNECT_TIMEOUT = 30.0
+    NOTIFY_TIMEOUT = 8.0
+    WRITE_TIMEOUT = 2.0
+    DRAIN_INTERVAL = 0.02
 
     def __init__(self, status_cb, notify_cb):
         super().__init__(daemon=True, name="ble-service")
-        self.status_cb    = status_cb
-        self.notify_cb    = notify_cb
-        self._loop        = None
-        self._client      = None
-        self._write_char  = None
+        self.status_cb = status_cb
+        self.notify_cb = notify_cb
+        self._loop = None
+        self._client = None
+        self._candidate_client = None
+        self._write_char = None
         self._notify_char = None
-        self._connecting  = False
-        self._stop_event  = asyncio.Event()
-        self._write_lock  = None
+        self._stop_event = None
+        self._write_lock = None
+        self._notification_decoder = NotificationDecoder()
+        self._connection_phase = "idle"
 
     def stop(self):
-        if self._loop and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(lambda: self._stop_event.set())
+        if self._loop and not self._loop.is_closed() and self._stop_event:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
 
     def disconnect_client(self, timeout=3.0):
-        if self._loop and not self._loop.is_closed():
-            future = asyncio.run_coroutine_threadsafe(self._do_disconnect(), self._loop)
-            try:
-                future.result(timeout=timeout)
-            except Exception as e:
-                logger.warning(f"BLE disconnect timeout/error: {e}")
         self.stop()
         if self.is_alive():
-            self.join(timeout=1.0)
-
-    async def _do_disconnect(self):
-        if self._client and self._client.is_connected:
-            try:
-                await self._client.disconnect()
-                logger.info("BLE client disconnected.")
-            except Exception as e:
-                logger.error(f"Error during BLE disconnect: {e}")
-        self._stop_event.set()
-        self._loop.call_soon(self._loop.stop)
+            self.join(timeout=timeout)
 
     def run(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._stop_event = asyncio.Event()
         self._write_lock = asyncio.Lock()
-        self._loop.call_soon(lambda: asyncio.ensure_future(self._connect(), loop=self._loop))
-        self._loop.run_forever()
-
-    def _schedule_retry(self):
-        if self._loop and not self._loop.is_closed():
-            self._connecting = False
-            _robot_running.clear()
-            self._loop.call_later(
-                self.RETRY_DELAY,
-                lambda: asyncio.ensure_future(self._connect(), loop=self._loop)
-            )
-
-    def _status(self, text: str, color: str):
-        self.status_cb(text, color)
-
-    def _on_disconnect(self, _client):
-        self._client      = None
-        self._write_char  = None
-        self._notify_char = None
-        _robot_running.clear()
-        logger.info("BLE device disconnected.")
-        self._status("Disconnected — retry 3 s", "#f85149")
-        self._schedule_retry()
-
-    def _notification_handler(self, sender, data):
         try:
-            msg = data.decode('utf-8')
+            self._loop.run_until_complete(self._run_service())
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
+
+    async def _run_service(self):
+        worker = asyncio.create_task(self._run_sessions())
+        await self._stop_event.wait()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    async def _run_sessions(self):
+        while not self._stop_event.is_set():
+            try:
+                await self._connect()
+                await self._drain_loop(self._client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning("Bench BLE %s failed: %s: %s",
+                               self._connection_phase, type(error).__name__, error)
+            finally:
+                client = self._candidate_client
+                self._candidate_client = None
+                self._client = None
+                self._write_char = None
+                self._notify_char = None
+                _robot_running.clear()
+                ble_send_queue.clear()
+                self._notification_decoder.reset()
+                if client is not None:
+                    try:
+                        await asyncio.wait_for(client.disconnect(), timeout=2.0)
+                    except Exception:
+                        pass
+            if not self._stop_event.is_set():
+                self._status("Disconnected — retry 3 s", "#f85149")
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.RETRY_DELAY)
+                except asyncio.TimeoutError:
+                    pass
+
+    def _status(self, text, color):
+        try:
+            self.status_cb(text, color)
         except Exception:
-            msg = str(data)
-        if self.notify_cb:
-            self.notify_cb(msg)
+            logger.debug("Bench BLE status callback failed", exc_info=True)
+
+    def _on_disconnect(self, client):
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._handle_disconnect, client)
+
+    def _handle_disconnect(self, client):
+        if client is self._client:
+            self._client = None
+            self._write_char = None
+            self._notify_char = None
+            _robot_running.clear()
+            ble_send_queue.clear()
+            self._notification_decoder.reset()
+
+    def _notification_handler(self, client, sender, data):
+        if client is self._client and client.is_connected and not self._stop_event.is_set():
+            for message in self._notification_decoder.feed(data):
+                if self.notify_cb:
+                    self.notify_cb(message)
 
     async def _connect(self):
-        if self._connecting:
-            return
-        self._connecting = True
-        self._status("Scanning…", "#d29922")
-        target = None
-        target_address = BLE_MAC_ADDRESS
-
-        if not target_address:
-            try:
-                discovered = await BleakScanner.discover(
-                    timeout=self.SCAN_TIMEOUT, return_adv=True
-                )
-                for device, adv in discovered.values():
-                    name_match = bool(
-                        (device.name and device.name == DEVICE_NAME)
-                        or (adv.local_name and adv.local_name == DEVICE_NAME)
-                    )
-                    service_uuids = [str(s).lower() for s in (adv.service_uuids or [])]
-                    uuid_match = bool(
-                        SERVICE_UUID.lower() in service_uuids
-                        or WRITE_CHAR_UUID.lower() in service_uuids
-                        or NOTIFY_CHAR_UUID.lower() in service_uuids
-                    )
-                    if name_match or uuid_match:
-                        target = device
-                        target_address = device.address
-                        break
-            except TypeError:
-                devices = await BleakScanner.discover(timeout=self.SCAN_TIMEOUT)
-                for d in devices:
-                    name_match = bool(d.name and d.name == DEVICE_NAME)
-                    uuids = (
-                        [str(u).lower() for u in d.metadata.get("uuids", [])]
-                        if hasattr(d, "metadata") and isinstance(d.metadata, dict)
-                        else []
-                    )
-                    uuid_match = bool(
-                        SERVICE_UUID.lower() in uuids
-                        or WRITE_CHAR_UUID.lower() in uuids
-                        or NOTIFY_CHAR_UUID.lower() in uuids
-                    )
-                    if name_match or uuid_match:
-                        target = d
-                        target_address = d.address
-                        break
-            except Exception as exc:
-                logger.error(f"BLE scan error: {exc}")
-
-        if target_address is None:
-            logger.warning(f"'{DEVICE_NAME}' not found.")
-            self._status("Not found — retry 3 s", "#f85149")
-            self._schedule_retry()
-            return
-
-        disp_name = getattr(target, "name", None) or DEVICE_NAME
-        logger.info(f"Connecting to BLE device {disp_name} [{target_address}]")
-        self._status(f"Connecting {target_address}…", "#d29922")
-        client = BleakClient(target_address, disconnected_callback=self._on_disconnect)
-        try:
-            await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
-        except Exception as exc:
-            logger.error(f"BLE connect error: {exc}")
-            self._status("Connect failed — retry 3 s", "#f85149")
-            try:
-                await client.disconnect()
-            except Exception:
-                pass
-            self._schedule_retry()
-            return
-
-        if not client.is_connected:
-            logger.warning("connect() returned but is_connected is False.")
-            self._status("Connect failed — retry 3 s", "#f85149")
-            self._schedule_retry()
-            return
-
-        write_char  = None
-        notify_char = None
-        for svc in client.services:
-            for c in svc.characteristics:
-                if c.uuid.lower() == WRITE_CHAR_UUID.lower():
-                    write_char = c
-                if c.uuid.lower() == NOTIFY_CHAR_UUID.lower():
-                    notify_char = c
-
-        if write_char is None:
-            logger.warning(f"Write characteristic {WRITE_CHAR_UUID} not found — disconnecting.")
-            self._status("Write char not found", "#f85149")
-            await client.disconnect()
-            self._schedule_retry()
-            return
-
-        if notify_char is None:
-            logger.warning(f"Notify characteristic {NOTIFY_CHAR_UUID} not found.")
-            self._status("Notify char missing", "#d29922")
-        else:
-            try:
-                await client.start_notify(notify_char, self._notification_handler)
-                logger.info("Subscribed to BLE notifications.")
-            except Exception as e:
-                logger.error(f"Failed to subscribe to notifications: {e}")
-
-        self._client      = client
-        self._write_char  = write_char
-        self._notify_char = notify_char
-        self._connecting  = False
+        self._connection_phase = "discovery"
+        self._status("Scanning for GARBY...", "#d29922")
+        ble_send_queue.clear()
+        self._notification_decoder.reset()
+        target = await asyncio.wait_for(discover_robot(
+            BleakScanner, address=BLE_MAC_ADDRESS, name=DEVICE_NAME,
+            service_uuid=SERVICE_UUID, timeout=self.SCAN_TIMEOUT),
+            timeout=self.SCAN_TIMEOUT + 5.0)
+        if target is None:
+            raise ConnectionError("GARBY not advertising on the selected adapter")
+        self._connection_phase = "connection/GATT discovery"
+        client = BleakClient(target, disconnected_callback=self._on_disconnect,
+                             timeout=self.CONNECT_TIMEOUT, **adapter_options())
+        self._candidate_client = client
+        await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
+        if not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended before GATT setup")
+        self._client = client
+        write, notify = robot_characteristics(client, SERVICE_UUID, WRITE_CHAR_UUID, NOTIFY_CHAR_UUID)
+        self._connection_phase = "notification subscription"
+        await asyncio.wait_for(subscribe(client, notify,
+            lambda sender, data: self._notification_handler(client, sender, data)),
+            timeout=self.NOTIFY_TIMEOUT)
+        if self._client is not client or not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended during notification setup")
+        self._write_char, self._notify_char = write, notify
+        self._connection_phase = "readiness write"
+        await self._write_message(RASPI_READY, client)
+        if self._client is not client or not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended during readiness write")
+        self._connection_phase = "ready"
+        _robot_running.set()
+        _status_requested.set()
         self._status("CONNECTED", "#3fb950")
-        logger.info("BLE connected.")
 
-        try:
-            ble_send_queue.put_nowait(RASPI_READY)
-            logger.info(f"[PROTOCOL] Sent {RASPI_READY}")
-        except queue.Full:
-            pass
+    async def _write_message(self, message, client):
+        payload = message.encode("ascii")
+        if not payload or len(payload) > 244 or any(c < 32 or c > 126 for c in payload):
+            raise ValueError("BLE packet must be one printable line of at most 244 bytes")
+        write = self._write_char
+        if not write or client is not self._client or not client.is_connected:
+            raise ConnectionError("BLE session is not writable")
+        acknowledged = (message.startswith(("P:", "[RESET", "[RASPI READY]")) or
+                        len(payload) > getattr(write, "max_write_without_response_size", 20))
+        async with self._write_lock:
+            if client is not self._client or not client.is_connected:
+                raise ConnectionError("BLE session changed before write")
+            await asyncio.wait_for(client.write_gatt_char(write, payload, response=acknowledged),
+                                   timeout=self.WRITE_TIMEOUT)
 
-        asyncio.ensure_future(self._drain_loop(), loop=self._loop)
-
-    async def _drain_loop(self):
-        while not self._stop_event.is_set() and self._client and self._client.is_connected:
+    async def _drain_loop(self, client):
+        while not self._stop_event.is_set() and client is self._client and client.is_connected:
             try:
-                msg = ble_send_queue.get_nowait()
+                message = ble_send_queue.get_nowait()
             except queue.Empty:
                 await asyncio.sleep(self.DRAIN_INTERVAL)
                 continue
-            try:
-                acknowledged = (
-                    msg.startswith(("P:", "[RESET", "[RASPI READY]"))
-                    or len(msg.encode("utf-8")) > getattr(
-                        self._write_char, "max_write_without_response_size", 20
-                    )
-                )
-                async with self._write_lock:
-                    await self._client.write_gatt_char(
-                        self._write_char, msg.encode("utf-8"), response=acknowledged
-                    )
-            except Exception as exc:
-                logger.error(f"BLE write error: {exc}")
-                try:
-                    await self._client.disconnect()
-                except Exception:
-                    pass
-                self._schedule_retry()
-                return
-        logger.info("BLE drain loop exiting.")
+            await self._write_message(message, client)
+            await asyncio.sleep(0.005)
 
-    async def _urgent_write(self, msg):
-        """Called from LiDAR callback via threadsafe schedule."""
-        if not self._client or not self._client.is_connected:
-            return
-        try:
-            acknowledged = (
-                msg.startswith(("P:", "[RESET", "[RASPI READY]"))
-                or len(msg.encode("utf-8")) > getattr(
-                    self._write_char, "max_write_without_response_size", 20
-                )
-            )
-            async with self._write_lock:
-                await self._client.write_gatt_char(
-                    self._write_char, msg.encode("utf-8"), response=acknowledged
-                )
-        except Exception as e:
-            logger.error(f"Urgent BLE write error: {e}")
+    async def _urgent_write(self, message):
+        # Share the same sequenced mailbox; never race the periodic writer.
+        ble_send_queue.put_nowait(message, urgent=True)
 
 # ═══ Simulated LiDAR Distance Reader ═══
 class SimulatedLidarReader:
@@ -1120,10 +1046,14 @@ def main():
     parser = argparse.ArgumentParser(description="Combined Sensor + LiDAR Application (SIMULATION)")
     parser.add_argument("--headless", action="store_true", help="Run without GUI")
     args = parser.parse_args()
+    with SingleInstanceGuard():
+        _run_application(args)
+
+
+def _run_application(args):
 
     global firebase, ble_service
     firebase = FirebaseManager()
-    kill_gpio_users()
     time.sleep(1)
 
     existing = firebase.get_raspi_launch_time()

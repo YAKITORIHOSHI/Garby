@@ -1,0 +1,140 @@
+Calib two-board route test (straights + MPU-measured turns)
+
+ESP32 motor sketch: Calib.ino.
+ESP32-S3 sender: the separate CalibS3 project's CalibS3.ino and
+MpuHeading.h. The production GARBY BLE_Receiver-Final sketch is unchanged.
+
+FLASH BOTH BOARDS. The S3 packet now carries a fifth field (a heading
+reference counter). The new Calib.ino ignores packets from the old
+CalibS3 firmware. It would then drive the whole route with open-loop
+fixed-step turns, as if no MPU were connected.
+
+2026-11-11 fix: the CalibS3.ino in this folder still sent the old
+3-field packet ("M,seq,heading,rate"). Calib.ino needs the 5th field
+(reference epoch), so with that pair every packet was rejected. The
+robot then ran the WHOLE route open loop: no straight-line nudging,
+and every turn was a fixed 4900-steps-per-90 spin, not MPU-measured.
+CalibS3.ino now sends "M,seq,heading,rate,epoch". Reflash the S3.
+
+USB serial report (Calib ESP32, 115200): at start it prints
+"MPU link OK" or "MPU link DOWN (... rejected)". Then one line per
+turn (MPU heading reached and error) and per long straight (heading
+error and whether nudging was ON), plus the probe result. Note:
+opening a serial monitor can reset the ESP32 and restart the route.
+
+First-turn wiggle: which motor is the left wheel is a guess. If the
+guess is wrong, the first spin goes the wrong way, the MPU sees it
+after 3 degrees, the robot stops, swaps, and turns the right way.
+That is the self-check, not a fault. The first spin now creeps at
+800 steps/s for its first 3 degrees, so a wrong guess backs off
+about 1 degree instead of ~8. The serial report then tells you
+which MOTOR1_IS_LEFT_GUESS value removes the wiggle completely.
+If a wiggle shows on EVERY turn, or with "MPU link DOWN", it is
+mechanical (a caster wheel swivelling, or wheel slip), not code.
+
+Documented wiring, to be checked against the actual boards:
+  MPU6050 VCC -> S3 3V3; GND -> S3 GND
+  MPU6050 SDA -> S3 GPIO8; SCL -> S3 GPIO9; AD0 -> GND
+  S3 GPIO17 TX -> ESP32 GPIO18 RX
+  ESP32 GPIO19 TX -> S3 GPIO18 RX
+  ESP32 and S3 grounds must be common. UART is 115200, 8N1.
+  ESP32 motor 1 STEP/DIR = GPIO21/22; motor 2 = GPIO13/12.
+  GPIO12 is an ESP32 boot-strapping pin. Ensure the motor driver does
+  not pull it high during power-on; changing this pin requires rewiring.
+
+What runs
+---------
+The motors no longer run forever. After power-up the ESP32 runs
+runStart() once, then stays stopped. runStart() is the route at the bottom of
+Calib.ino. Edit it there:
+  moveForward(steps)   drive straight exactly that many STEP pulses
+  turnLeft(degrees)    spin in place until the MPU reads that many
+  turnRight(degrees)   degrees turned (the old 4900 steps = 90 degrees)
+The old turnLeft(9800) is now turnLeft(180).
+
+Start-up: keep the chassis still. The S3 calibrates its gyro while
+stationary. The ESP32 waits for a steady MPU stream before the first
+move, and starts anyway after 3 seconds without one.
+
+Turns
+-----
+Turn targets are absolute along the route. The robot starts at 0
+degrees. Each turnLeft adds and each turnRight subtracts, so the route
+above aims for 90, 180, 90, 0, then 180 degrees. Heading drift picked
+up on a straight is removed by the next turn.
+
+A turn spins both wheels in opposite directions at up to 3000
+steps/s (about 55 deg/s, well inside the MPU's 250 deg/s range). It
+slows as it nears the target and stops within 0.3 degrees of it. It
+waits 250 ms, re-reads the heading, and makes slow correction spins
+until within 1 degree (at most 5 passes).
+Between 20 ms MPU samples, wheel step travel fills in the heading.
+
+Self-checks during turns:
+  - Which motor is the left wheel is a guess (MOTOR1_IS_LEFT_GUESS =
+    true). If the first turn rotates the wrong way by 3 degrees, it
+    swaps the guess and retries. The steering probe also sets it.
+  - Steps per degree start at 4900/90 and are re-measured on every
+    clean MPU turn. They are used between samples and by the fallback.
+  - If a turn uses 1.5x the expected steps without reaching the
+    heading, it stops. The wheels are slipping or lifted (bench
+    test); it does not spin forever.
+  - If MPU data stops mid-turn, the robot stops and waits up to 1.5 s.
+    If data does not return, it finishes the turn by wheel steps.
+  - If no MPU data is available at all, every turn uses wheel steps
+    only, like the old fixed turns.
+
+Heading continuity: the S3 numbers each heading reference. If the S3
+re-references (sensor outage over 500 ms, or S3 reboot), the ESP32
+keeps its route heading. It continues from the last good heading
+plus the wheel rotation measured since then, so the remaining turns
+still aim correctly.
+
+Straights
+---------
+A straight longer than 4400 steps cruises at 8000 steps/s with the MPU
+heading hold. The last 4400 steps are handed to the stepper ramp, so
+the step count ends exactly and the robot stops smoothly. Shorter
+straights (the 100-step "Adj" moves, for example) are one plain ramp
+with no steering. Acceleration is 8000 steps/s^2, as before.
+
+Heading hold (unchanged method, now per segment): on the first
+straight with enough room left (the 596000-step one in this route),
+after 1.2 s of cruise, the ESP32 measures the natural yaw rate. It
+then slows motor 1 by 3 percent for 0.4 seconds. The change in gyro
+rate gives the physical motor side and the steering gain:
+  G = abs(rate_during_probe - rate_before_probe) / probe_cut
+If the response is unclear, it tries one more probe at 8 percent.
+Until a probe succeeds, straights run open loop. Turns still work
+without it.
+
+Every 20 ms while cruising, the controller estimates sideways
+displacement from the segment's line:
+  sideways_steps += mean_forward_steps * sin(heading_error_deg)
+  return_heading_deg = limit(-atan(sideways_steps / 20000) * 180 / pi,
+                             -12, +12)
+  error_deg = heading - segment_target - return_heading_deg
+  cut = limit((2.5 * (error_deg + 0.28 * rate_deg_s) + trim_deg_s)
+              / G, -0.30, +0.30)
+At most one wheel slows at a time; the cut changes by at most 0.015 per
+20 ms. The cross-track estimate restarts at each straight.
+
+Limits
+------
+Gyro drift is not removed. Residual bias accumulates over the whole
+route: 0.05 deg/s is about 5 degrees after the ~105 s route. A
+simulation with that bias ended at 174.6 degrees instead of 180.
+STEP travel is not wheel encoder feedback: missed steps and wheel
+slip corrupt distance and the sideways estimate. Sideways position
+error at the start, or over long runs, needs a lateral reference such
+as side-distance or line sensing.
+
+moveForward(596000) is 74.5 seconds of driving at 8000 steps/s (93
+wheel revolutions if 6400 pulses turn one wheel). Check it is not a
+typo for 59600.
+
+This is a standalone test with no obstacle sensor. Supervise the run
+and keep a physical stop method available. This coding session has not
+uploaded firmware to either board. Both sketches compile (ESP32 and
+ESP32-S3, FastAccelStepper 2.0.1). The route logic was exercised
+only in a PC simulation, not on hardware.

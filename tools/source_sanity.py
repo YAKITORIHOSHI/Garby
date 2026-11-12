@@ -108,10 +108,10 @@ def main() -> int:
         ROOT / "RasPi/bridge_core.py",
         ROOT / "RasPi/final_w_serial.py",
         ROOT / "BLE_Receiver-Final/BLE_Receiver-Final.ino",
-        ROOT / "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.ino",
-        ROOT / "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.cpp",
-        ROOT / "NAPHTALI_CODE_V2/NAPHTALI_CODE_V2.h",
-        ROOT / "NAPHTALI_CODE_V2/pointsRun.ino",
+        ROOT / "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.ino",
+        ROOT / "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp",
+        ROOT / "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h",
+        ROOT / "MAIN_EXECUTOR_CODE/pointsRun.ino",
     ]
     for path in required:
         if path.is_file(): print(f"PASS required file  {path.relative_to(ROOT)}")

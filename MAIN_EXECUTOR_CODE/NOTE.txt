@@ -1,0 +1,127 @@
+2026-10-29: Motor execution and steering review
+
+Motor pins, calibrated route step counts, 5600 Hz maximum straight speed,
+3000 Hz turn speed and 4800 step/s^2 acceleration remain unchanged.
+
+Forward segments with steering enabled now preserve a correction's wheel-step
+difference by adjusting both final wheel targets equally and oppositely. Their
+sum stays fixed, so the commanded mean route distance stays unchanged. This
+prevents the slower wheel from undoing the heading correction when it catches
+up to an old equal-wheel endpoint. Adjustments are batched after the speed
+restoration ramp; a STOP captures them after braking and resumes those targets.
+New taps are suppressed within the calculated braking/tap/restoration margin.
+Short calibration bumps, turns and reverse movement do not start MPU steering.
+
+GARBY_VERBOSE_DIAGNOSTICS defaults to 0 in MAIN_EXECUTOR_CODE.h. Routine nudge,
+straight-start and full modem command/response dumps are disabled by default.
+Startup messages, state transitions and fault reports remain available. Set
+the macro to 1 only when those extra diagnostic dumps are needed. UART ACK,
+heading lifecycle and safety/status protocol frames remain enabled.
+
+A rejected continuous wheel-start command now stops both wheels, as targeted
+wheel-command rejection already did. No hardware timing or electrical issue
+has been proven by these software tests. FastAccelStepper position is a
+commanded pulse count; without wheel encoders it cannot detect a stalled motor.
+
+Intense motor sound with no wheel motion needs a hardware isolation test. With
+the wheels raised, use the separate MotorsConfig 400 Hz/800 step/s^2 test and
+verify each wheel independently before running the calibrated route. Check
+motor coil pairs, driver enable/current/microstep configuration, supply voltage
+under load, common logic ground and STEP/DIR waveforms at the driver. Do not
+infer a successful physical move from an increasing software position count.
+
+2026-10-29 optimization update:
+LOAD_TRIGGER_KG is 4.0 kg on corrected/filtered weight, with two fresh
+confirmations. Empty/below-threshold loads remain idle unless gas triggers.
+Negative readings outside the tare deadband are unavailable. Modem/debug
+passthrough is limited to 128 bytes per direction per loop iteration.
+Host behavior verified; calibrate/tare and test loaded braking on real hardware.
+
+2026-10-30 executor/BLE start repair:
+Setup returns to the safety/recovery loop immediately after hardware setup;
+the old eight-second BLE handshake wait is removed. Readiness retries and the
+first-link ready beep are serviced from the normal UART/control path.
+
+[START STATUS:<id>] queries the last manual-start result without starting a
+route, consuming a request ID or refreshing path permission. It returns the
+remembered ACK/failure or NOT_RECEIVED plus current state. A new start with an
+uninitialized motor channel is rejected as MOTORS_UNAVAILABLE.
+
+[MOTION:<reason>] reports path/MPU/local-sonar/motor/route holds to the Pi on
+changes and status requests. This is diagnostic feedback only. Manual start
+still bypasses scale/bin triggers only; all existing motion gates remain.
+Deploy the updated executor, BLE bridge and complete RasPi directory together.
+No board was flashed or physical motor operation validated by the host tests.
+
+2026-11-04: during a route, UART silence now sends [MCU ALIVE], not [MCU READY].
+READY made the bridge treat every BLE outage over 3 s as a controller restart and
+silently end steering for the rest of the hallway. IDLE still sends READY because
+its startup handshake needs renewing. Flash both sketches together: an older bridge
+ignores ALIVE, so after its own reboot it would not re-handshake. Parked at the
+destination or a route fault, status polls drop to 2 Hz. A lost MPU reference now
+reports MPU:HEADING_LOST rather than a LiDAR block.
+
+2026-11-07: every direction reversed, at the owner's request after a floor run showed
+forward, left, right and nudges all backward. MOTOR1_DIR_HIGH_COUNTS_UP is now true and
+MOTOR2_DIR_HIGH_COUNTS_UP is now false, in MAIN_EXECUTOR_CODE.h. These two values are the
+only link between step counts and the wheels, so turn, nudge and route code stay as they
+were. Do not also swap those: it reverses them a second time. No GPIO changed. Flash this
+sketch only; the S3 and Pi need no change. Software tested only. Check which way the LiDAR
+faces before a floor run: docs/motor-direction-2026-11-07.md.
+
+
+2026-11-09 supersedes the November 7 direction conclusion: the owner confirmed that
+forward still drove backward on that true/false firmware. The executor now sets
+MOTOR1_DIR_HIGH_COUNTS_UP=false, MOTOR2_DIR_HIGH_COUNTS_UP=true. Only this polarity
+pair changes; route values/signs, turn targets and nudge-wheel selection are preserved.
+This report does not establish physical left/right direction. Verify wheel sides,
+named turns and nudges separately before floor use. USB boot identifies this build as
+[EXECUTOR BUILD:FRONT-20261109 DIR1_UP=LOW DIR2_UP=HIGH]. Software checks and actual
+compile are recorded in docs/motor-direction-2026-11-09.md; no hardware upload or
+physical acceptance is performed by those checks.
+
+2026-11-11 navigation redesign (build NAV-20261111; supersedes the tap and step-turn
+notes above). Design, calibration and bench steps: docs/navigation-2026-11-11.md.
+Flash together with BLE_Receiver-Final and deploy the whole RasPi/ directory.
+- Turns are MPU degrees (90/90/90/90/180, absolute along the route), tolerance 1 deg,
+  then aligned to the LiDAR walls (two agreeing scans, within 8 deg of the command);
+  the measured hallway direction becomes the route frame. Every turn reports
+  [HEADING TURN cmd= gyro= err= align= wall_before= wall_after= spins= side= spd=].
+- Which motor is the left wheel is a guess (MOTOR1_IS_LEFT_GUESS); the first turn
+  checks it and swaps it once if the spin starts the wrong way.
+- Straights longer than FINISH_STEPS steer continuously (no N: taps). With
+  isNudgeEnabled the executor fuses the W wall lines: it steers to the measured
+  hallway direction plus a bounded centring term (deadband 2 cm, engage 5 / release
+  2 cm, max 5 deg). Reports [HEADING FUSE ...] every 3 s and [HEADING STRAIGHT ...].
+- No motion without heading: a route is refused without the M stream, a turn is never
+  finished by step count, a straight brakes when the stream stops (route fault after 10 s).
+- GO:SLOW (LiDAR caution zone) drops the straight to CAUTION_SPEED; 3 plain GO restore it.
+- Tunables: HeadingControl.h. Unverified constants: STEPS_PER_REV/WHEEL_DIAMETER_MM
+  (used only for lateral dead reckoning) and DEFAULT_STEPS_PER_DEG (learned per turn).
+Source implemented, host tested and compiled; not uploaded or floor tested.
+
+2026-11-12 (build NAV-20261112): holds that resume, sonar sweep, low power, buzzer,
+pre-run centring. Report: docs/obstacle-sweep-hold-2026-11-12.md.
+- Obstacle/path holds never fail a route. waitUntilMotionPermitted() holds until fresh
+  GO, no STOP and no sonar obstacle; a STOP at any moment holds again. Only an explicit
+  reset, the operator stop, a latched fault, a rejected wheel command, a wrong-way or
+  step-limit turn, or 5 minutes without the MPU stream (HEADING_RECOVERY_MS, was 10 s)
+  fail a segment. After a heading outage over 10 s with a new S3 reference, two wall
+  scans must confirm the route direction before moving on.
+- Sonar: a ping with no echo inside the 18 ms timeout is a far clear reading (it was
+  "unknown" and could never release a hold in an open hallway). The servo sweeps
+  (SonarSweep.h): CRUISE forward/+25/forward/-25 while driving; SURVEY forward between
+  +-25/+-50/+-70 while stopped in a route; forward only while spinning, idle or parked.
+  Inside a turn only the 50 cm spin circle counts; the robot surveys before each spin.
+  [SONAR SWEEP ...] on USB every 5 s while surveying; [SONAR:SILENT]/[SONAR:FAULT] to the Pi.
+- Low-power hold after 10 s without clearance evidence: CPU 80 MHz, 2.5 Hz status polls,
+  slow pings with a survey every 4 s, [POWER:LOW]; first clear evidence -> normal power.
+  MOTOR_ENABLE_PIN (-1, not wired) would also cut the drivers' holding current.
+- Buzzer: one persistent task. Route driving: 90 ms beep every 1.2 s; held: double chirp
+  every 2 s; low power: 50 ms every 5 s; silent idle/parked/faulted/emergency-stopped.
+- [DRIVE:S] / [DRIVE:F:<cm/s>] / [DRIVE:T:<deg/s>] telemetry on change and every 2 s, for
+  the Pi's moving-object prediction. Grants nothing.
+- Pre-run centring: pointsRun.ino runLongHallway() calls centerBeforeLongRun() before both
+  long runs (step counts and turn angles unchanged; sidestep travel is taken off the run).
+Host tests: tools/firmware_tests/test_hold_resume.cpp (new), test_navigation.cpp extended.
+Upload: this sketch only (the bridge source is unchanged, NAV-20261111). Not uploaded.

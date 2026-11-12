@@ -23,7 +23,10 @@ inline uint32_t fakeNow = 1000;
 inline std::function<void()> tickHook;
 inline unsigned long millis() { return fakeNow; }
 inline unsigned long micros() { return fakeNow * 1000U; }
-inline void delay(unsigned long n) { fakeNow += (uint32_t)n; if (tickHook) tickHook(); }
+// backgroundHook models hardware that keeps running whatever a test's tickHook does
+// (the bridge's 50 Hz heading stream).
+inline std::function<void()> backgroundHook;
+inline void delay(unsigned long n) { fakeNow += (uint32_t)n; if (backgroundHook) backgroundHook(); if (tickHook) tickHook(); }
 inline void delayMicroseconds(unsigned long) {}
 inline bool isDigit(char c){return std::isdigit((unsigned char)c)!=0;}
 template<class A, class B> auto min(A a, B b) { using C = std::common_type_t<A,B>; return std::min(C(a), C(b)); }
@@ -72,34 +75,51 @@ class HardwareSerial {
   int available() const { return (int)rx.size(); }
   int read() { if(rx.empty()) return -1; char c=rx.front(); rx.erase(0,1); return (unsigned char)c; }
   void write(int c) { tx+=(char)c; }
+  int availableForWrite() const { return 256; }
   template<class T> void print(const T& v) { std::ostringstream s; s<<v; tx+=s.str(); }
   template<class T> void println(const T& v) { print(v); tx+='\n'; }
   void println() { tx+='\n'; }
   template<class... T> void printf(const char* fmt,T... args) { char b[2048]; std::snprintf(b,sizeof(b),fmt,args...); tx+=b; }
 };
 inline HardwareSerial Serial;
-class Servo { public: void setPeriodHertz(int) {} void attach(int,int,int) {} void write(int) {} };
-class HX711 { public: void begin(int,int) {} bool wait_ready_timeout(int) {return false;} void set_scale(float) {} void tare(int) {} long get_offset(){return 0;} bool is_ready(){return false;} float get_units(int){return 0;} };
+#define RTC_DATA_ATTR
+#define RTC_NOINIT_ATTR
+struct ESPClass { unsigned restartCount=0; void restart() { ++restartCount; } };
+inline ESPClass ESP;
+class Servo { public: int angle=0; void setPeriodHertz(int) {} void attach(int,int,int) {} void write(int value) { angle=value; } };
+class HX711 { public: bool ready=false; float units=0; long offset=0; void begin(int,int) {} bool wait_ready_timeout(int) {return ready;} void set_scale(float) {} void tare(int) {} long read(){return (long)(units*100000);} void set_offset(long value){offset=value;} long get_offset(){return offset;} bool is_ready(){return ready;} float get_units(int){return units;} };
 enum MoveResultCode { MOVE_OK=0, MOVE_ERR_SPEED_IS_UNDEFINED=1 };
 class FastAccelStepper {
  public:
   long position=0, target=0;
-  uint32_t speed=5600, lastUpdate=1000;
-  bool running=false, rejectNext=false;
-  void update() { if(running) { auto distance=(long)((fakeNow-lastUpdate)*speed/1000U); if(target>=position) position=min(position+distance,target); else position=max(position-distance,target); running=position!=target; } lastUpdate=fakeNow; }
-  void setDirectionPin(int,bool=true) {}
-  void setSpeedInHz(uint32_t n) { update(); speed=n; }
-  void setAcceleration(uint32_t) {}
+  uint32_t speed=5600, lastUpdate=1000, acceleration=4800;
+  bool running=false, rejectNext=false, frozen=false;
+  int dirPin=-1; bool dirHighCountsUp=true;
+  // Fractional steps carry over, so two wheels at slightly different speeds keep
+  // their difference at a 1 ms tick (needed to model continuous steering).
+  uint32_t carry=0;
+  void update() { if(running && !frozen) { const uint64_t scaled=(uint64_t)(fakeNow-lastUpdate)*speed+carry; auto distance=(long)(scaled/1000U); carry=(uint32_t)(scaled%1000U); if(target>=position) position=min(position+distance,target); else position=max(position-distance,target); running=position!=target; } lastUpdate=fakeNow; }
+  void setDirectionPin(int pin,bool highCountsUp=true) { dirPin=pin; dirHighCountsUp=highCountsUp; }
+  int8_t setSpeedInHz(uint32_t n) { update(); if(rejectSpeed) return -1; speed=n; return 0; }
+  bool rejectSpeed=false;
+  void setAcceleration(uint32_t n) { acceleration=n; }
   void applySpeedAcceleration() {}
   MoveResultCode moveTo(long n) { update(); if(rejectNext) {rejectNext=false;return MOVE_ERR_SPEED_IS_UNDEFINED;} target=n; running=target!=position; return MOVE_OK; }
   MoveResultCode runForward() {return moveTo(1000000000);}
+  MoveResultCode runBackward() {return moveTo(-1000000000);}
+  // Ramp-generator speed with sign; the stub has no ramp, so it is the set speed.
+  int32_t getCurrentSpeedInMilliHz(bool=true) {update(); if(!running) return 0; return (target>=position?1:-1)*(int32_t)speed*1000;}
   bool isRunning() {update();return running;}
   long getCurrentPosition() {update();return position;}
   void stopMove() {update();running=false;target=position;}
   void forceStopAndNewPosition(long n) {position=target=n;running=false;}
 };
-class FastAccelStepperEngine { public: void init(){} FastAccelStepper* stepperConnectToPin(int){return nullptr;} };
+class FastAccelStepperEngine { public: std::function<FastAccelStepper*(int)> connect; void init(){} FastAccelStepper* stepperConnectToPin(int pin){return connect?connect(pin):nullptr;} };
 #define SERIAL_8N1 0
+#ifndef DEG_TO_RAD
+#define DEG_TO_RAD 0.017453292519943295
+#define RAD_TO_DEG 57.29577951308232
+#endif
 #define HIGH 1
 #define LOW 0
 #define OUTPUT 1

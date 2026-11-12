@@ -1,0 +1,3 @@
+interface:
+  display_name: "GARBY software verification"
+  short_description: "Automate scoped checks without operating hardware"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "GARBY change handoff"
+  short_description: "Summarize changes and identify MCU upload targets"
