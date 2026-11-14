@@ -1,0 +1,58 @@
+Calculating task graph as configuration cache cannot be reused because JVM has changed.
+
+> Configure project :app
+WARNING: The option setting 'android.experimental.enableScreenshotTest=true' is experimental.
+The current default is 'false'.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+WARNING: The option setting 'android.experimental.testSuiteSupport=true' is experimental.
+The current default is 'false'.
+Add android.sync.suppressAgpWarnings=UNSUPPORTED_PROJECT_OPTION_USE to the gradle.properties file to suppress this warning.
+WARNING: *Important* Test suite support is experimental and subject to change
+
+Add android.sync.suppressAgpWarnings=TEST_SUITE_SUPPORT_EXPERIMENTAL to the gradle.properties file to suppress this warning.
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:preDebugScreenshotTestBuild UP-TO-DATE
+> Task :app:generateDebugScreenshotTestAssets UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:processDebugGoogleServices UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:javaPreCompileDebugScreenshotTest UP-TO-DATE
+> Task :app:generateDebugResources
+> Task :app:generateDebugScreenshotTestResources FROM-CACHE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths
+> Task :app:mergeDebugScreenshotTestAssets UP-TO-DATE
+> Task :app:checkDebugScreenshotTestAarMetadata UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:mergeDebugScreenshotTestManifest UP-TO-DATE
+> Task :app:processDebugNavigationResources
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:processDebugScreenshotTestManifest UP-TO-DATE
+> Task :app:packageDebugResources
+> Task :app:parseDebugLocalResources
+> Task :app:generateDebugRFile
+> Task :app:mergeDebugScreenshotTestResources
+> Task :app:mergeDebugResources
+> Task :app:compileDebugKotlin
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:processDebugResources
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:compileDebugScreenshotTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugScreenshotTestResources
+> Task :app:packageDebugForScreenshotTest
+> Task :app:compileDebugScreenshotTestKotlin
+> Task :app:processDebugScreenshotTestJavaRes
+> Task :app:assembleDebugScreenshotTest
+
+> Task :app:updateDebugScreenshotTestDefaultTestSuite
+Test report generated at: file:///C:/Users/napht/AppData/Local/Temp/garby-category-preview-20261114/output/app/reports/tests/updateDebugScreenshotTestDefaultTestSuite/index.html
+
+BUILD SUCCESSFUL in 40s
+31 actionable tasks: 16 executed, 1 from cache, 14 up-to-date
+Configuration cache entry stored.

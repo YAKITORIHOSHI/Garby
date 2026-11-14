@@ -1,0 +1,20 @@
+'\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\Garby_MobileApp'
+CMD.EXE was started with the above path as the current directory.
+UNC paths are not supported.  Defaulting to Windows directory.
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: C=US, O=Android, CN=Android Debug
+Signer #1 certificate SHA-256 digest: 778bad0096f273b6dba8db1d5fda2b45e9924e20a3faa10e89177aebeb20bef6
+Signer #1 certificate SHA-1 digest: 4476e303983f88e66f0dd323fa80b272dd77edf3
+Signer #1 certificate MD5 digest: 17eb4d1a08a1e1832524bc5f58af8e55
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 2048
+Signer #1 public key SHA-256 digest: f402df7e6760902f8864cd5b3e1f99e6e79c8d6a77fb6e44842ac1eb5bf21a27
+Signer #1 public key SHA-1 digest: 019dbb5504c1ac5a89e00d354ff4ad4770fe758d
+Signer #1 public key MD5 digest: 5d1363181f4f882a39cfdb8a952fda85

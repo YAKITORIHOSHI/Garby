@@ -22,7 +22,7 @@ static constexpr bool     YAW_POSITIVE_IS_LEFT      = true;   // +Z up: positive
 
 static constexpr uint32_t HEADING_STREAM_INTERVAL_MS = 20;    // M lines, 50 Hz
 static constexpr uint32_t MPU_FAULT_REPEAT_MS       = 200;    // MPU:FAULT while no valid heading
-static constexpr uint32_t STEERING_MAX_AGE_MS       = 500;    // permission bits expire without a new acquisition
+static constexpr uint32_t STEERING_MAX_AGE_MS       = 500;    // acquisition age, including Pi/bridge queues and transit estimate
 static constexpr uint32_t BLE_TRANSIT_ESTIMATE_MS   = 30;     // Pi write to bridge ingress, added to the scan age
 static constexpr uint32_t MAX_WALL_AGE_MS           = 900;    // older wall evidence is not forwarded
 

@@ -48,6 +48,13 @@ static void clearPath() {processESPMessage("GO");fakeNow+=100;processESPMessage(
 static unsigned failures=0;
 static void check(bool ok,const char* label){if(!ok){std::fprintf(stderr,"FAIL %s\n",label);failures++;}else std::printf("PASS %s\n",label);}
 int main() {
+  resetFixture();spinSonarCheck=true;ESP_Serial.tx.clear();
+  processESPMessage("[BLE CONNECTION ESTABLISHED]");
+  check(ESP_Serial.tx.find("[TURN:START]\n")<ESP_Serial.tx.find("[SYSTEM READY]\n"),
+        "handshake replays an interrupted turn before announcing readiness");
+  spinSonarCheck=false;ESP_Serial.tx.clear();processESPMessage("[ROBOT STATUS]");
+  check(ESP_Serial.tx.find("[TURN:END]\n")<ESP_Serial.tx.find("[SYSTEM READY]\n"),
+        "status reports explicitly restore non-turn mode before readiness");
   resetFixture();clearPath();leftWheel.runForward();rightWheel.runForward();
   processESPMessage("[OP:1:ESTOP]");
   check(operatorEmergencyLatched && shouldStop && resetQueued &&
@@ -132,18 +139,29 @@ int main() {
   recordLoadCellSample(std::numeric_limits<float>::quiet_NaN());
   processESPMessage("[BLE CONNECTION ESTABLISHED]");
   check(ESP_Serial.tx.find("[SYSTEM READY]")!=std::string::npos &&
+        ESP_Serial.tx.find("[DISPOSAL READY:1]")!=std::string::npos &&
         ESP_Serial.tx.find("[IDLE]")!=std::string::npos,
-        "ready executor reports end-to-end startup without a scale reading");
+        "ready executor reports manual disposal without bin, gas or scale readings");
+  ESP_Serial.tx.clear();operatorEmergencyLatched=true;reportRobotStatus();
+  check(ESP_Serial.tx.find("[DISPOSAL READY:")==std::string::npos,
+        "emergency stop withholds manual disposal readiness");
+  operatorEmergencyLatched=false;routeFaultLatched=true;ESP_Serial.tx.clear();reportRobotStatus();
+  check(ESP_Serial.tx.find("[DISPOSAL READY:")==std::string::npos,
+        "route fault withholds manual disposal readiness");
+  routeFaultLatched=false;
   ESP_Serial.tx.clear();processESPMessage("[START STATUS:1234567890001]");
   check(garbyState==GarbyState::IDLE && startRequestId.length()==0 &&
         ESP_Serial.tx.find("[START FAILED:1234567890001:NOT_RECEIVED]")!=std::string::npos,
         "querying an undelivered start reports failure without starting the route");
+  ESP_Serial.tx.clear();
   processESPMessage("[START:1234567890001]");
   check(garbyState==GarbyState::RUNNING && startAccepted &&
         ESP_Serial.tx.find("[START ACK:1234567890001]")!=std::string::npos,
         "manual start enters the normal outbound route with no scale/bin trigger");
   check(shouldStop && !pathCommandSeen && !leftWheel.isRunning() && !rightWheel.isRunning(),
         "manual start cannot grant path permission or directly move either wheel");
+  check(ESP_Serial.tx.find("[DISPOSAL READY:")==std::string::npos,
+        "accepted manual disposal withholds eligibility for a second run");
   ESP_Serial.tx.clear();processESPMessage("[START STATUS:1234567890001]");
   check(garbyState==GarbyState::RUNNING &&
         ESP_Serial.tx.find("[START ACK:1234567890001]")!=std::string::npos && shouldStop,

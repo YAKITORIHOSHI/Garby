@@ -1,11 +1,69 @@
 # GARBY deployment and acceptance
 
+## Test2 turn recovery — 2026-11-14
+
+Use matching complete bridge and executor sketches with build ID `RECONNECT-20261114`.
+The bridge preserves turn-sweep protection across BLE reconnect and requires the executor's
+turn-state replay after bridge restart. Both firmware images are required for that recovery
+contract. A Pi test-only repair adds no new Pi runtime deployment; the earlier disposal
+feature still requires the entire matching `RasPi/` directory and reviewed cloud rules.
+
+Under supervised acceptance with the robot secured, interrupt BLE during a held turn.
+Occupied, stale and missing turn-sweep evidence must keep it stopped after reconnect;
+fresh clear sweeps must resume the interrupted turn. Repeat with a bridge-only restart:
+no GO is permitted before executor turn-state replay. Confirm ordinary straight travel,
+emergency stop and controller restart retain their existing behavior. These physical checks
+were not performed in this software review. Installed firmware identity remains unknown.
+
 Software checks do not establish physical safety. Historical serial inventories
 and saved flasher selections do not prove that a board is currently connected.
 Read current hardware state before uploading. Physical route direction, servo
 position, LiDAR mounting and stop behavior require secured hardware acceptance.
 
-## Latest revision — 2026-11-12, holds that resume, sonar sweep, prediction
+## Manual disposal — 2026-11-13
+
+Upload requirement for this change: **Both**, complete `BLE_Receiver-Final` and
+`MAIN_EXECUTOR_CODE` sketches, build ID `DISPOSAL-20261113`. Deploy the entire `RasPi/`
+directory and build/install the updated Android app (versionCode 6) on Windows. Review and
+merge the supplied disposal-only Firebase rule example into the actual rules before
+using app control. No rules, software, firmware or phone installation were deployed by
+this task. Installed versions and earlier pending uploads remain unknown. The new images
+include the earlier local source changes; no separate additional flash of those sources is
+needed when these complete images are installed.
+
+Follow [`docs/manual-disposal-2026-11-13.md`](docs/manual-disposal-2026-11-13.md) for Windows
+build commands and a supervised acceptance sequence. Confirm cancel sends nothing, an
+idle robot accepts a below-threshold request once, obstacles/heading loss still hold, and
+emergency stop, busy/fault state, stale eligibility, duplicate requests, offline delivery and
+reconnect cannot start a later unintended run. Arrival and the existing explicit return
+are separate checks. Physical acceptance and low-end phone performance remain unverified.
+
+## Local testing revision — 2026-11-13, heading recovery and scan age
+
+The owner requested that these changes stay local for comparison with the remote
+repository. No remote update is part of this task.
+
+Both controller builds are `REVIEW-20261113`. This change requires the complete
+`BLE_Receiver-Final` and `MAIN_EXECUTOR_CODE` sketches and the complete `RasPi/`
+directory, with its required NumPy dependency. The executor fixes recovery through
+STOP/sonar holds and requires walls after a long outage with a new reference.
+The bridge expires steering permission from acquisition age; the Pi refreshes
+that age after queue/writer-lock waits. Wire grammar is unchanged. Earlier
+pending images and installed revisions remain unknown.
+
+Evidence: `docs/review-fixes-2026-11-13.md` and
+`artifacts/review-fixes-2026-11-13/`. No upload, Pi deployment, service restart or
+live robot action was performed here.
+
+For secured acceptance, record boot build IDs. Confirm STOP:MPU during a straight
+or turn brakes and requires the recovered heading and wall pair, followed by
+fresh GO/sonar clearance. Missing required walls must keep it stopped and fail
+the segment at the original five-minute deadline. An ordinary obstacle with
+valid heading must remain recoverable beyond five minutes. Capture Pi/executor
+logs; software models do not establish physical alignment, slip or stopping
+distance. Retain previous matching images and the whole Pi directory for rollback.
+
+## Previous revision — 2026-11-12, holds that resume, sonar sweep, prediction
 
 Executor build `NAV-20261112` plus the complete `RasPi/` directory; the bridge stays
 `NAV-20261111` (unchanged source; flash it too if the S3 still runs an older build, since the
@@ -166,8 +224,10 @@ FastAccelStepper 1.2.7, ESP32Servo 3.2.1, HX711 0.6.4;
 The updated BLE bridge uses FQBN `esp32:esp32:esp32s3`; the main controller
 retains `esp32:esp32:esp32`. See [S3/MPU wiring](BLE_Receiver-Final/NOTE.txt)
 for GPIO8/9 I2C and RX18/TX17 bridge UART. Both sketches need updating for the
-heading-segment notices. Android uses the checked-in Gradle wrapper, Java21,
-and Android SDK36. Host behavioral tests require MSVC C++ Build Tools on Windows
+heading-segment notices. Android uses the checked-in Gradle wrapper (9.9.1), Java21,
+and Android SDK 37.2 (target 37). On a network-share checkout, set an absolute
+`garby.buildRoot` in `Garby_MobileApp/local.properties` to build on a local disk.
+Host behavioral tests require MSVC C++ Build Tools on Windows
 or g++/clang++ on Unix. Full validation exports each sketch's flashing binaries
 under `artifacts/firmware/<sketch>/` and builds debug plus unsigned release APKs.
 
@@ -337,7 +397,10 @@ Perform these with supervision and a clear test boundary:
 - Complete several full load-trigger and gas-trigger cycles including monitored
   obstacle clearance and operator return.
 - Verify live Firebase authorization/authentication, cached-value expiry,
-  return readiness, return failure display, and phone reconnection.
+  return readiness, return failure display, and phone reconnection. Confirm the
+  app's robot state follows each executor state, that the return screen shows the
+  matching ACK, DONE and FAILED reason, and that the RTDB rules allow the app's
+  writes to `commands/reset` and `fcmInstallationId` only.
 - Verify SIM registration/SMS and any externally configured FCM sender separately.
 
 ## Diagnosing a robot that stays stopped

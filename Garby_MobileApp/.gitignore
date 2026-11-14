@@ -1,5 +1,6 @@
 *.iml
 .gradle/
+.kotlin/
 .idea/
 .claude/
 local.properties
@@ -9,5 +10,9 @@ captures/
 .externalNativeBuild/
 .cxx/
 .DS_Store
-debug_log.txt
 *.apk
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*

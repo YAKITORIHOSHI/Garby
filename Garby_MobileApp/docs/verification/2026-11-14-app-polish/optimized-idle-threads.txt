@@ -1,0 +1,48 @@
+Threads: 43 total,   0 running,  43 sleeping,   0 stopped,   0 zombie
+  Mem:  5899428K total,  5622808K used,   276620K free,     1964K buffers
+ Swap:  4194300K total,  2129644K used,  2064656K free,  2383252K cached
+800%cpu  26%user   0%nice  58%sys 716%idle   0%iow   0%irq   0%sirq   0%host
+  TID USER         PR  NI VIRT  RES  SHR S[%CPU] %MEM     TIME+ THREAD          PROCESS
+32480 u0_a344      10 -10 6.0G 119M  55M S  0.0   2.0   0:00.00 RenderThread    com.thesis.garby
+32277 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 Okio Watchdog   com.thesis.garby
+32275 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 OkHttp Connecti com.thesis.garby
+32239 u0_a344      18  -2 6.0G 119M  55M S  0.0   2.0   0:00.00 queued-work-loo com.thesis.garby
+31940 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.16 Binder:31853_4  com.thesis.garby
+31939 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.03 TubeSockWriter- com.thesis.garby
+31937 u0_a344      39  19 6.0G 119M  55M S  0.0   2.0   0:00.00 ConscryptStatsL com.thesis.garby
+31936 u0_a344      39  19 6.0G 119M  55M S  0.0   2.0   0:00.00 ConscryptStatsL com.thesis.garby
+31935 u0_a344      39  19 6.0G 119M  55M S  0.0   2.0   0:00.00 ConscryptStatsL com.thesis.garby
+31931 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.09 TubeSockReader- com.thesis.garby
+31929 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.18 FirebaseDatabas com.thesis.garby
+31928 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.02 Binder:31853_3  com.thesis.garby
+31920 u0_a344      18  -2 6.0G 119M  55M S  0.0   2.0   0:00.02 hwuiTask1       com.thesis.garby
+31919 u0_a344      18  -2 6.0G 119M  55M S  0.0   2.0   0:00.01 hwuiTask0       com.thesis.garby
+31917 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.34 DefaultExecutor com.thesis.garby
+31915 u0_a344      30  10 6.0G 119M  55M S  0.0   2.0   0:00.00 TokenRefresher  com.thesis.garby
+31910 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 queued-work-loo com.thesis.garby
+31908 u0_a344      16  -4 6.0G 119M  55M S  0.0   2.0   0:00.07 ged-swd         com.thesis.garby
+31906 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.18 DefaultDispatch com.thesis.garby
+31907 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.01 DefaultDispatch com.thesis.garby
+31905 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:01.11 DefaultDispatch com.thesis.garby
+31903 u0_a344      10 -10 6.0G 119M  55M S  0.0   2.0   0:09.12 RenderThread    com.thesis.garby
+31901 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 ConnectivityThr com.thesis.garby
+31895 u0_a344      30  10 6.0G 119M  55M S  0.0   2.0   0:00.00 Firebase Backgr com.thesis.garby
+31894 u0_a344      30  10 6.0G 119M  55M S  0.0   2.0   0:00.00 Firebase Backgr com.thesis.garby
+31893 u0_a344      30  10 6.0G 119M  55M S  0.0   2.0   0:00.01 Firebase Backgr com.thesis.garby
+31890 u0_a344      30  10 6.0G 119M  55M S  0.0   2.0   0:00.03 Firebase Backgr com.thesis.garby
+31888 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 Firebase-Messag com.thesis.garby
+31887 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 Firebase-Messag com.thesis.garby
+31886 u0_a344      29   9 6.0G 119M  55M S  0.0   2.0   0:00.02 GoogleApiHandle com.thesis.garby
+31881 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.01 queued-work-loo com.thesis.garby
+31876 u0_a344      29   9 6.0G 119M  55M S  0.0   2.0   0:00.14 Profile Saver   com.thesis.garby
+31873 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.33 Binder:31853_3  com.thesis.garby
+31871 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.10 Binder:31853_2  com.thesis.garby
+31870 u0_a344      20   0 6.0G 119M  55M S  0.0   2.0   0:00.00 Binder:31853_1  com.thesis.garby
+31869 u0_a344      24   4 6.0G 119M  55M S  0.0   2.0   0:00.00 FinalizerWatchd com.thesis.garby
+31868 u0_a344      24   4 6.0G 119M  55M S  0.0   2.0   0:00.00 FinalizerDaemon com.thesis.garby
+31867 u0_a344      24   4 6.0G 119M  55M S  0.0   2.0   0:00.01 ReferenceQueueD com.thesis.garby
+31866 u0_a344      24   4 6.0G 119M  55M S  0.0   2.0   0:00.43 HeapTaskDaemon  com.thesis.garby
+31865 u0_a344      29   9 6.0G 119M  55M S  0.0   2.0   0:02.29 Jit thread pool com.thesis.garby
+31863 u0_a344       0 -20 6.0G 119M  55M S  0.0   2.0   0:00.00 perfetto_hprof_ com.thesis.garby
+31862 u0_a344       0 -20 6.0G 119M  55M S  0.0   2.0   0:00.00 Signal Catcher  com.thesis.garby
+31853 u0_a344      10 -10 6.0G 119M  55M S  0.0   2.0   0:10.28 om.thesis.garby com.thesis.garby

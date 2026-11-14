@@ -1,0 +1,95 @@
+test_bridge.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(473): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(699): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(728): warning C4018: '<': signed/unsigned mismatch
+
+PASS scan response and automatic advertising recovery are configured
+PASS NimBLE power API receives dBm rather than the numeric ESP-IDF enum
+PASS stationary MPU fixture calibrates through the production reader
+PASS 700 ms old clearance cannot grant a 500 ms steering permission
+PASS permission expires at acquisition age 500 ms including the 30 ms transit estimate
+PASS bridge mailbox time ages both clearance permission and the wall measurement
+PASS clearance without acquisition age grants no steering
+PASS acquisition age expiry survives unsigned millis wrap
+PASS allowlisted Pi health relays unchanged and expects the ordinary executor ACK
+PASS health has no path, readiness, motion confirmation or operator latch side effects
+PASS unknown health states remain diagnostic while an operator emergency is latched
+PASS relay revalidates health versions, exact lengths, states and injection attempts
+PASS BLE health ingress rejects malformed and embedded-NUL packets
+PASS malformed health flood preserves both queued safety packets and the latest valid snapshot
+PASS health burst cannot consume control capacity or run ahead of queued controls
+PASS independent latest health and sensor mailboxes survive producer bursts
+PASS health at the 15-second freshness boundary can relay
+PASS health older than 15 seconds is discarded
+PASS health from a prior BLE session is discarded
+PASS ingress reset clears pending health snapshots
+PASS health cannot reach or establish an unready executor
+PASS health relay requires a live BLE session
+PASS health cannot bypass the ordinary UART backlog cap
+PASS valid and malformed health flood cannot keep the safety path watchdog alive
+PASS emergency dispatch clears queued health and wins over telemetry
+PASS BLE disconnect clears health before reconnection
+PASS a clear hallway permits steering to both sides
+PASS a nearest object 40 cm to the left vetoes only steering left
+PASS a nearest object on the right vetoes only steering right
+PASS a close front-left diagonal vetoes steering left
+PASS a close rear-right diagonal vetoes steering right
+PASS missing nearest-object clearance permits no steering
+PASS a missing forward return permits no steering
+PASS an object 60 cm ahead permits no steering
+PASS a wall median at the hard limit permits no steering
+PASS missing wall medians remove centering evidence, not heading-hold permission
+PASS wall line carries acquisition, age, flags, millimetres, centidegrees and a valid checksum
+PASS a single wall is forwarded with only its own flag
+PASS a scan without any wall forwards nothing
+PASS wall evidence older than the age limit is not forwarded
+PASS stationary MPU fixture calibrates through the production reader
+PASS the heading reference has a nonzero epoch
+PASS the 50 Hz heading line has five fields and a valid checksum
+PASS the heading stream grants no steering while STOP is latched and expects no ACK
+PASS heading lines are spaced by the stream interval
+PASS two clear path packets with a valid heading release GO
+PASS a new acquisition forwards its wall fit once, with scan age plus transit
+PASS a clean acquisition permits steering both ways in the next heading line
+PASS a repeated acquisition forwards no second wall line
+PASS a repeated acquisition cannot refresh the permission's age
+PASS the next independent acquisition restores permission and forwards walls
+PASS a malformed field withdraws permission and forwards nothing
+PASS an out-of-order acquisition cannot restore permission
+PASS a thin object on the left vetoes steering left while its wall and heading are still forwarded
+PASS open space on both sides keeps heading-hold permission and forwards no wall
+PASS a wall fit without its acquisition age is not forwarded
+PASS STOP withdraws steering permission at once
+PASS stationary MPU fixture calibrates through the production reader
+PASS a straight-segment notice keeps the heading and its epoch
+PASS the stream reports the integrated heading in centidegrees
+PASS stationary MPU fixture calibrates through the production reader
+PASS a stale heading sends MPU:FAULT and no heading line
+PASS a clear path cannot release motion without a valid heading, straight segment or not
+PASS recovery after a long outage starts a new reference under a new epoch
+PASS stationary MPU fixture calibrates through the production reader
+PASS a turn notice requires fresh clearance that includes the spin sweep
+PASS a path packet without sweep evidence cannot release a turn
+PASS an unknown sweep is not a clear sweep
+PASS an object inside the sweep stops the turn
+PASS one clear sweep is not yet confirmation
+PASS two clear sweeps release the turn
+PASS the ordinary front stop still applies during a turn
+PASS outside a turn the sweep does not gate straight travel
+PASS the LiDAR caution zone releases motion at caution speed
+PASS the slow code is valid for the front only
+PASS stationary MPU fixture calibrates through the production reader
+PASS an invalid sweep code fails closed
+PASS stationary MPU fixture calibrates through the production reader
+PASS a recovery ping during a route keeps the turn gate
+PASS stationary MPU fixture calibrates through the production reader
+FAIL BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence
+
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\run_firmware_tests.py", line 63, in <module>
+    main()
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\run_firmware_tests.py", line 59, in main
+    result.check_returncode()
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 502, in check_returncode
+    raise CalledProcessError(self.returncode, self.args, self.stdout,
+subprocess.CalledProcessError: Command '['C:\\Users\\napht\\AppData\\Local\\Temp\\garby-firmware-tests-h93mnwie\\test_bridge.exe']' returned non-zero exit status 1.

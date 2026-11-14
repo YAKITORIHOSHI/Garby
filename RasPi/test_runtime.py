@@ -65,8 +65,9 @@ class RuntimeTests(unittest.TestCase):
         self.runtime = load_runtime()
 
     @staticmethod
-    def scan(ranges=None):
-        stamp_ns = time.time_ns()
+    def scan(ranges=None, *, stamp_ns=None):
+        if stamp_ns is None:
+            stamp_ns = time.time_ns()
         return types.SimpleNamespace(ranges=ranges if ranges is not None else [2.0]*360,
             angle_min=-math.pi, angle_increment=math.pi/180,
             range_min=0.1, range_max=8.0,
@@ -205,6 +206,23 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(snapshot.acquired_at, 99.65)
         self.assertIn("F=S|B=S", node.build_status_packets()[0])
 
+    def test_snapshot_keeps_its_deadline_when_evidence_expires_during_construction(self):
+        node = self.runtime.LidarDistanceReader(None, None)
+        now = [100.0]
+        with patch.object(node, "_scan_acquisition_timing", return_value=(0, 1, 1)), \
+                patch.object(self.runtime.time, "monotonic", side_effect=lambda: now[0]):
+            node.scan_callback(self.scan())
+            build = node._build_status_packets_locked
+            def delayed_build():
+                packets = build()
+                now[0] += self.runtime.LIDAR_STALE_TIMEOUT_S + .01
+                return packets
+            with patch.object(node, "_build_status_packets_locked", side_effect=delayed_build):
+                path, sides, deadline = node.build_status_packets_with_deadline()
+        self.assertIn("F=C|B=C", path)
+        self.assertIn("G=0", sides)
+        self.assertAlmostEqual(deadline, 100.0 + self.runtime.LIDAR_STALE_TIMEOUT_S)
+
     def test_display_geometry_failure_keeps_acquisition_age_in_frame(self):
         frames = queue.Queue()
         node = self.runtime.LidarDistanceReader(None, frames)
@@ -220,12 +238,16 @@ class RuntimeTests(unittest.TestCase):
     def test_map_never_reuses_previous_finite_returns_for_missing_or_invalid_scan(self):
         frames = queue.Queue()
         node = self.runtime.LidarDistanceReader(None, frames)
-        node.scan_callback(self.scan())
+        # Distinct acquisitions must have distinct source stamps even on a
+        # coarse/frozen host clock. Duplicate-source rejection is tested below.
+        stamp = time.time_ns()
+        node.get_clock = lambda: types.SimpleNamespace(now=lambda: types.SimpleNamespace(nanoseconds=stamp + 2))
+        node.scan_callback(self.scan(stamp_ns=stamp))
         self.assertEqual(len(frames.get_nowait()[5].points_m), 360)
-        node.scan_callback(self.scan([math.inf] * 360))
+        node.scan_callback(self.scan([math.inf] * 360, stamp_ns=stamp + 1))
         self.assertEqual(frames.get_nowait()[5].points_m, ())
         self.assertIn("F=C|B=C", node.build_status_packets()[0])
-        invalid = self.scan()
+        invalid = self.scan(stamp_ns=stamp + 2)
         invalid.angle_increment = 0
         node.scan_callback(invalid)
         self.assertIsNone(frames.get_nowait()[5])
@@ -936,6 +958,22 @@ class StatusStreamTests(unittest.TestCase):
     def test_unrequested_stream_keeps_the_watchdog_fed(self):
         self.run_responder(self.Node(), 0.9)
         self.assertGreaterEqual(len(self.paths()), 3)
+
+    def test_path_and_steering_queue_the_same_acquisition_deadline(self):
+        deadline = time.monotonic() + self.runtime.LIDAR_STALE_TIMEOUT_S
+        class Snapshot(self.Node):
+            def build_status_packets_with_deadline(inner):
+                path, sides = inner.build_status_packets()
+                return path, sides, deadline
+        self.run_responder(Snapshot(), .35)
+        entries = []
+        while True:
+            try:
+                entries.append(self.runtime.ble_send_queue.get_entry_nowait())
+            except queue.Empty:
+                break
+        evidence = {message[0]: expiry for message, expiry in entries if message.startswith(("P:", "S:"))}
+        self.assertEqual(evidence, {"P": deadline, "S": deadline})
 
     def test_unexpected_exception_cannot_silently_end_the_status_stream(self):
         class Flaky(self.Node):

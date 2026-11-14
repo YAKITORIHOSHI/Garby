@@ -1,5 +1,99 @@
 # GARBY release notes
 
+## Test2 integration review — 2026-11-14
+
+- Android manual-disposal outcomes reconcile late reports by request identity in either
+  callback order. A timeout notice cannot hide a matching server acceptance/rejection.
+  Windows verification passed 64 unit tests, lint, optimized and unsigned release assembly.
+- Bridge BLE-session reset now preserves the executor's turn scope. After bridge restart,
+  GO stays blocked until that scope is known; executor status replays TURN:START/END before
+  readiness, and repeated turn reports do not restart clearance confirmations. Original
+  production code failed reconnect and missing-replay regressions before repair.
+- **MCU upload requirement: Both**, complete bridge/executor sketches, build
+  `RECONNECT-20261114`. No upload was performed here; installed identity remains unknown.
+  This follow-up changes only a Pi test; prior manual-disposal Pi deployment remains required.
+- Mobile Test1/Test2 assets preserve the previous app and the new candidate separately.
+  Full review, Windows Pi-suite limitations and exact sibling patch are in
+  `Garby_MobileApp/docs/2026-11-14-integration-review.md` and its verification directory.
+
+## Confirmed manual disposal — 2026-11-13
+
+- Pi monitor and Android dashboard offer **Manual disposal**, with an explicit confirmation,
+  for a school-day-end outbound run before bin/gas/load thresholds are reached. The normal
+  path, heading, obstacle and emergency-stop gates still control every movement.
+- The executor advertises fresh idle eligibility; the bridge filters it against readiness
+  and operator stop. The Pi atomically claims short-lived cloud requests before sending one
+  START, matches the executor result and only queries after uncertainty or restart. The app
+  separates sent, accepted, failed and unconfirmed; arrival uses ordinary robot state.
+- The app reuses static glass controls, its bounded background dispatcher and lifecycle-owned
+  conflated listeners. No new library, bitmap, thread pool, animation or polling timer is
+  introduced on the phone. Android tests/build/lint and device performance are prepared for
+  Windows and not executed in this task.
+- **MCU upload requirement: Both** complete sketches, ID `DISPOSAL-20261113`.
+  **Pi deployment: entire RasPi/**. Android versionCode 6 and a disposal-only rules example
+  are prepared. No hardware or cloud deployment was performed; installed revisions and
+  earlier pending firmware remain unknown. Design and acceptance:
+  `docs/manual-disposal-2026-11-13.md`; exact checks and hashes:
+  `artifacts/verification/2026-11-13-manual-disposal/`.
+
+## Local testing copy — 2026-11-13, findings review repairs
+
+- All motion resumes require heading readiness, including STOP:MPU and an outage
+  during an existing obstacle/sonar hold. Plain/reverse moves also brake on lost
+  heading. A long outage with a new reference needs two fresh agreeing wall scans;
+  missing walls hold within the original five-minute recovery budget. Ordinary
+  obstacle holds and continuous-heading wall gaps retain their existing behavior.
+- Pi P/S snapshots retain acquisition deadlines through coalescing. S.G is
+  recomputed after the BLE writer lock; expired/oversized steering becomes STABLE.
+  Bridge permission expires at 500 ms acquisition age including its mailbox wait
+  and the existing 30 ms transit estimate. Wall age limits remain separate. This
+  is not end-to-end source-age validation for PATH.
+- NumPy is required by both install profiles and preflight. The unresolved map
+  test was reproduced with a frozen host clock and given explicit independent
+  source stamps; duplicate-source rejection remains required. Details:
+  `docs/review-fixes-2026-11-13.md`.
+- **MCU upload requirement: Both**, complete bridge/executor sketches, build
+  `REVIEW-20261113`. **Pi deployment: entire RasPi/** plus requirements.
+  No upload/deployment was performed. Installed revisions and earlier pending
+  firmware remain unknown. Changes remain local for owner comparison; no remote
+  repository update is included.
+
+## 2026-11-14 — Android 2.0.1: device-wide rendering and memory performance
+
+- No live blur source layers or continuous decorative animations on any device; the glass styling
+  and operator controls remain. Smaller images/concurrency limits use RAM, heap class and CPU
+  capacity, with no brand/model special cases.
+- One shared background coroutine dispatcher view (one/two concurrent CPU tasks by profile),
+  latest-snapshot decoding queues, shared connection/status listeners, and sampled background
+  bitmap decoding with a bounded cache. Firebase's internal thread pools are unchanged.
+- Added a signed local `benchmark` variant with release optimizations. The exact final APK was
+  installed and measured: median scrolling frame time 300 → 26 ms, process PSS 200.6 → 58.5 MiB,
+  including debug-to-optimized build differences. Some jank remains; other physical devices were
+  not measured. All 43 tests, lint, static checks and APK builds passed.
+  See `Garby_MobileApp/docs/2026-11-14-low-end-performance.md` and
+  `artifacts/android-low-end-2026-11-14/` for evidence, checks and the exact file manifest.
+- **MCU upload: None. Pi deployment: None.** Android-only changes; return gates and wire contracts
+  are unchanged. This creates no additional firmware upload requirement.
+
+## 2026-11-13 — Android app 2.0.0: glass redesign, robot state, return progress (Android only)
+
+- New glass UI (start, dashboard, return) over the marble backdrop; Haze blur on Android 12+.
+- Shows the robot state the Pi already publishes (`status/robotState`) with a route track, and
+  heartbeat-based presence; bin and gas cards use the executor's thresholds (4 kg trigger, MQ135
+  four bands, gas danger rule) instead of stale ones.
+- Return to base: readiness checklist, a server re-read of status and command immediately before
+  the write (a request reaching the executor mid-outbound latches a route fault), the Pi's
+  ACK/DONE/FAILED with the failure reason in words, and tracking that survives leaving the app.
+- FCM uses Firebase Installation IDs (`devices/<id>/fcmInstallationId`); registration tokens are
+  deprecated. Toolchain: AGP 9.5.1, Gradle 9.9.1, Kotlin 2.4.21, Compose BOM 2026.09.00, Firebase
+  BoM 35.2.0, compileSdk 37.2, targetSdk 37.
+- 2026-11-14 cleanup: `Garby_MobileApp/README.md` added; the Android-folder Pi launcher
+  `Garby_MobileApp/final_w_serial.py` removed (`tools/verify_project.py` no longer compiles it);
+  old app reports moved to `Garby_MobileApp/docs/history/`.
+- Firebase paths, statuses and the return protocol are unchanged. **MCU upload: none**; no Pi
+  change. Install the new APK. Details: `Garby_MobileApp/PATCH_NOTES.md`; evidence:
+  `artifacts/android-glass-2026-11-13/`. Not tested on a phone or against live Firebase.
+
 ## 2026-11-12 (B) — holds that resume, sonar sweep, moving-object prediction (NAV-20261112 executor + Pi)
 
 - Never stuck forever: a sonar ping with no echo is a far clear reading (an open hallway could

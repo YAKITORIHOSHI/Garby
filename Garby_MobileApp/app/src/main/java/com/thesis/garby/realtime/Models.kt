@@ -8,36 +8,66 @@ data class SensorReading(
     val updatedAtMs: Long
 )
 
-data class HistoryPoint(
-    val value: Float,
-    val atMs: Long
-)
+/**
+ * The executor's route state as the Pi publishes it in `devices/<id>/status/robotState`.
+ *
+ * The Pi maps controller lines onto these values: `[MCU READY]` and a lost BLE link -> UNKNOWN,
+ * `[IDLE]` -> IDLE, `[RUNNING]` -> OUTBOUND, `[OUTBOUND COMPLETE]` -> AT_DESTINATION,
+ * `[RETURNING]` -> RETURNING, `[ROUTE FAULT]` and `[RETURN REJECTED]` -> FAULT.
+ */
+enum class RobotState(val wireValue: String) {
+    Idle("IDLE"),
+    Outbound("OUTBOUND"),
+    AtDestination("AT_DESTINATION"),
+    Returning("RETURNING"),
+    Fault("FAULT"),
+    Unknown("UNKNOWN");
 
+    companion object {
+        /** Null when the field is absent (an older Pi); unrecognised text is [Unknown]. */
+        fun fromWire(value: String?): RobotState? {
+            val text = value?.trim()?.uppercase().orEmpty()
+            if (text.isEmpty()) return null
+            return entries.firstOrNull { it.wireValue == text } ?: Unknown
+        }
+    }
+}
+
+/**
+ * The Pi's status record. Every field is nullable or zero when the Pi has not reported it, so
+ * the app never shows an invented value. Freshness is judged from [lastSeenMs] at display time.
+ */
 data class DeviceStatus(
-    val online: Boolean,
+    /** Pi heartbeat in epoch milliseconds (Pi clock), written every 30 s; 0 when never reported. */
     val lastSeenMs: Long,
-    val batteryPercent: Int?,
-    val wifiRssi: Int?,
+    /** Null when the Pi does not publish a state (versions before the state field). */
+    val robotState: RobotState? = null,
+    /** The Pi's destination flag: true only after a completed outbound route. Null when absent. */
+    val isReadyToReturn: Boolean? = null,
     val recentUptimeStr: String? = null,
     val cpuTemperatureC: Float? = null,
     val thermalWarning: Boolean? = null,
     val throttledFlags: Long? = null,
     val bleConnected: Boolean? = null,
     val lidarHealthy: Boolean? = null,
-    val sensorSerialConnected: Boolean? = null
+    val sensorSerialConnected: Boolean? = null,
+    /** Fresh Pi + executor eligibility for threshold-free disposal, never motion permission. */
+    val manualDisposalReady: Boolean? = null,
+    val manualDisposalUpdatedAtMs: Long = 0L
 )
 
-enum class ResetStatus {
+/** Wire statuses of `devices/<id>/commands/reset`, written by the app (pending) and the Pi. */
+enum class ReturnStatus {
     Pending,
-    Ack,
+    Accepted,
     Done,
     Failed,
     Unknown;
 
     companion object {
-        fun fromString(value: String?): ResetStatus = when (value?.trim()?.lowercase()) {
+        fun fromWire(value: String?): ReturnStatus = when (value?.trim()?.lowercase()) {
             "pending" -> Pending
-            "ack" -> Ack
+            "ack" -> Accepted
             "done" -> Done
             "failed" -> Failed
             else -> Unknown
@@ -45,37 +75,29 @@ enum class ResetStatus {
     }
 }
 
-data class ResetCommand(
+/** One return-to-base request and the outcome the Pi recorded for it. */
+data class ReturnCommand(
     val requestedAtMs: Long,
     val requestedBy: String,
-    val status: ResetStatus
+    val status: ReturnStatus,
+    val ackAtMs: Long? = null,
+    val doneAtMs: Long? = null,
+    val failedAtMs: Long? = null,
+    /** The Pi's failure reason code, for example `operator_emergency_stop`. */
+    val reason: String? = null
 )
 
-/** Marker used to reject stale terminal states from a previous reset request. */
-data class ResetRequestMarker(
-    val requestedBy: String,
-    val previousRequestedAtMs: Long,
-    val requestedAtMs: Long = 0L
-) {
-    fun matches(command: ResetCommand): Boolean =
-        command.requestedBy == requestedBy &&
-            if (requestedAtMs > 0L) command.requestedAtMs == requestedAtMs
-            else command.requestedAtMs > previousRequestedAtMs
-}
-
 /**
- * Resolves the deployed compatibility flag without letting it override the
- * authoritative structured command. In particular, APP=false is an idle
- * signal, not proof that a new structured pending/ack command completed.
+ * Identity of one request: the server-issued `requestedAt` plus the requesting operator. A newer
+ * request, even from the same operator, never matches, so an old outcome cannot complete it.
  */
-internal fun resolveResetStatus(
-    structuredStatus: String?,
-    appReadyToReset: Boolean?,
-    structuredResetExists: Boolean
-): ResetStatus {
-    val structured = ResetStatus.fromString(structuredStatus)
-    if (structuredResetExists) return structured
-    return if (appReadyToReset == true) ResetStatus.Pending else ResetStatus.Unknown
+data class ReturnRequestRef(
+    val requestedAtMs: Long,
+    val requestedBy: String
+) {
+    fun matches(command: ReturnCommand?): Boolean =
+        command != null && requestedAtMs > 0L &&
+            command.requestedAtMs == requestedAtMs && command.requestedBy == requestedBy
 }
 
 sealed interface SensorUiState<out T> {
@@ -101,35 +123,35 @@ enum class SensorKey(
 ) {
     Level(
         "level",
-        "Ultrasonic Distance",
+        "Bin distance",
         "cm",
         "RASPI/VALUES/ULTRASONIC_SENSOR",
         "CM_DISTANCE"
     ),
     Weight(
         "weight",
-        "Current Weight",
+        "Bin weight",
         "kg",
         "RASPI/VALUES/LOAD_CELL",
         "WEIGHT_IN_KG"
     ),
     Mq135(
         "mq135",
-        "MQ135 Air Quality",
+        "Air quality (MQ135)",
         "ppm",
         "RASPI/VALUES/MQ135_SENSOR",
         "AIR_QUALITY"
     ),
     Mq137(
         "mq137",
-        "MQ137 Ammonia",
+        "Ammonia (MQ137)",
         "ppm",
         "RASPI/VALUES/MQ137",
         "AMMONIA"
     ),
     Mq4(
         "mq4",
-        "MQ4 Methane",
+        "Methane (MQ4)",
         "ppm",
         "RASPI/VALUES/MQ4_SENSOR",
         "METHANE"

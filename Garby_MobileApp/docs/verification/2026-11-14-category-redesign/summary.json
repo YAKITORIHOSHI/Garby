@@ -1,0 +1,183 @@
+{
+  "Date": "2026-11-14",
+  "DisplayName": "Most Latest",
+  "InternalAndroidVersionCode": 4,
+  "Scope": "Android category dividers, display summaries, status capsules and responsive metric layouts",
+  "BaseCommit": "92c28f72fe368f460978a6797885ebd08c0a053c",
+  "GradleCommand": "java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleRelease :app:assembleBenchmark --console=plain",
+  "GradleExitCode": 0,
+  "UnitTests": {
+    "Tests": 53,
+    "Failures": 0,
+    "Errors": 0,
+    "Skipped": 0
+  },
+  "Lint": "No issues found",
+  "StaticQualityCheck": "PASS",
+  "PreviewCommand": ":app:updateDebugScreenshotTestDefaultTestSuite",
+  "PreviewExitCode": 0,
+  "PreviewConfigurations": 8,
+  "PreviewWidthsDp": [
+    320,
+    360,
+    400
+  ],
+  "PreviewFontScales": [
+    1.0,
+    1.5,
+    2.0
+  ],
+  "PreviewDpi": 160,
+  "PreviewSourceParity": [
+    {
+      "Path": "app/src/main/java/com/thesis/garby/MainDashboard.kt",
+      "MatchesFinalSource": true
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/glass/GlassKit.kt",
+      "MatchesFinalSource": true
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/DashboardIndicators.kt",
+      "MatchesFinalSource": true
+    }
+  ],
+  "PreviewReview": "Eight native-renderer images visually inspected; no golden-baseline comparison was claimed",
+  "Signing": "Optimized installable APK signed with the existing local development key; production release output unsigned",
+  "SignatureVerified": true,
+  "PhoneInstallation": "Not performed for this change",
+  "LiveRobotCommands": "None",
+  "McuUploadRequirement": "None",
+  "McuUploadPerformed": false,
+  "PiDeploymentRequirement": "None",
+  "PiDeploymentPerformed": false,
+  "InstalledFirmwareIdentity": "Unknown",
+  "PhysicalAcceptance": "Unknown",
+  "Limits": [
+    "Synthetic preview telemetry; no live Firebase or robot acceptance",
+    "Headless asynchronous artwork is absent in full-dashboard renders; gallery loads bundled artwork directly",
+    "Existing robot header timestamp may ellipsize with larger text; this task covers category and metric layouts"
+  ],
+  "Files": [
+    {
+      "Path": "app/build.gradle.kts",
+      "SHA256": "d59325407cfd669d6eb01aae05aed9744e689a59336351e21b304d3ec7305019"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/MainDashboard.kt",
+      "SHA256": "1cc75b1765d8d62561e06b7111c91eb393087a2835c8c34a65e5f2b9f1b86152"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/glass/GlassKit.kt",
+      "SHA256": "e9c76a2b36a562800f3e9ad943ff6ac90d27d33c3e3630ccf218daeb50178ae5"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/DashboardIndicators.kt",
+      "SHA256": "fee070bc536c05f3e6ac6670bd43461f85f469554e7d507c7222f37af486565b"
+    },
+    {
+      "Path": "app/src/test/java/com/thesis/garby/ui/DashboardIndicatorsTest.kt",
+      "SHA256": "44b9263c1d9b0dfbf67217fa2485cf4fbb7f40c386a8287c1a5ed2cf8abe0321"
+    },
+    {
+      "Path": "PATCH_NOTES.md",
+      "SHA256": "b578f0d72f86dc64ebb8b6510f6ded5acd99e3b98227bb33f08ecb9c60e0faed"
+    },
+    {
+      "Path": "SYSTEM_ARCHITECTURE.md",
+      "SHA256": "f2d7855d753731a3ba54f5cd145ec670ae33a37c08c5d998d831565b2c20af61"
+    },
+    {
+      "Path": "docs/2026-11-14-category-redesign.md",
+      "SHA256": "a882cae56f0f5a433991d28f93b2e6b77c09aa339f70ad3c7ff42c91b8b3e1ed"
+    }
+  ],
+  "Artifacts": [
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/apk-metadata.txt",
+      "SHA256": "833e0fff69450170ec14252aff751e2db0398da5fb6917b87cc4ba6144f0f4cc"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/apk-signature.txt",
+      "SHA256": "58b5be2f8da06d8ea936e5c0e4e9f8d88cb04b4ddb45e5d51f4f8983dec08a70"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/categories-150-percent.png",
+      "SHA256": "6b175cc61d0abc2f4142fdfd12ad696e5f507d29d40177d271b92f9ea3ae2f34"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/categories-200-percent.png",
+      "SHA256": "7e6dc4e7787c9224c686678351a98e57b64aa6489e51f95fb485ee0fe9a68e82"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/categories-320.png",
+      "SHA256": "e3d0200ef660a85a55745118e8d80f046bbe5181f17cdd2143cf383a99fcc98e"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/categories-400.png",
+      "SHA256": "283afc428785ec81ab0f38273a38d8def51c60a8fcf50bd52312dc2ce243c3de"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/CategoryPreviewTest.kt",
+      "SHA256": "6826ff42827d75118a3ce173df410965edf57b2efe59549cecc3213fb267778b"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/dashboard-320.png",
+      "SHA256": "ba8af27e69d1002f759f54726ce398311ff4904fbe7bbddebfd6ab8e09c31181"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/dashboard-360-large-text.png",
+      "SHA256": "a796e9d14acd3528816e7d63d40781d1fe6ec63f795331d48ed103e1f80f63d1"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/dashboard-400-large-text.png",
+      "SHA256": "32c28d71c10c0ad7c3ced4d4cc1408573223bec7bb34dccc92f494c1ab80d553"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/dashboard-400.png",
+      "SHA256": "c7333a1bfab6536e659220f0d56c77b4a23fdd943162f4c3f709e7a288a106c5"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/gradle.log",
+      "SHA256": "48f21013aa0e296753719b19db85c0470b93bbedfabe34f47e5d151d2ab7581a"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/lint-results.txt",
+      "SHA256": "a69ecb171bea9d40de22744c85220b4a4ea12f5a25ce7976d67f2c88c9195334"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/preview-render.log",
+      "SHA256": "e01c225435f6e0a164c0b9e4d922979372a9cb5c93db474a1f7a005909ec8d1e"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/renderer-setup.md",
+      "SHA256": "3db705760f12c4a3782a6ade005599c17402638e627eb06624510c446280ce64"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/SHA256SUMS.txt",
+      "SHA256": "b9c3d800eda9e0094dd5de97a7695c5f5415cdaf9e73a79f74edd1d7014d54c1"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/static-check.log",
+      "SHA256": "44d175b54525ee01ed95687f3174c6aef2e5a6cc7b0a9d44113bf1eeb39e1dc2"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-category-redesign/unit-tests.xml",
+      "SHA256": "f12385ced50188ee278bb8687c2b44820ea7f11ee1f2f5c7f1efc29910121814"
+    }
+  ],
+  "Binaries": [
+    {
+      "File": "garby-most-latest-release-unsigned.apk",
+      "Bytes": 3279131,
+      "SHA256": "c817936049685b425f486eddc0d5cab1dc4ab72ecc6fec1fdecc962080c554d8"
+    },
+    {
+      "File": "garby-most-latest.apk",
+      "Bytes": 3291419,
+      "SHA256": "8c32790eb9273341c65c84f6a76a21560ae53c3769909cccf149acc224c7da75"
+    }
+  ],
+  "ManifestPath": "docs/verification/2026-11-14-category-redesign/summary.json",
+  "ManifestHashNote": "This summary lists itself by path without a self-referential hash; file hashes describe the working-tree bytes used for verification."
+}

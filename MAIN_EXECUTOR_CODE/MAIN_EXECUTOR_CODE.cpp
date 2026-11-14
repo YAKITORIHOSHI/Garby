@@ -830,9 +830,19 @@ static void reportMotionStatus(bool force) {
 }
 
 static void reportRobotStatus() {
+  // Replay the whole turn scope, including holds, before announcing readiness.
+  // A restarted bridge has no RAM history of the original TURN:START notice.
+  ESP_Serial.println(spinSonarCheck ? "[TURN:START]" : "[TURN:END]");
   // This capability/heartbeat crosses both UART directions and BLE. It
   // never waits for a load-cell, bin sensor, modem, or cloud reading.
-  if (manualStartConnectionReady()) ESP_Serial.println("[SYSTEM READY]");
+  if (manualStartConnectionReady()) {
+    ESP_Serial.println("[SYSTEM READY]");
+    // Capability + fresh idle eligibility only. This never grants GO and
+    // deliberately does not depend on bin level, gas or load readings.
+    if (garbyState == GarbyState::IDLE && !outboundComplete &&
+        !routeFaultLatched && !resetQueued && !operatorEmergencyLatched &&
+        stepper1 && stepper2) ESP_Serial.println("[DISPOSAL READY:1]");
+  }
   if (routeFaultLatched) ESP_Serial.println("[ROUTE FAULT]");
   else if (outboundComplete) ESP_Serial.println("[OUTBOUND COMPLETE]");
   else if (garbyState == GarbyState::RETURNING) ESP_Serial.println("[RETURNING]");
@@ -1081,8 +1091,8 @@ static void processESPMessage(const String& espMsg) {
         startAccepted = true;
         operatorManualStartRequired = false;
         startFailure = "";
-        Serial.println("[STATE] IDLE -> RUNNING (manual start; scale/bin triggers bypassed)");
-        queueSMSNotice(SmsNoticeKind::TRIP, "GARBY: Manual outbound run requested. Motion awaits safety clearance.");
+        Serial.println("[STATE] IDLE -> RUNNING (manual disposal; bin/gas/load triggers bypassed)");
+        queueSMSNotice(SmsNoticeKind::TRIP, "GARBY: Manual disposal requested. Motion awaits safety clearance.");
       }
       sendStartOutcome();
       reportRobotStatus();
@@ -1327,6 +1337,8 @@ struct LowPowerScope {
   ~LowPowerScope() { exitLowPower(); }
 };
 
+static bool holdForHeading(bool verifyDirection = true);
+
 void haltAndWait(const String& reason) {
   activeBrakeStopMotors();
   movingForward = false;
@@ -1378,6 +1390,11 @@ void haltAndWait(const String& reason) {
       cancelPendingSms(SmsNoticeKind::BLOCKED);
       return;
     }
+
+    // Return to the common motion gate even while STOP/sonar still holds us.
+    // It owns heading recovery and its deadline; this clearance-only wait must
+    // never hide an MPU outage or resume the wheels by itself.
+    if (!heading.headingReady((uint32_t)millis())) return;
 
     bool newClearanceEvidence = false;
     bool localClear = true;
@@ -1460,6 +1477,12 @@ static String holdReasonNow(const char* where) {
 // failed segment, which latched a route fault and kept the robot stopped for good.
 static bool waitUntilMotionPermitted(const char* where) {
   while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
+    if (!heading.headingReady((uint32_t)millis())) {
+      activeBrakeStopMotors();
+      movingForward = false;
+      if (!holdForHeading()) return false;
+      continue;
+    }
     if (motionPermitted()) return true;
     haltAndWait(holdReasonNow(where));
   }
@@ -1806,8 +1829,7 @@ static bool waitForTurnHeading(uint32_t timeoutMs) {
   return true;
 }
 
-static int measureWallAxis(float* axisOut);
-static bool waitUntilMotionPermitted(const char* where);
+static int measureWallAxis(float* axisOut, uint32_t timeoutMs = HeadingControl::ALIGN_WAIT_MS);
 
 // Motion without heading feedback is not allowed (2026-11-11). The wheels are at
 // rest here. Wait for the stream, in low power after LOW_POWER_AFTER_MS; only
@@ -1815,50 +1837,61 @@ static bool waitUntilMotionPermitted(const char* where);
 // turned every S3 brownout restart into a permanent stop). When the stream comes
 // back as a new S3 reference after a long hold, the walls must confirm the route
 // direction before the robot moves on: someone may have turned it meanwhile.
-static bool holdForHeading(bool verifyDirection = true) {
+static bool holdForHeading(bool verifyDirection) {
   const unsigned long started = millis();
   const uint32_t anchorsBefore = heading.reanchors();
   Serial.println("[HEADING] MPU stream missing; holding until it returns");
   ESP_Serial.println("[HEADING LOST holding]");
-  headingHoldActive = true;
-  bool recovered = false;
-  {
-    LowPowerScope power;
-    unsigned long lastRequestMs = 0;
-    while (true) {
-      if (heading.headingReady((uint32_t)millis())) {
-        recovered = true;
-        break;
-      }
-      const unsigned long held = millis() - started;
-      if (held >= HeadingControl::HEADING_RECOVERY_MS) {
-        Serial.println("[HEADING] MPU stream did not return; route fault");
-        ESP_Serial.println("[HEADING LOST fault]");
-        break;
-      }
-      if (held >= LOW_POWER_AFTER_MS) enterLowPower("heading stream lost");
-      if (millis() - lastRequestMs >= (lowPowerActive ? LOW_POWER_STATUS_INTERVAL_MS : 100UL)) {
-        requestStatus();
-        lastRequestMs = millis();
-      }
-      serviceTurnSafety();
-      if (resetQueued || routeFaultLatched || operatorEmergencyLatched) break;
-      vTaskDelay(pdMS_TO_TICKS(lowPowerActive ? 20 : 2));
+  struct HoldScope {
+    HoldScope() { headingHoldActive = true; }
+    ~HoldScope() { headingHoldActive = false; }
+  } hold;
+  LowPowerScope power;
+  bool recovered = false, verificationPending = false, reportedMissingWalls = false;
+  unsigned long lastRequestMs = 0;
+  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
+    const unsigned long held = millis() - started;
+    if (held >= HeadingControl::HEADING_RECOVERY_MS) {
+      Serial.println("[HEADING] Heading recovery/direction confirmation timed out; route fault");
+      ESP_Serial.println("[HEADING LOST fault]");
+      return false;
     }
-  }
-  headingHoldActive = false;
-  if (!recovered) return false;
-  ESP_Serial.println("[HEADING LOST recovered]");
-  if (!verifyDirection || millis() - started < HeadingControl::HEADING_VERIFY_AFTER_MS ||
-      heading.reanchors() == anchorsBefore) {
-    return true;
-  }
-  // The wall scans need the Pi link, which may come back after the MPU.
-  if (!waitUntilMotionPermitted("after heading outage")) return false;
-  float axis = 0.0f;
-  const int measured = measureWallAxis(&axis);
-  if (measured == -2) return false;
-  if (measured == 1) {
+    if (held >= LOW_POWER_AFTER_MS) enterLowPower("heading recovery");
+    if (millis() - lastRequestMs >= (lowPowerActive ? LOW_POWER_STATUS_INTERVAL_MS : 100UL)) {
+      requestStatus();
+      lastRequestMs = millis();
+    }
+    serviceTurnSafety();
+    if (resetQueued || routeFaultLatched || operatorEmergencyLatched) return false;
+    if (!heading.headingReady((uint32_t)millis())) {
+      vTaskDelay(pdMS_TO_TICKS(lowPowerActive ? 20 : 2));
+      continue;
+    }
+    if (!recovered) ESP_Serial.println("[HEADING LOST recovered]");
+    recovered = true;
+    verificationPending = verificationPending ||
+        (verifyDirection && millis() - started >= HeadingControl::HEADING_VERIFY_AFTER_MS &&
+         heading.reanchors() != anchorsBefore);
+    if (!verificationPending) return true;
+
+    // W measurements flow even during STOP. Do not wait for GO here: ordinary
+    // obstacle holds remain independent, while direction evidence shares the
+    // original five-minute recovery budget. Missing/disagreeing walls keep us
+    // stationary, and no measurement pair may span a new heading reference.
+    const uint32_t anchorsAtCheck = heading.reanchors();
+    const uint32_t elapsed = (uint32_t)(millis() - started);
+    if (elapsed >= HeadingControl::HEADING_RECOVERY_MS) continue;
+    const uint32_t remaining = HeadingControl::HEADING_RECOVERY_MS - elapsed;
+    float axis = 0.0f;
+    const int measured = measureWallAxis(&axis, min(remaining, HeadingControl::ALIGN_WAIT_MS));
+    if (measured == -2) return false;
+    if (millis() - started >= HeadingControl::HEADING_RECOVERY_MS) continue;
+    if (!heading.headingReady((uint32_t)millis()) || heading.reanchors() != anchorsAtCheck) continue;
+    if (measured != 1) {
+      if (!reportedMissingWalls) ESP_Serial.println("[HEADING LOST verify=WAIT_WALLS]");
+      reportedMissingWalls = true;
+      continue;
+    }
     // Hallways meet at right angles, and an outage in the middle of a turn may
     // leave the old hallway's walls in view: compare with the nearest 90 degrees
     // of the route and correct only that residual.
@@ -1872,23 +1905,21 @@ static bool holdForHeading(bool verifyDirection = true) {
     }
     heading.setRouteTarget(heading.routeTarget() + offGrid);
     ESP_Serial.printf("[HEADING LOST verify=OK walls=%+.1f]\n", offGrid);
-  } else {
-    // No walls to check against: continue from the last heading, as before.
-    ESP_Serial.println("[HEADING LOST verify=NO_WALLS]");
+    return true;
   }
-  return true;
+  return false;
 }
 
 // Hallway direction from two independent LiDAR scans acquired after the spin
 // stopped. 1 = measured, 0 = no walls, -1 = scans disagree, -2 = stop requested.
-static int measureWallAxis(float* axisOut) {
+static int measureWallAxis(float* axisOut, uint32_t timeoutMs) {
   const uint32_t since = (uint32_t)millis();
   float first = 0.0f;
   uint32_t firstAcquisition = 0;
   bool haveFirst = false;
-  while ((uint32_t)millis() - since < HeadingControl::ALIGN_WAIT_MS) {
+  while ((uint32_t)millis() - since < timeoutMs) {
     serviceTurnSafety();
-    if (resetQueued || routeFaultLatched) return -2;
+    if (resetQueued || routeFaultLatched || operatorEmergencyLatched) return -2;
     float axis = 0.0f;
     uint32_t acquisition = 0;
     if (heading.wallAxisSince(since, (uint32_t)millis(), &axis, &acquisition) &&
@@ -1971,11 +2002,9 @@ static bool rotateToHeading(float targetDeg, float commandedDeg, bool alignAfter
   uint8_t passes = 0, spins = 0;
   while (passes < HeadingControl::TURN_MAX_PASSES) {
     if (resetQueued || routeFaultLatched) return false;
-    if (!motionPermitted()) {
-      // Held, never failed, by an obstacle or missing evidence (2026-11-12).
-      if (!waitUntilMotionPermitted("during turn")) return false;
-      continue;
-    }
+    const float frameBeforeGate = heading.routeTarget();
+    if (!waitUntilMotionPermitted("during turn")) return false;
+    targetDeg += heading.routeTarget() - frameBeforeGate;
     if (!waitForTurnHeading(HeadingControl::MPU_WAIT_MS)) {
       if (resetQueued || routeFaultLatched) return false;
       if (shouldStop || !pathCommandFresh()) continue;
@@ -2080,7 +2109,9 @@ bool turnRight(float degrees) {
 static bool spinToHeading(float targetDeg, bool alignAfter) {
   if (!stepper1 || !stepper2) return false;
   TurnSegmentNotice notice;
+  const float frameBeforeGate = heading.routeTarget();
   if (!movementGate(false)) return false;
+  targetDeg += heading.routeTarget() - frameBeforeGate;
   return rotateToHeading(targetDeg, targetDeg - heading.heading(), alignAfter);
 }
 
@@ -2657,7 +2688,8 @@ static bool movePlain(long target1, long target2, const char* label) {
       activeBrakeStopMotors();
       return false;
     }
-    if (shouldStop || frontObstacleDetected()) {
+    if (shouldStop || frontObstacleDetected() ||
+        !heading.sampleFresh((uint32_t)millis(), HeadingControl::HEADING_LOSS_HALT_MS)) {
       activeBrakeStopMotors();
       if (!resume()) return false;
       continue;

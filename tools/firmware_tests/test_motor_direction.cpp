@@ -65,7 +65,8 @@ static void bootsOnTheSamePinsWithForwardPolarity() {
   check(sign1 > 0 && sign2 > 0, "a rising step count rolls both wheels forward on the reported wiring");
   check(wheelSign(true, MOTOR1_ROLLS_FORWARD_ON_HIGH) < 0 && wheelSign(false, MOTOR2_ROLLS_FORWARD_ON_HIGH) < 0,
         "the November 7 true/false pair rolls both wheels backward: the reported fault");
-  check(Serial.tx.find("[EXECUTOR BUILD:NAV-20261112 DIR1_UP=LOW DIR2_UP=HIGH TURNS=MPU]") != std::string::npos,
+  check(Serial.tx.find(std::string("[EXECUTOR BUILD:") + EXECUTOR_BUILD_ID +
+                       " DIR1_UP=LOW DIR2_UP=HIGH TURNS=MPU]") != std::string::npos,
         "USB boot identifies this build, both direction polarities and MPU turns");
 }
 

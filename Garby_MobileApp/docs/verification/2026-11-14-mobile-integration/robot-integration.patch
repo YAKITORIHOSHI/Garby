@@ -1,0 +1,270 @@
+--- a/BLE_Receiver-Final/BLE_Receiver-Final.ino
++++ b/BLE_Receiver-Final/BLE_Receiver-Final.ino
+@@ -40,6 +40,8 @@
+ // continuous reference from boot and the executor owns its segment/route frames.
+ static bool straightRunActive = false;
+ static bool turnActive = false;
++// Unknown after bridge boot until the executor reports its current turn scope.
++static bool turnStateKnown = false;
+ static bool haveSteeringAcquisition = false;
+ static uint32_t lastSteeringAcquisition = 0;
+ static uint8_t steeringAllow = 0;               // STEER_ALLOW_* of the newest acquisition
+@@ -93,7 +95,7 @@
+ #define TRANSPORT_STATS_INTERVAL_MS   10000UL
+ #define BRIDGE_CPU_FREQUENCY_MHZ         160
+ #define BRIDGE_TX_POWER_DBM                9
+-#define BRIDGE_FIRMWARE_ID       "DISPOSAL-20261113"
++#define BRIDGE_FIRMWARE_ID       "RECONNECT-20261114"
+ 
+ // Steering is continuous in the executor (HeadingControl.h). Bridge steering
+ // tunables, the permission rules and the W line format are in SteeringAssist.h.
+@@ -305,7 +307,8 @@
+   lastSteeringAcquisition = 0;
+   steeringAllow          = 0;
+   steeringAllowAtMs      = 0;
+-  turnActive             = false;
++  // A BLE session change invalidates path evidence, not the executor's turn.
++  // Only executor notices/restart or a confirmed operator release end that scope.
+ }
+ 
+ void sendNotification(const char* msg) {
+@@ -799,6 +802,10 @@
+ 
+   // Between [TURN:START] and [TURN:END] the spin sweep must be clear as well.
+   // A Pi that sends no T, or an unknown sweep, is never a clear turn.
++  if (!turnStateKnown) {
++    relayStop("STOP:TURN_UNKNOWN");
++    return;
++  }
+   if (turnActive && turnCode != "C") {
+     relayStop(turnCode == "O" ? "STOP:TURN" : "STOP:TURN_UNKNOWN");
+     return;
+@@ -1482,6 +1489,8 @@
+         pendingReleaseId = "";
+         if (released) {
+           pendingEmergencyId = "";
++          turnActive = false;
++          turnStateKnown = true; // RELEASE is acknowledged only after route unwind to IDLE.
+           resetNavigationState();
+           relayStop("STOP:WAITING_DATA");
+         }
+@@ -1534,13 +1543,18 @@
+   }
+   if (strcmp(mcuMsg, "[TURN:START]") == 0) {
+     // GO evidence from before the turn ignored the spin sweep. Confirm afresh.
++    // Status heartbeats repeat this notice; they must not restart confirmations.
++    if (!turnStateKnown || !turnActive) {
++      stopLatched = true;
++      clearConfirmCount = 0;
++    }
+     turnActive = true;
+-    stopLatched = true;
+-    clearConfirmCount = 0;
++    turnStateKnown = true;
+     return;
+   }
+   if (strcmp(mcuMsg, "[TURN:END]") == 0) {
+     turnActive = false;
++    turnStateKnown = true;
+     return;
+   }
+ 
+@@ -1560,6 +1574,9 @@
+     // until its next state line.
+     straightRunActive = false;
+     turnActive = false;
++    // READY is an executor restart at idle; ALIVE can be an interrupted spin.
++    // The latter needs its status replay before any new path can grant GO.
++    turnStateKnown = !recoveryPing;
+     executorParked = false;
+     // Treat every READY as a controller boot epoch, even if BLE stayed up.
+     // This fixes the case where a rebooted executor waits forever because the
+--- a/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp
++++ b/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp
+@@ -830,6 +830,9 @@
+ }
+ 
+ static void reportRobotStatus() {
++  // Replay the whole turn scope, including holds, before announcing readiness.
++  // A restarted bridge has no RAM history of the original TURN:START notice.
++  ESP_Serial.println(spinSonarCheck ? "[TURN:START]" : "[TURN:END]");
+   // This capability/heartbeat crosses both UART directions and BLE. It
+   // never waits for a load-cell, bin sensor, modem, or cloud reading.
+   if (manualStartConnectionReady()) {
+--- a/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h
++++ b/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h
+@@ -141,7 +141,7 @@
+ // the MPU confirms or swaps it on the first turn and the steering probe.
+ const bool MOTOR1_DIR_HIGH_COUNTS_UP = false;
+ const bool MOTOR2_DIR_HIGH_COUNTS_UP = true;
+-const char EXECUTOR_BUILD_ID[] = "DISPOSAL-20261113";
++const char EXECUTOR_BUILD_ID[] = "RECONNECT-20261114";
+ 
+ const uint32_t MAX_SPEED       = 5600;
+ const uint32_t CAUTION_SPEED   = 3900;
+--- a/tools/firmware_tests/test_bridge.cpp
++++ b/tools/firmware_tests/test_bridge.cpp
+@@ -10,7 +10,7 @@
+ static void ingress(){settleMpu();processBleIngress();}
+ static void runLoop(){settleMpu();loop();}
+ static void check(bool ok,const char* label){if(!ok){std::fprintf(stderr,"FAIL %s\n",label);std::exit(1);}std::printf("PASS %s\n",label);}
+-static void resetFixture(){fakeNow=10000;resetNavigationState();resetIngressQueues();if(emergencyQueue)xQueueReset(emergencyQueue);operatorStopMarker=0;operatorStopLatched=false;operatorExecutorStopped=false;operatorStopGeneration=0;pendingEmergencyId=pendingReleaseId=pendingRebootId="";operatorRebootScheduled=false;lastEmergencySendMs=0;deviceConnected=true;mcuReady=true;piReady=true;bleBridgeSignalSent=true;bleSessionChanged=readyNoticePending=false;mcuBackpressureStopPending=false;mcuUnackedCommands=0;mcuAckPending=mcuAckFault=false;ESP_Serial.tx.clear();}
++static void resetFixture(){fakeNow=10000;resetNavigationState();turnActive=false;turnStateKnown=true;resetIngressQueues();if(emergencyQueue)xQueueReset(emergencyQueue);operatorStopMarker=0;operatorStopLatched=false;operatorExecutorStopped=false;operatorStopGeneration=0;pendingEmergencyId=pendingReleaseId=pendingRebootId="";operatorRebootScheduled=false;lastEmergencySendMs=0;deviceConnected=true;mcuReady=true;piReady=true;bleBridgeSignalSent=true;bleSessionChanged=readyNoticePending=false;mcuBackpressureStopPending=false;mcuUnackedCommands=0;mcuAckPending=mcuAckFault=false;ESP_Serial.tx.clear();}
+ static std::string notificationText(){pNotifyChar->flushScheduledNotifications();std::string text;for(const auto& frame:pNotifyChar->notifications)text+=frame.substr(1);return text;}
+ static void checkHealthRelay(){
+   resetFixture();processAndRelayMessage("[HEALTH:1:UDXUD]");
+@@ -324,6 +324,35 @@
+ // and models ongoing BLE traffic unless told otherwise.
+ static void advance(uint32_t ms,bool bleTraffic=true){
+   for(uint32_t t=0;t<ms;t+=10){fakeNow+=9;if(bleTraffic)lastDataReceived=fakeNow;loop();}
++}
++static void checkTurnSessionRecovery(){
++  ServerCallbacks callbacks;NimBLEConnInfo info;
++  for(const char* sweep:{"F=C|B=C|T=O","F=C|B=C|T=S","F=C|B=C"}){
++    mpuFixture();pathSeq=0;clearPath();clearPath();handleMcuLine("[TURN:START]");
++    static_cast<NimBLEServerCallbacks*>(&callbacks)->onDisconnect(pServer,info,8);advance(10);
++    static_cast<NimBLEServerCallbacks*>(&callbacks)->onConnect(pServer,info);advance(10);
++    handleMcuLine("[MCU ALIVE]");
++    ESP_Serial.tx.clear();clearPath(sweep);clearPath(sweep);
++    check(turnActive && stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
++          "BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence");
++    ESP_Serial.tx.clear();clearPath();clearPath();
++    check(!stopLatched && ESP_Serial.tx.find("GO\n")!=std::string::npos,
++          "an interrupted turn resumes only after fresh clear sweeps");
++  }
++  mpuFixture();pathSeq=0;mcuReady=false;turnActive=false;
++  handleMcuLine("[MCU ALIVE]");
++  ESP_Serial.tx.clear();clearPath();clearPath();
++  check(stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
++        "a rebooted bridge cannot issue GO before learning the live executor's turn mode");
++  handleMcuLine("[TURN:START]");ESP_Serial.tx.clear();
++  clearPath("F=C|B=C|T=O");clearPath("F=C|B=C|T=O");
++  check(turnActive && stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
++        "the executor's replay restores the occupied turn-sweep gate after bridge reboot");
++  clearPath();handleMcuLine("[TURN:START]");clearPath();
++  check(!stopLatched,"repeated turn status does not restart clearance confirmations");
++  handleMcuLine("[TURN:END]");clearPath("F=C|B=C|T=O");
++  check(!turnActive && !stopLatched,"confirmed turn end restores ordinary straight clearance");
++  resetFixture();
+ }
+ static void pumpWithPath(uint32_t ms){
+   for(uint32_t t=0;t<ms;t+=10){
+@@ -552,6 +581,7 @@
+   checkSteeringPermission();
+   checkHeadingStreamAndWalls();
+   checkTurnSweepAndSlow();
++  checkTurnSessionRecovery();
+   checkPortedRegressions();
+   checkSteeringFrameGates();
+   checkStillBiasRefresh();
+--- a/tools/firmware_tests/test_controller.cpp
++++ b/tools/firmware_tests/test_controller.cpp
+@@ -48,6 +48,13 @@
+ static unsigned failures=0;
+ static void check(bool ok,const char* label){if(!ok){std::fprintf(stderr,"FAIL %s\n",label);failures++;}else std::printf("PASS %s\n",label);}
+ int main() {
++  resetFixture();spinSonarCheck=true;ESP_Serial.tx.clear();
++  processESPMessage("[BLE CONNECTION ESTABLISHED]");
++  check(ESP_Serial.tx.find("[TURN:START]\n")<ESP_Serial.tx.find("[SYSTEM READY]\n"),
++        "handshake replays an interrupted turn before announcing readiness");
++  spinSonarCheck=false;ESP_Serial.tx.clear();processESPMessage("[ROBOT STATUS]");
++  check(ESP_Serial.tx.find("[TURN:END]\n")<ESP_Serial.tx.find("[SYSTEM READY]\n"),
++        "status reports explicitly restore non-turn mode before readiness");
+   resetFixture();clearPath();leftWheel.runForward();rightWheel.runForward();
+   processESPMessage("[OP:1:ESTOP]");
+   check(operatorEmergencyLatched && shouldStop && resetQueued &&
+--- a/tools/firmware_tests/test_motor_direction.cpp
++++ b/tools/firmware_tests/test_motor_direction.cpp
+@@ -65,7 +65,8 @@
+   check(sign1 > 0 && sign2 > 0, "a rising step count rolls both wheels forward on the reported wiring");
+   check(wheelSign(true, MOTOR1_ROLLS_FORWARD_ON_HIGH) < 0 && wheelSign(false, MOTOR2_ROLLS_FORWARD_ON_HIGH) < 0,
+         "the November 7 true/false pair rolls both wheels backward: the reported fault");
+-  check(Serial.tx.find("[EXECUTOR BUILD:DISPOSAL-20261113 DIR1_UP=LOW DIR2_UP=HIGH TURNS=MPU]") != std::string::npos,
++  check(Serial.tx.find(std::string("[EXECUTOR BUILD:") + EXECUTOR_BUILD_ID +
++                       " DIR1_UP=LOW DIR2_UP=HIGH TURNS=MPU]") != std::string::npos,
+         "USB boot identifies this build, both direction polarities and MPU turns");
+ }
+ 
+--- a/tools/firmware_tests/test_system.cpp
++++ b/tools/firmware_tests/test_system.cpp
+@@ -68,6 +68,8 @@
+   bridge::startHeadingReference();
+   controller::heading=controller::HeadingControl();
+   physics1=wheel1.getCurrentPosition();physics2=wheel2.getCurrentPosition();physicsMs=fakeNow;
++  // Production status restores the executor's turn mode after bridge boot.
++  controller::reportRobotStatus();wireUart();
+   for(int i=0;i<30;i++){fakeNow+=10;wireUart();}
+   for(int i=0;i<4;i++){for(int k=0;k<10;k++){fakeNow+=10;wireUart();}path(false);}
+ }
+--- a/RasPi/test_monitor_ui.py
++++ b/RasPi/test_monitor_ui.py
+@@ -796,7 +796,8 @@
+         thread.start()
+         self.assertTrue(worker_ready.wait(1))
+         try:
+-            gui.start_btn.invoke()
++            with patch.object(monitor_ui.messagebox, "askyesno", return_value=True):
++                gui.start_btn.invoke()
+             self.assertTrue(gui.start_btn.instate(["disabled"]))
+             deadline = time.monotonic() + 1
+             while not any(message.startswith("[START:") for message in writes) \
+--- a/SYSTEM_ARCHITECTURE.md
++++ b/SYSTEM_ARCHITECTURE.md
+@@ -1,4 +1,12 @@
+ # GARBY system architecture
++
++Turn recovery update (2026-11-14, build `RECONNECT-20261114`): BLE-session resets invalidate
++path/steering freshness while retaining the executor's turn scope. After bridge boot, a
++running executor's `[MCU ALIVE]` does not prove straight mode. GO is withheld until an
++authoritative `[TURN:START]` or `[TURN:END]` arrives. The executor replays its complete turn
++scope, including stopped holds, before status readiness; repeated START is idempotent.
++An explicit controller `[MCU READY]` or confirmed operator RELEASE establishes idle mode.
++Occupied, stale or absent `T=` continues to stop an interrupted turn after reconnection.
+ 
+ Release: 2026-10-04. Software builds and behavioral tests are documented in
+ `VALIDATION_RESULTS.md`; physical acceptance remains hardware-unverified.
+--- a/RELEASE_NOTES.md
++++ b/RELEASE_NOTES.md
+@@ -1,4 +1,20 @@
+ # GARBY release notes
++
++## Test2 integration review — 2026-11-14
++
++- Android manual-disposal outcomes reconcile late reports by request identity in either
++  callback order. A timeout notice cannot hide a matching server acceptance/rejection.
++  Windows verification passed 64 unit tests, lint, optimized and unsigned release assembly.
++- Bridge BLE-session reset now preserves the executor's turn scope. After bridge restart,
++  GO stays blocked until that scope is known; executor status replays TURN:START/END before
++  readiness, and repeated turn reports do not restart clearance confirmations. Original
++  production code failed reconnect and missing-replay regressions before repair.
++- **MCU upload requirement: Both**, complete bridge/executor sketches, build
++  `RECONNECT-20261114`. No upload was performed here; installed identity remains unknown.
++  This follow-up changes only a Pi test; prior manual-disposal Pi deployment remains required.
++- Mobile Test1/Test2 assets preserve the previous app and the new candidate separately.
++  Full review, Windows Pi-suite limitations and exact sibling patch are in
++  `Garby_MobileApp/docs/2026-11-14-integration-review.md` and its verification directory.
+ 
+ ## Confirmed manual disposal — 2026-11-13
+ 
+--- a/DEPLOYMENT_AND_ACCEPTANCE.md
++++ b/DEPLOYMENT_AND_ACCEPTANCE.md
+@@ -1,4 +1,19 @@
+ # GARBY deployment and acceptance
++
++## Test2 turn recovery — 2026-11-14
++
++Use matching complete bridge and executor sketches with build ID `RECONNECT-20261114`.
++The bridge preserves turn-sweep protection across BLE reconnect and requires the executor's
++turn-state replay after bridge restart. Both firmware images are required for that recovery
++contract. A Pi test-only repair adds no new Pi runtime deployment; the earlier disposal
++feature still requires the entire matching `RasPi/` directory and reviewed cloud rules.
++
++Under supervised acceptance with the robot secured, interrupt BLE during a held turn.
++Occupied, stale and missing turn-sweep evidence must keep it stopped after reconnect;
++fresh clear sweeps must resume the interrupted turn. Repeat with a bridge-only restart:
++no GO is permitted before executor turn-state replay. Confirm ordinary straight travel,
++emergency stop and controller restart retain their existing behavior. These physical checks
++were not performed in this software review. Installed firmware identity remains unknown.
+ 
+ Software checks do not establish physical safety. Historical serial inventories
+ and saved flasher selections do not prove that a board is currently connected.

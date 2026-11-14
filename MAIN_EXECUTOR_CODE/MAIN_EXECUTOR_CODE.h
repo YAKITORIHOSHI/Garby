@@ -141,7 +141,7 @@ BuzzerPattern currentBuzzerPattern();
 // the MPU confirms or swaps it on the first turn and the steering probe.
 const bool MOTOR1_DIR_HIGH_COUNTS_UP = false;
 const bool MOTOR2_DIR_HIGH_COUNTS_UP = true;
-const char EXECUTOR_BUILD_ID[] = "NAV-20261112";
+const char EXECUTOR_BUILD_ID[] = "RECONNECT-20261114";
 
 const uint32_t MAX_SPEED       = 5600;
 const uint32_t CAUTION_SPEED   = 3900;

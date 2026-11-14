@@ -130,11 +130,12 @@ int main() {
   }
 
   // 4. A bridge (MPU) restart that takes 30 s in the middle of a straight. The robot
-  //    is stopped the whole time; it must wait and then finish, not latch a fault.
+  //    is stopped the whole time; two independent walls confirm the new reference
+  //    before it finishes. Missing recovery walls are covered in test_navigation.
   {
     resetFixture(); clearPath(); beginRouteHeading();
     PathFeed feed; bool cut = false, gaveUp = false, stoppedDuringOutage = true;
-    uint32_t cutAt = 0;
+    uint32_t cutAt = 0, lastWall = 0, wallAcquisition = 0;
     const long start1 = leftWheel.getCurrentPosition();
     tickHook = [&]() {
       feed.tick("GO");
@@ -145,11 +146,20 @@ int main() {
       if (cut && fakeNow - cutAt > 1000 && fakeNow - cutAt < 29000 &&
           (leftWheel.isRunning() || rightWheel.isRunning())) stoppedDuringOutage = false;
       if (cut && !mpuStreaming && fakeNow - cutAt >= 30000) { mpuEpoch = 2; mpuStreaming = true; }
+      if (cut && mpuStreaming && fakeNow - lastWall >= 200) {
+        lastWall = fakeNow;
+        char payload[64], line[72];
+        std::snprintf(payload, sizeof(payload), "W,%lu,0,7,950,950,0", (unsigned long)++wallAcquisition);
+        uint8_t checksum = 0; for (const char* p = payload; *p; ++p) checksum ^= (uint8_t)*p;
+        std::snprintf(line, sizeof(line), "%s*%02X", payload, (unsigned)checksum);
+        heading.handleLine(line, fakeNow);
+      }
       if (cut && fakeNow - cutAt > 120000 && !gaveUp) { gaveUp = true; resetQueued = true; }
     };
     const bool ok = safeMoveDistance(20000, false, true);
     tickHook = nullptr;
-    check(cut && ok && !gaveUp && stoppedDuringOutage && !routeFaultLatched,
+    check(cut && ok && !gaveUp && stoppedDuringOutage && !routeFaultLatched &&
+          ESP_Serial.tx.find("[HEADING LOST verify=OK") != std::string::npos,
           "a 30 s bridge/MPU outage mid-straight holds stopped and then completes the straight");
   }
 

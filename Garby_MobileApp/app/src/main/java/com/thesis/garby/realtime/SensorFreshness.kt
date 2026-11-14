@@ -12,7 +12,20 @@ fun isFreshTimestamp(
     return ageMs in -futureToleranceMs..staleAfterMs
 }
 
-fun canRequestReturn(ready: Boolean, status: DeviceStatus?, connected: Boolean, nowMs: Long): Boolean =
-    ready && connected && status != null && status.online &&
-        status.bleConnected == true && status.lidarHealthy == true &&
-        isFreshTimestamp(status.lastSeenMs, nowMs = nowMs)
+/** Whether the Pi is reporting, judged from its 30-second heartbeat at display time. */
+enum class RobotPresence {
+    /** Heartbeat within [RtdbConstants.STALE_AFTER_MS]. */
+    Live,
+
+    /** A heartbeat exists but is too old (or too far in the future) to trust. */
+    Stale,
+
+    /** No status record, or one without a heartbeat. */
+    NeverSeen
+}
+
+fun robotPresence(status: DeviceStatus?, nowMs: Long): RobotPresence = when {
+    status == null || status.lastSeenMs <= 0L -> RobotPresence.NeverSeen
+    isFreshTimestamp(status.lastSeenMs, nowMs = nowMs) -> RobotPresence.Live
+    else -> RobotPresence.Stale
+}

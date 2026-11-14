@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <style name="Theme.Garby" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Dark window so launch never flashes white before the glass UI draws. -->
+    <style name="Theme.Garby" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/garby_night</item>
+    </style>
 </resources>

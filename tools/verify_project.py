@@ -28,7 +28,8 @@ def main():
     parser.add_argument("--host-only", action="store_true", help="Skip ESP32 target and Android builds; report those as unverified")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="garby-syntax-") as directory:
-        sources = list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py")) + [ROOT / "Garby_MobileApp/final_w_serial.py"]
+        sources = (list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py"))
+                   + list((ROOT / "Garby_MobileApp/tools").glob("*.py")))
         for index, source in enumerate(sources):
             py_compile.compile(str(source), cfile=str(Path(directory) / f"{index}.pyc"), doraise=True)
     run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "RasPi", "-p", "test_*.py"])

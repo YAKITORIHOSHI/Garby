@@ -1,0 +1,9 @@
+{
+  "CanvasDp": 108,
+  "SafeRadiusDp": 33,
+  "MaximumMarkRadiusDp": 32.3999,
+  "PathCount": 2,
+  "VertexCount": 256,
+  "InsideGuaranteedSafeCircle": true,
+  "NativePreviewInspected": true
+}

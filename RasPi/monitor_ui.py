@@ -532,7 +532,7 @@ class LidarGUI:
             row=0, column=0, sticky="w", padx=12, pady=(10, 6))
         motion = tk.Frame(right, bg=COLORS["surface"])
         motion.grid(row=1, column=0, sticky="w", padx=12)
-        self.start_btn = ttk.Button(motion, text="Start (skip scale/sensors)",
+        self.start_btn = ttk.Button(motion, text="Manual disposal",
                                     style="Monitor.TButton", command=self._request_start,
                                     state="disabled")
         self.start_btn.pack(side="left", padx=(0, 6))
@@ -1018,9 +1018,18 @@ class LidarGUI:
         # Fetch current readiness at click time, not the previous display poll.
         self._current_health = dict(self.read_health())
         if self.request_start and self._current_health.get("manual_start", {}).get("enabled"):
-            result = self.request_start()
-            if result is not None:
-                self._current_health["manual_start"] = result
+            confirmed = messagebox.askyesno(
+                "Start manual disposal?",
+                "Are you sure you want GARBY to go to the collection point now?\n\n"
+                "Bin level, gas and weight thresholds do not need to be reached. "
+                "Obstacle detection and emergency stop remain active.",
+                parent=self.root, default=messagebox.NO)
+            # A modal confirmation can outlive controller readiness.
+            self._current_health = dict(self.read_health())
+            if confirmed and self._current_health.get("manual_start", {}).get("enabled"):
+                result = self.request_start()
+                if result is not None:
+                    self._current_health["manual_start"] = result
         self._refresh_start()
 
     def set_ble_status(self, text, color):

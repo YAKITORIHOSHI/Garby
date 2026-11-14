@@ -1,0 +1,21 @@
+{
+  "rules": {
+    "devices": {
+      "$device": {
+        "commands": {
+          "dispose": {
+            ".read": "auth != null",
+            ".write": "auth != null && newData.exists() && (!data.exists() || data.child('status').val() === 'accepted' || data.child('status').val() === 'failed' || data.child('status').val() === 'unconfirmed') && newData.child('requestId').val() !== data.child('requestId').val()",
+            ".validate": "newData.hasChildren(['version', 'requestId', 'requestedAt', 'requestedBy', 'status'])",
+            "version": { ".validate": "newData.val() === 1" },
+            "requestId": { ".validate": "newData.isString() && newData.val().matches(/^[0-9a-f]{32}$/)" },
+            "requestedAt": { ".validate": "newData.isNumber() && newData.val() === now" },
+            "requestedBy": { ".validate": "newData.isString() && newData.val() === auth.uid" },
+            "status": { ".validate": "newData.val() === 'pending'" },
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    }
+  }
+}

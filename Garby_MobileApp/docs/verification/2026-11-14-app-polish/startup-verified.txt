@@ -1,0 +1,7 @@
+Starting: Intent { cmp=com.thesis.garby/.MainActivity }
+Status: ok
+LaunchState: COLD
+Activity: com.thesis.garby/.MainActivity
+TotalTime: 1685
+WaitTime: 1697
+Complete

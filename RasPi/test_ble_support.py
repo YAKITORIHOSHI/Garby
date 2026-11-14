@@ -210,6 +210,61 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(client.writes[-1], (b"P:42|F=S|B=S", True))
 
+    async def test_steering_age_keeps_queue_and_writer_lock_wait(self):
+        await self.service._connect_guarded()
+        client = self.clients[0]
+        self.service._drain_task.cancel()
+        await asyncio.gather(self.service._drain_task, return_exceptions=True)
+        runtime = self.runtime
+        runtime.ble_send_queue.clear()
+        deadline = 100.0 + runtime.LIDAR_STALE_TIMEOUT_S
+        runtime.ble_send_queue.put_nowait("S:41|CF=300|CL=95|CR=95|A=1|G=0", expires_at=deadline)
+        runtime.ble_send_queue.put_nowait("S:42|CF=300|CL=95|CR=95|A=2|G=10", expires_at=deadline + .01)
+        packet, retained_deadline = runtime.ble_send_queue.get_entry_nowait()
+        now = [100.2]
+        await self.service._write_lock.acquire()
+        with patch.object(runtime.time, "monotonic", side_effect=lambda: now[0]):
+            writer = asyncio.create_task(self.service._write_message(
+                packet, expected_client=client, expires_at=retained_deadline))
+            await asyncio.sleep(0)
+            self.assertFalse(writer.done())
+            now[0] = 100.6
+            self.service._write_lock.release()
+            await writer
+        sent = client.writes[-1][0].decode()
+        self.assertTrue(sent.startswith("S:42|"))
+        age = int(next(part[2:] for part in sent.split("|") if part.startswith("G=")))
+        self.assertGreaterEqual(age, 589)
+        self.assertLessEqual(age, 591)
+
+    async def test_steering_expiring_behind_writer_becomes_stable(self):
+        await self.service._connect_guarded()
+        client = self.clients[0]
+        self.service._drain_task.cancel()
+        await asyncio.gather(self.service._drain_task, return_exceptions=True)
+        now = [100.1]
+        await self.service._write_lock.acquire()
+        with patch.object(self.runtime.time, "monotonic", side_effect=lambda: now[0]):
+            writer = asyncio.create_task(self.service._write_message(
+                "S:42|CF=300|CL=95|CR=95|A=1|G=100", expected_client=client,
+                expires_at=100.8))
+            await asyncio.sleep(0)
+            now[0] = 100.81
+            self.service._write_lock.release()
+            await writer
+        self.assertEqual(client.writes[-1], (b"S:42|STABLE", False))
+
+    async def test_steering_age_growth_cannot_exceed_the_gatt_packet_limit(self):
+        await self.service._connect_guarded()
+        client = self.clients[0]
+        self.service._drain_task.cancel()
+        await asyncio.gather(self.service._drain_task, return_exceptions=True)
+        prefix = "S:42|CF=300|CL=95|CR=95|A=1|G=0|"
+        packet = prefix + "X" * (244 - len(prefix))
+        with patch.object(self.runtime.time, "monotonic", return_value=100.6):
+            await self.service._write_message(packet, expected_client=client, expires_at=100.8)
+        self.assertEqual(client.writes[-1], (b"S:42|STABLE", False))
+
     async def test_read_only_lidar_control_allows_fresh_path_and_start(self):
         await self.service._connect_guarded()
         client = self.clients[0]

@@ -1,0 +1,13 @@
+{
+  "Frames": 280,
+  "JankyFrames": 56,
+  "MedianMs": 23,
+  "P90Ms": 36,
+  "P99Ms": 48,
+  "SlowUiThreadFrames": 18,
+  "PssKiB": 62540,
+  "Sequence": "Three upward and three downward swipes; 400 ms each, 250 ms pauses",
+  "Coordinates": "x=360, y=1170 to 450 and back; 720x1600 screen",
+  "InstalledApkHashBefore": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2",
+  "InstalledApkHashAfter": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2"
+}

@@ -130,8 +130,9 @@ class HeadingControl {
   // advertising) then latched a route fault and the robot stayed stopped for good.
   // The wheels are stopped throughout; the hold drops to low power after 10 s.
   static constexpr uint32_t HEADING_RECOVERY_MS = 300000;
-  // After a hold this long with a new S3 reference, the walls must confirm the
-  // route direction before the robot moves on (someone may have turned it).
+  // Recovery includes any required wall confirmation within the same deadline.
+  // After a hold this long with a new S3 reference, two agreeing wall scans must
+  // confirm the route direction before motion; missing walls keep it stopped.
   static constexpr uint32_t HEADING_VERIFY_AFTER_MS = 10000;
   static constexpr uint32_t HEADING_LOSS_HALT_MS = 300;
   static constexpr float S3_SAMPLE_LATENCY_S = 0.01f;

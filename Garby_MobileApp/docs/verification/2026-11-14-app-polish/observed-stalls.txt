@@ -1,0 +1,8 @@
+11-14 02:25:36.061 29695 29695 I GarbyApplication: Reduced effects=true, background parallelism=1
+11-14 02:25:40.482 29695 29695 I Choreographer: Skipped 229 frames!  The application may be doing too much work on its main thread.
+11-14 02:25:42.819 29695 29695 I Choreographer: Skipped 46 frames!  The application may be doing too much work on its main thread.
+11-14 02:25:45.864 29695 29722 I om.thesis.garb: Background concurrent copying GC freed 5721KB AllocSpace bytes, 23(624KB) LOS objects, 49% free, 7698KB/15MB, paused 392us,71us total 130.740ms
+11-14 02:26:11.536 29695 29695 I Choreographer: Skipped 60 frames!  The application may be doing too much work on its main thread.
+11-14 02:26:22.087 29695 29695 I Choreographer: Skipped 80 frames!  The application may be doing too much work on its main thread.
+11-14 02:28:04.241 29695 29910 I om.thesis.garb: Explicit concurrent copying GC freed 2160KB AllocSpace bytes, 1(20KB) LOS objects, 49% free, 8724KB/17MB, paused 113us,73us total 146.525ms
+11-14 02:34:28.059 29695 29731 I om.thesis.garb: Explicit concurrent copying GC freed 6204KB AllocSpace bytes, 2(40KB) LOS objects, 49% free, 8711KB/17MB, paused 290us,105us total 145.668ms

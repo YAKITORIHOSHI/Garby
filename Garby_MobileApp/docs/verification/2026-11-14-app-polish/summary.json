@@ -1,0 +1,352 @@
+{
+  "Date": "2026-11-14",
+  "DisplayName": "Most Latest",
+  "InternalAndroidVersionCode": 5,
+  "Scope": "Fullscreen, launcher icon, background data-flow review and authorized physical-phone verification",
+  "BaseCommit": "7b3a9e963c23612ad68d7b00200c8008ece88a98",
+  "GradleCommand": "java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleRelease :app:assembleBenchmark --console=plain",
+  "GradleExitCode": 0,
+  "UnitTests": {
+    "Tests": 53,
+    "Failures": 0,
+    "Errors": 0,
+    "Skipped": 0
+  },
+  "Lint": "No issues found",
+  "StaticQualityCheck": "PASS; 31 Kotlin files; 3 fonts",
+  "NativeIconRender": "Passed; circle, rounded-square, asymmetric and themed masks at 72/48 dp visually inspected",
+  "IconGeometry": {
+    "CanvasDp": 108,
+    "SafeRadiusDp": 33,
+    "MaximumMarkRadiusDp": 32.3999,
+    "PathCount": 2,
+    "VertexCount": 256,
+    "InsideGuaranteedSafeCircle": true,
+    "NativePreviewInspected": true
+  },
+  "UserApprovedInstallationAndUiMeasurements": true,
+  "Installation": "Exact R8-optimized APK installed with adb install -r; app data retained and cloud reconnected",
+  "InstalledApkSha256": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2",
+  "InstalledFlags": "HAS_CODE ALLOW_CLEAR_USER_DATA; neither DEBUGGABLE nor TEST_ONLY",
+  "ColdLaunchTotalMs": 1685,
+  "HomeResumeTotalMs": 185,
+  "PhoneChecks": [
+    "Fixed six-swipe scroll sequence",
+    "Dashboard and return screen fullscreen",
+    "Confirmation dialog fullscreen and cancelled",
+    "Home/resume fullscreen",
+    "Home/resume with confirmation open",
+    "Transient bars revealed by edge swipe",
+    "Return-screen open/back; send remained disabled",
+    "Final installed APK hash matched release artifact"
+  ],
+  "DebugScroll": {
+    "Frames": 156,
+    "JankyFrames": 89,
+    "MedianMs": 32,
+    "P90Ms": 81,
+    "P99Ms": 113,
+    "SlowUiThreadFrames": 86,
+    "PssKiB": 156963,
+    "Sequence": "Three upward and three downward swipes; 400 ms each, 250 ms pauses",
+    "Coordinates": "x=360, y=1170 to 450 and back; 720x1600 screen"
+  },
+  "OptimizedScroll": {
+    "Frames": 280,
+    "JankyFrames": 56,
+    "MedianMs": 23,
+    "P90Ms": 36,
+    "P99Ms": 48,
+    "SlowUiThreadFrames": 18,
+    "PssKiB": 62540,
+    "Sequence": "Three upward and three downward swipes; 400 ms each, 250 ms pauses",
+    "Coordinates": "x=360, y=1170 to 450 and back; 720x1600 screen",
+    "InstalledApkHashBefore": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2",
+    "InstalledApkHashAfter": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2"
+  },
+  "InvalidatedSample": "First optimized attempt was replaced by a different debug APK; invalidated-* files are excluded from final comparisons",
+  "PerformanceLimits": [
+    "Some jank remains",
+    "One physical phone measured",
+    "Comparison includes debug-to-optimized compilation, fullscreen and background-dispatch changes; individual effects not isolated",
+    "Idle thread observations do not exclude bursts or establish server latency"
+  ],
+  "FirebaseAudit": "Narrow listeners; connection/status shared; callbacks conflate before decode; duplicate suppression and detach covered by existing tests",
+  "RobotCommandsSent": 0,
+  "McuUploadRequirement": "None",
+  "McuUploadPerformed": false,
+  "PiDeploymentRequirement": "None",
+  "PiDeploymentPerformed": false,
+  "InstalledFirmwareIdentity": "Unknown",
+  "RobotPhysicalAcceptance": "Not tested",
+  "Files": [
+    {
+      "Path": "PATCH_NOTES.md",
+      "SHA256": "6cc3b96ec43ea0242bd5f7cb28eafb831d7ac6403fe3af6cbfe9a73df29d6490"
+    },
+    {
+      "Path": "README.md",
+      "SHA256": "14d97c7fc952ea4a0c2c338afa6b48360a5d793565155e7d2db3592a54ff1308"
+    },
+    {
+      "Path": "SYSTEM_ARCHITECTURE.md",
+      "SHA256": "06da1bdc18e4d5fa7ded2ab103cd372a609c8478b37dcc1e28ab5614911d6c31"
+    },
+    {
+      "Path": "app/build.gradle.kts",
+      "SHA256": "a9ab7aef46dfa1adfb7a4d64e27b2f72c35a9d2b90cb3576643eecbbe8ddeb18"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/MainActivity.kt",
+      "SHA256": "6a638f4a37ebef7a5820b3ecf4e3e9b258161329cb899087eeaff6206fff8a7b"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ReturnViewModel.kt",
+      "SHA256": "85d4e2ac26d033e3e910742da459e55f6cbb81d52422afc7379254a10a43aa34"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/Fullscreen.kt",
+      "SHA256": "8d4016c8667c84ca1634337b2694823f909ce5ecb313341ea27703d49c2da2f4"
+    },
+    {
+      "Path": "app/src/main/java/com/thesis/garby/ui/glass/GlassKit.kt",
+      "SHA256": "a29647a71d5d81f2b045fa689a74d0590f75e5a13f96378ec76cd81c4c886021"
+    },
+    {
+      "Path": "app/src/main/res/drawable/ic_launcher_foreground.xml",
+      "SHA256": "1b3d86199f5eaf5b8f1c60738a2bbb13d1b9b7d1dbbce8844f35010509332a3a"
+    },
+    {
+      "Path": "app/src/main/res/drawable/ic_launcher_monochrome.xml",
+      "SHA256": "fbcf5b6f7463f4ab78f8d25f743e20d4652f255868eb751328af0ae8712a9c93"
+    },
+    {
+      "Path": "design/generate_launcher_mark.py",
+      "SHA256": "2ba364561309d8ad9c79eb6584df3d1277469274f2ade8b1ae8e57d211c18e56"
+    },
+    {
+      "Path": "docs/2026-11-14-fullscreen.md",
+      "SHA256": "b33004bdd58ba6541d657e5d15cad6900903198e8719167ec9d3d859cba264a2"
+    }
+  ],
+  "Artifacts": [
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/apk-metadata.txt",
+      "SHA256": "c8a7ed541c4e658645fd4639ea213ccefb560022f11ad5c46a2d0d2a82a3b1ab"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/apk-signature.txt",
+      "SHA256": "ba18e8ad154c549f4473c6fea2d8412376ebd67c2119f15c2b87b1a10c2b033f"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/debug-scroll-gfxinfo.txt",
+      "SHA256": "19bbeb5c8badd9618f56896912b72824b40a2b807b1d24bb6ee918685b94a42b"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/debug-scroll-meminfo.txt",
+      "SHA256": "33d39ee7ff7ee4ac3904b23a0325d13376f7b90a907da0b03ccff14734d7c44e"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/debug-scroll-summary.json",
+      "SHA256": "ad4c5df241ccba0b82397dd5cf2d17a730dd8e2f97990708e61332410a147c55"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/dialog-resume.txt",
+      "SHA256": "812667cf4805f1c304917767e100617fdd9c2720f31bf84192c7282db22b42cd"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/dialog-window.txt",
+      "SHA256": "aeba1865fe73aca0c9904b0c078a57e35d069e19bd2a1f4ef24098444409b718"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/final-installed-package.txt",
+      "SHA256": "703a2e34cae9eb96cce529ad93d1a1c7dde74e6e1d54c468104a3a61fe080995"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/final-installed-sha256.txt",
+      "SHA256": "767a633394ea9e2f7e8852a8552a8b9f394c34c2af66c0005b77aea9db371dff"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/fullscreen-window.txt",
+      "SHA256": "408e736f45e8cbfc7061fa1763827ce6aa76fdede299c16aa5414e94a1fea47f"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/gradle.log",
+      "SHA256": "7b1604a05b9dfdf997928dcde7d489eab07d1491286c34e5a6b5e5c5c3fd9f41"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/icon-geometry.json",
+      "SHA256": "b30d2149a966361954a5a21951062151d347fefbda2e800bab58e1b8916a1875"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/icon-render.log",
+      "SHA256": "4a36a1b55a4e8484d7c4a1a0d80ab56d870f86eb31bb0423af72f41bef6dd939"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/install-verified.log",
+      "SHA256": "c4aa470acafcf8576c15b0f0b5ae7e852d1ec5413372d0e6a9272e788e1306d3"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/installed-package.txt",
+      "SHA256": "703a2e34cae9eb96cce529ad93d1a1c7dde74e6e1d54c468104a3a61fe080995"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-install.log",
+      "SHA256": "c4aa470acafcf8576c15b0f0b5ae7e852d1ec5413372d0e6a9272e788e1306d3"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-installed-package.txt",
+      "SHA256": "9660ca2f21b29b3d4f66ac58510593f308084c720c85b6dc317fc7f299fb0f73"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-optimized-scroll-gfxinfo.txt",
+      "SHA256": "0c9703ec628f4991d73e50966a25902e0f7384c97c681c0e4c46bc1750cfa3eb"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-optimized-scroll-meminfo.txt",
+      "SHA256": "eff32884d8f845a41d08dda19e2f6fc25b7c4a7fae7eac492b2541f2f16f5e66"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-optimized-scroll-summary.json",
+      "SHA256": "f5b6ca83a5afc13424112c6c06653916c458f491fe665c15bc89ea957ac88fe9"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-phone-fullscreen.png",
+      "SHA256": "762645c84769c22459fa89209c5e2b7bb95eda0dc4b6cd720c54a63b18476895"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/invalidated-startup.txt",
+      "SHA256": "cfad4c9e619625772d8d5f0d96ab25d1c3660720e86a1a257ed9de9b370194aa"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/launcher-icon-preview.png",
+      "SHA256": "ff61831419cbc3782d4a6b3ce297a0dfed03e2bfb99ef64ca7c087acc6a4c34d"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/LauncherIconPreviewTest.kt",
+      "SHA256": "709ea7c4b80bc295d076ca301059642c8402f70e9f1d2034dfe663b7ea3499a7"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/lint-results.txt",
+      "SHA256": "a69ecb171bea9d40de22744c85220b4a4ea12f5a25ce7976d67f2c88c9195334"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/measure_scroll.py",
+      "SHA256": "2e8462bd1750c3909f245ef7070580227896689a968630ce6d6cd78a6125d0cb"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/measurement-notes.md",
+      "SHA256": "36d6c7ca811105dd87fc78200ee783a8b8badd4d10c4343f2e7c437a59b92139"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/observed-debug-gfxinfo.txt",
+      "SHA256": "cb00cb64d474ebbdba6e3d9dc5001dc2a41da7d299da3dc94f2220dea2b6fa0c"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/observed-debug-meminfo.txt",
+      "SHA256": "a48aa89fb8cdb81c7fd6e8cb9d3d6d4a69bea3b075761904111700b6f48d35d8"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/observed-idle-threads.txt",
+      "SHA256": "bbf5e113050eeb5ab7bb5f68bf42f2aa74b6ccc6c4a889886b58827ef4aa1d74"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/observed-package.txt",
+      "SHA256": "7c58d3eff43ce742fc3da104d78a7bc09050df91c453489615720c6eeeddc025"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/observed-stalls.txt",
+      "SHA256": "44ad02d57c826460617157ba34557a0438c14ccf3d3d2363c431ef09c05d4b24"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/optimized-app-log.txt",
+      "SHA256": "17961853b38a0988a18a5e0ef353098872ce2d4aabfdda1cf353034a9ace58b1"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/optimized-idle-threads.txt",
+      "SHA256": "bbffe15cf8ff3f2e587cec99f1fa1073597975b8f39ee21ba8bf533f03d2fba4"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/optimized-scroll-gfxinfo.txt",
+      "SHA256": "14e145b050f230f6b025177a86d08ab6ff3665d637b054f0a812ee6003932c73"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/optimized-scroll-meminfo.txt",
+      "SHA256": "e5735e431275d88b1b54a7a346f972962db5bd1b9066666bf12c2e47d87ec266"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/optimized-scroll-summary.json",
+      "SHA256": "d303cc9374324dc8f052098a6b0e02a67a9a871f0154e162ac6252143ee09be2"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-debug-before.png",
+      "SHA256": "2efa20598412f16b3c6ec126b57bc076edaaf7d1305eb3cd62d5687c69b84a78"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-fullscreen-dialog.png",
+      "SHA256": "aa8766f01898a100da8e056a2d3c34db576fa412ab42e7eac284a08a3830181a"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-fullscreen.png",
+      "SHA256": "91f28adf9dea8f94b818ae0f0a7dad12d2c7d029e2730e6da1d8a5e5fbf5b5b8"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-resumed-dialog.png",
+      "SHA256": "bfba61a805d4469910940ad1917cc820ae3e055bf56f9ac8e52efc6a5a0ddecc"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-resumed-fullscreen.png",
+      "SHA256": "945ba292fbaf96cbe05f53b8d5002ada402d2a1c6a08d4591a9b0ec569cc6864"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-return-checks.png",
+      "SHA256": "17ad4d7ced81c656e753842d87b2fd8ab1066f5444c608510b612b894e59bbd0"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/phone-transient-bars.png",
+      "SHA256": "6282187944a4419c5ff24bc4ec3f5e05e6dda714d61e516f8ae2a9dbea043dd5"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/resume.txt",
+      "SHA256": "0a8f8b9fa0875c5221e83139fdfbba4382919738527cdc40091f3a64ac977caf"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/resumed-dialog-window.txt",
+      "SHA256": "6ec16d54edd9d3e1fdfa4781c6acd396ae26545129c376787505ec82e6080662"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/resumed-window.txt",
+      "SHA256": "f5d3b8c61253d3ce8907cc60b42077f27021cb6c7273be6a2113a018334917da"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/SHA256SUMS.txt",
+      "SHA256": "46a19d9bd28f6b19814c5cafd833b64eaad020f72821b8b0d2e8af63a70d291f"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/startup-verified.txt",
+      "SHA256": "55cc0fb488118b8bd02740d52d5879930c88c1275dbfcf546f85b0f9047c1996"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/static-check.log",
+      "SHA256": "cfc91c4eb78d22d9496473c0509bd4fad206dc0901e5cfbf4304c42a06fd721b"
+    },
+    {
+      "Path": "docs/verification/2026-11-14-app-polish/unit-tests.xml",
+      "SHA256": "0f8db19273b3aecc2d206b29c520066b0c0d5c458c1d88c1e0884b3447b2796e"
+    }
+  ],
+  "Binaries": [
+    {
+      "File": "garby-most-latest-release-unsigned.apk",
+      "Bytes": 3280867,
+      "SHA256": "f6fd69cecf1bde19a031e06dc501413fbeb3284259794632f81313735d023c5d"
+    },
+    {
+      "File": "garby-most-latest.apk",
+      "Bytes": 3293155,
+      "SHA256": "25cd2d13511b1c6eaf74fd05441219e733525733ce60f21fc3a027e0498d63a2"
+    }
+  ],
+  "ManifestPath": "docs/verification/2026-11-14-app-polish/summary.json",
+  "ManifestHashNote": "The summary lists itself by path without a self-referential hash. Source/evidence hashes describe the working-tree bytes used for verification."
+}

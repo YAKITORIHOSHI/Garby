@@ -68,6 +68,8 @@ static void initialize(){
   bridge::startHeadingReference();
   controller::heading=controller::HeadingControl();
   physics1=wheel1.getCurrentPosition();physics2=wheel2.getCurrentPosition();physicsMs=fakeNow;
+  // Production status restores the executor's turn mode after bridge boot.
+  controller::reportRobotStatus();wireUart();
   for(int i=0;i<30;i++){fakeNow+=10;wireUart();}
   for(int i=0;i<4;i++){for(int k=0;k<10;k++){fakeNow+=10;wireUart();}path(false);}
 }
@@ -187,6 +189,8 @@ int main(){
         notifications().find("[IDLE]")!=std::string::npos,
         "Pi readiness round trip confirms both controllers while scale and bin data are unavailable");
   const std::string manualStart="[START:1234567890001]";
+  check(notifications().find("[DISPOSAL READY:1]")!=std::string::npos,
+        "executor disposal capability crosses the real bridge without any bin threshold");
   bridge::enqueueBleWrite(manualStart.c_str(),manualStart.size());bridge::processBleIngress();
   wireUart();wireUart();
   check(controller::garbyState==controller::GarbyState::RUNNING &&

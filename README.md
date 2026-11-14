@@ -9,7 +9,8 @@ stops for people and obstacles, and resumes on its own when the path is clear.
 
 - **Starts a run by itself** when the bin is heavy enough (load cell at 4 kg or more, confirmed
   twice) or the gas sensors read dangerous levels (confirmed three times), or when an operator
-  presses Start on the monitor.
+  confirms **Manual disposal** on the monitor or Android app, even before the bin,
+  weight or gas thresholds are reached.
 - **Follows a calibrated route.** Turns are measured with an MPU6050 gyro and checked against the
   hallway walls seen by the LiDAR. Long straights steer to the centre of the hallway, and before a
   long run the robot stands still and centres itself between the walls first.
@@ -20,8 +21,8 @@ stops for people and obstacles, and resumes on its own when the path is clear.
 - **Lets people know it is coming** with a short beep while driving.
 - **Reports its state** on the Raspberry Pi monitor, to an Android app through Firebase, and by
   SMS for important events (blocked for a long time, route fault, emergency stop, outages).
-- **Fails safe.** Missing or stale sensor data stops the wheels. The app, cloud and SMS can
-  never make the robot move.
+- **Fails safe.** Missing or stale path/heading data stops the wheels. App requests never
+  bypass the robot's motion safety checks.
 
 ## How it is built
 
@@ -30,7 +31,7 @@ stops for people and obstacles, and resumes on its own when the path is clear.
 | Supervisor | Raspberry Pi 5, YDLIDAR X3, ROS 2 | `RasPi/` | Reads the LiDAR, decides whether the path is clear, fits the hallway walls, predicts moving objects, runs the monitor, talks to the bridge over Bluetooth LE, publishes to Firebase |
 | Bridge | ESP32-S3 with an MPU6050 | `BLE_Receiver-Final/` | Receives path decisions over BLE, streams the robot's heading, forwards wall measurements, relays commands to the executor over UART |
 | Executor | ESP32, two stepper drivers, sonar on a servo, buzzer, HX711 load cell, Air780E modem | `MAIN_EXECUTOR_CODE/` | Drives the routes and turns, steers, enforces every stop, starts runs, sends SMS |
-| App | Android phone | `Garby_MobileApp/app/` | Dashboard and the request to return to base |
+| App | Android phone | `Garby_MobileApp/app/` | Dashboard, confirmed manual disposal and return-to-base requests |
 
 A separate sensor board (bin fill ultrasonic, MQ4/MQ135/MQ137 gas sensors) connects to the Pi
 by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTOR_CODE/PINOUTS.txt).
@@ -108,9 +109,16 @@ To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`
 - **Monitor.** The *LiDAR readings* tab shows a radar map around the robot, front at the top:
   the distance in each direction, each direction's stop distance, the hallway walls and any
   zone or moving object that is holding the robot. The *BLE/messages* tab shows the link and the
-  robot's reports. The *Controls* tab has **Start (skip scale/sensors)**, **Release stop**,
+  robot's reports. The *Controls* tab has **Manual disposal** (with confirmation), **Release stop**,
   front/rear LiDAR read-only, obstacle sonar on/off and **Restart Pi + bridge + executor**.
   **EMERGENCY STOP** is always visible.
+- **Manual disposal after school.** With GARBY idle at base, press **Manual disposal** on
+  the monitor or app, then confirm **Start manual disposal?**. Bin level, gas and weight
+  thresholds may be below their automatic trigger values or unavailable. GARBY uses the
+  usual outbound route; obstacles, stale path/heading evidence and emergency stop still
+  hold the motors. The app shows whether GARBY accepted the request; acceptance is not
+  arrival. At the collection point, dispose of the trash and request return as usual.
+  App setup and Windows build steps: [`docs/manual-disposal-2026-11-13.md`](docs/manual-disposal-2026-11-13.md).
 - **A run.** Once started, GARBY drives the outbound route and beeps every 1.2 s. If something
   blocks it, it stops, chirps twice every 2 s, and continues by itself when the path is clear; a
   long wait switches to low power. At the destination it stays put until a return is requested

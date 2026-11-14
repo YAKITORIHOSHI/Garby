@@ -1,0 +1,46 @@
+Reusing configuration cache.
+> Task :app:preBuild UP-TO-DATE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:preDebugScreenshotTestBuild UP-TO-DATE
+> Task :app:generateDebugScreenshotTestAssets UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:processDebugGoogleServices UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:javaPreCompileDebugScreenshotTest UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:generateDebugScreenshotTestResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:mergeDebugScreenshotTestAssets UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:checkDebugScreenshotTestAarMetadata UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:mergeDebugScreenshotTestResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:generateDebugRFile UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:mergeDebugScreenshotTestManifest UP-TO-DATE
+> Task :app:processDebugScreenshotTestManifest UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:processDebugScreenshotTestResources UP-TO-DATE
+> Task :app:packageDebugForScreenshotTest UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :app:compileDebugScreenshotTestJavaWithJavac NO-SOURCE
+> Task :app:compileDebugScreenshotTestKotlin
+> Task :app:processDebugScreenshotTestJavaRes UP-TO-DATE
+> Task :app:assembleDebugScreenshotTest
+
+> Task :app:updateDebugScreenshotTestDefaultTestSuite
+Test report generated at: file:///C:/Users/napht/AppData/Local/Temp/garby-category-preview-20261114/output/app/reports/tests/updateDebugScreenshotTestDefaultTestSuite/index.html
+
+BUILD SUCCESSFUL in 16s
+31 actionable tasks: 2 executed, 29 up-to-date
+Configuration cache entry reused.

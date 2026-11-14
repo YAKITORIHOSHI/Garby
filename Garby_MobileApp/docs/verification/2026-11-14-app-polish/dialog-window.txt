@@ -1,0 +1,63 @@
+7 Window{c2d0838 u0 com.thesis.garby/com.thesis.garby.MainActivity}:
+    mDisplayId=0 rootTaskId=1030 mSession=Session{a6ea34f 31853:u0a10344} mClient=android.os.BinderProxy@13f4c9b
+    mOwnerUid=10344 showForAllUsers=false package=com.thesis.garby appop=NONE
+    mAttrs={(0,0)(fillxwrap) gr=CENTER sim={adjust=nothing} layoutInDisplayCutoutMode=always ty=APPLICATION fmt=TRANSPARENT wanim=0x1030304 surfaceInsets=Rect(56, 56 - 56, 56)
+      fl=1810102
+      pfl=12000000
+      vsysui=1100
+      bhv=SHOW_TRANSIENT_BARS_BY_SWIPE
+      fitSides= dimAmount=0.6 naviIconColor=0}
+    Requested w=719 h=515 mLayoutSeq=3949
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{d02f048 u0 com.thesis.garby/.MainActivity t1030}
+    mActivityRecord=ActivityRecord{d02f048 u0 com.thesis.garby/.MainActivity t1030}
+    mAppDied=false    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 515mcc66mnc [en_US] ldltr sw411dp w411dp h840dp 280dpi nrml long port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1600) mAppBounds=Rect(0, 45 - 720, 1516) mMaxBounds=Rect(0, 0 - 720, 1600) mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mPopOver=off mFreeformTaskPinningState=unpinned} s.1 fontWeightAdjustment=0 ff=0 bf=0 bts=0 enb/d themeSeq=0}
+    mLastReportedConfiguration={1.0 515mcc66mnc [en_US] ldltr sw411dp w411dp h840dp 280dpi nrml long port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1600) mAppBounds=Rect(0, 45 - 720, 1516) mMaxBounds=Rect(0, 0 - 720, 1600) mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mPopOver=off mFreeformTaskPinningState=unpinned} s.1 fontWeightAdjustment=0 ff=0 bf=0 bts=0 enb/d themeSeq=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: containing=[0,0][720,1600] parent=[0,0][720,1600] display=[0,0][720,1600]
+    mFrame=[0,542][720,1057] last=[0,542][720,1057]
+     surface=[56,56][56,56]
+    WindowStateAnimator{bac6e32 com.thesis.garby/com.thesis.garby.MainActivity}:
+       mAnimationIsEntrance=true      mSurface=Surface(name=com.thesis.garby/com.thesis.garby.MainActivity$_31853)/@0xeaa5783
+      Surface: shown=true layer=0 alpha=1.0 rect=(0.0,0.0)  transform=(1.0, 0.0, 0.0, 1.0)
+      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false      mSystemDecorRect=[0,0][0,0]
+    mForceSeamlesslyRotate=false seamlesslyRotate: pending=null finishedFrameNumber=0
+    isOnScreen=true
+    isVisible=true
+    Requested visibility: ITYPE_STATUS_BAR: invisible, ITYPE_NAVIGATION_BAR: invisible, ITYPE_CLIMATE_BAR: invisible, ITYPE_EXTRA_NAVIGATION_BAR: invisible
+    mHiddenWhileProfileLockedState=false
+
+8 Window{cf7d8e0 u0 com.thesis.garby/com.thesis.garby.MainActivity}:
+    mDisplayId=0 rootTaskId=1030 mSession=Session{a6ea34f 31853:u0a10344} mClient=android.os.BinderProxy@835d6e3
+    mOwnerUid=10344 showForAllUsers=false package=com.thesis.garby appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan forwardNavigation} layoutInDisplayCutoutMode=always ty=BASE_APPLICATION wanim=0x1030303
+      fl=81810100
+      pfl=12020040
+      vsysui=1100
+      bhv=SHOW_TRANSIENT_BARS_BY_SWIPE
+      fitSides= naviIconColor=0}
+    Requested w=720 h=1600 mLayoutSeq=3949
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{d02f048 u0 com.thesis.garby/.MainActivity t1030}
+    mActivityRecord=ActivityRecord{d02f048 u0 com.thesis.garby/.MainActivity t1030}
+    mAppDied=false    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    mGivenContentInsets=[0,0][0,0] mGivenVisibleInsets=[0,0][0,0]
+    mFullConfiguration={1.0 515mcc66mnc [en_US] ldltr sw411dp w411dp h840dp 280dpi nrml long port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1600) mAppBounds=Rect(0, 45 - 720, 1516) mMaxBounds=Rect(0, 0 - 720, 1600) mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mPopOver=off mFreeformTaskPinningState=unpinned} s.1 fontWeightAdjustment=0 ff=0 bf=0 bts=0 enb/d themeSeq=0}
+    mLastReportedConfiguration={1.0 515mcc66mnc [en_US] ldltr sw411dp w411dp h840dp 280dpi nrml long port night finger -keyb/v/h -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1600) mAppBounds=Rect(0, 45 - 720, 1516) mMaxBounds=Rect(0, 0 - 720, 1600) mWindowingMode=fullscreen mDisplayWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0 mPopOver=off mFreeformTaskPinningState=unpinned} s.1 fontWeightAdjustment=0 ff=0 bf=0 bts=0 enb/d themeSeq=0}
+    mHasSurface=true isReadyForDisplay()=true mWindowRemovalAllowed=false
+    Frames: containing=[0,0][720,1600] parent=[0,0][720,1600] display=[0,0][720,1600]
+    mFrame=[0,0][720,1600] last=[0,0][720,1600]
+     surface=[0,0][0,0]
+    WindowStateAnimator{dbf9eec com.thesis.garby/com.thesis.garby.MainActivity}:
+      mSurface=Surface(name=com.thesis.garby/com.thesis.garby.MainActivity$_31853)/@0x38ac2b5
+      Surface: shown=true layer=0 alpha=1.0 rect=(0.0,0.0)  transform=(1.0, 0.0, 0.0, 1.0)
+      mDrawState=HAS_DRAWN       mLastHidden=false
+      mEnterAnimationPending=false      mSystemDecorRect=[0,0][0,0]
+    mForceSeamlesslyRotate=false seamlesslyRotate: pending=null finishedFrameNumber=0
+    isOnScreen=true
+    isVisible=true
+    Requested visibility: ITYPE_STATUS_BAR: invisible, ITYPE_NAVIGATION_BAR: invisible, ITYPE_CLIMATE_BAR: invisible, ITYPE_EXTRA_NAVIGATION_BAR: invisible
+    mHiddenWhileProfileLockedState=false

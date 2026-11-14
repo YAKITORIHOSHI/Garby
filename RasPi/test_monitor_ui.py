@@ -723,7 +723,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.health["manual_start"]["enabled"] = True
         self.poll(gui)
-        gui.start_btn.invoke()
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=True) as confirm:
+            gui.start_btn.invoke()
+        confirm.assert_called_once()
         gui.start_btn.invoke()
         self.assertEqual(calls, [True])
         self.assertTrue(gui.start_btn.instate(["disabled"]))
@@ -733,7 +735,8 @@ class DashboardTests(unittest.TestCase):
         gui = self.dashboard(request_start=lambda: {"enabled": False, "pending": True})
         self.health["manual_start"] = {"enabled": True, "message": "Ready"}
         self.poll(gui)
-        gui.start_btn.invoke()
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=True):
+            gui.start_btn.invoke()
         self.root.after_cancel(gui._after_id)
         # A peripheral/health snapshot may fail once during a transition. The
         # monitor must schedule its next update even when this one cannot draw.
@@ -793,7 +796,8 @@ class DashboardTests(unittest.TestCase):
         thread.start()
         self.assertTrue(worker_ready.wait(1))
         try:
-            gui.start_btn.invoke()
+            with patch.object(monitor_ui.messagebox, "askyesno", return_value=True):
+                gui.start_btn.invoke()
             self.assertTrue(gui.start_btn.instate(["disabled"]))
             deadline = time.monotonic() + 1
             while not any(message.startswith("[START:") for message in writes) \

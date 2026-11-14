@@ -1,0 +1,739 @@
+test_bridge.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(476): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(702): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(731): warning C4018: '<': signed/unsigned mismatch
+
+PASS scan response and automatic advertising recovery are configured
+PASS NimBLE power API receives dBm rather than the numeric ESP-IDF enum
+PASS stationary MPU fixture calibrates through the production reader
+PASS 700 ms old clearance cannot grant a 500 ms steering permission
+PASS permission expires at acquisition age 500 ms including the 30 ms transit estimate
+PASS bridge mailbox time ages both clearance permission and the wall measurement
+PASS clearance without acquisition age grants no steering
+PASS acquisition age expiry survives unsigned millis wrap
+PASS allowlisted Pi health relays unchanged and expects the ordinary executor ACK
+PASS health has no path, readiness, motion confirmation or operator latch side effects
+PASS unknown health states remain diagnostic while an operator emergency is latched
+PASS relay revalidates health versions, exact lengths, states and injection attempts
+PASS BLE health ingress rejects malformed and embedded-NUL packets
+PASS malformed health flood preserves both queued safety packets and the latest valid snapshot
+PASS health burst cannot consume control capacity or run ahead of queued controls
+PASS independent latest health and sensor mailboxes survive producer bursts
+PASS health at the 15-second freshness boundary can relay
+PASS health older than 15 seconds is discarded
+PASS health from a prior BLE session is discarded
+PASS ingress reset clears pending health snapshots
+PASS health cannot reach or establish an unready executor
+PASS health relay requires a live BLE session
+PASS health cannot bypass the ordinary UART backlog cap
+PASS valid and malformed health flood cannot keep the safety path watchdog alive
+PASS emergency dispatch clears queued health and wins over telemetry
+PASS BLE disconnect clears health before reconnection
+PASS a clear hallway permits steering to both sides
+PASS a nearest object 40 cm to the left vetoes only steering left
+PASS a nearest object on the right vetoes only steering right
+PASS a close front-left diagonal vetoes steering left
+PASS a close rear-right diagonal vetoes steering right
+PASS missing nearest-object clearance permits no steering
+PASS a missing forward return permits no steering
+PASS an object 60 cm ahead permits no steering
+PASS a wall median at the hard limit permits no steering
+PASS missing wall medians remove centering evidence, not heading-hold permission
+PASS wall line carries acquisition, age, flags, millimetres, centidegrees and a valid checksum
+PASS a single wall is forwarded with only its own flag
+PASS a scan without any wall forwards nothing
+PASS wall evidence older than the age limit is not forwarded
+PASS stationary MPU fixture calibrates through the production reader
+PASS the heading reference has a nonzero epoch
+PASS the 50 Hz heading line has five fields and a valid checksum
+PASS the heading stream grants no steering while STOP is latched and expects no ACK
+PASS heading lines are spaced by the stream interval
+PASS two clear path packets with a valid heading release GO
+PASS a new acquisition forwards its wall fit once, with scan age plus transit
+PASS a clean acquisition permits steering both ways in the next heading line
+PASS a repeated acquisition forwards no second wall line
+PASS a repeated acquisition cannot refresh the permission's age
+PASS the next independent acquisition restores permission and forwards walls
+PASS a malformed field withdraws permission and forwards nothing
+PASS an out-of-order acquisition cannot restore permission
+PASS a thin object on the left vetoes steering left while its wall and heading are still forwarded
+PASS open space on both sides keeps heading-hold permission and forwards no wall
+PASS a wall fit without its acquisition age is not forwarded
+PASS STOP withdraws steering permission at once
+PASS stationary MPU fixture calibrates through the production reader
+PASS a straight-segment notice keeps the heading and its epoch
+PASS the stream reports the integrated heading in centidegrees
+PASS stationary MPU fixture calibrates through the production reader
+PASS a stale heading sends MPU:FAULT and no heading line
+PASS a clear path cannot release motion without a valid heading, straight segment or not
+PASS recovery after a long outage starts a new reference under a new epoch
+PASS stationary MPU fixture calibrates through the production reader
+PASS a turn notice requires fresh clearance that includes the spin sweep
+PASS a path packet without sweep evidence cannot release a turn
+PASS an unknown sweep is not a clear sweep
+PASS an object inside the sweep stops the turn
+PASS one clear sweep is not yet confirmation
+PASS two clear sweeps release the turn
+PASS the ordinary front stop still applies during a turn
+PASS outside a turn the sweep does not gate straight travel
+PASS the LiDAR caution zone releases motion at caution speed
+PASS the slow code is valid for the front only
+PASS stationary MPU fixture calibrates through the production reader
+PASS an invalid sweep code fails closed
+PASS stationary MPU fixture calibrates through the production reader
+PASS a recovery ping during a route keeps the turn gate
+PASS stationary MPU fixture calibrates through the production reader
+PASS BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence
+PASS an interrupted turn resumes only after fresh clear sweeps
+PASS stationary MPU fixture calibrates through the production reader
+PASS BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence
+PASS an interrupted turn resumes only after fresh clear sweeps
+PASS stationary MPU fixture calibrates through the production reader
+PASS BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence
+PASS an interrupted turn resumes only after fresh clear sweeps
+PASS stationary MPU fixture calibrates through the production reader
+PASS a rebooted bridge cannot issue GO before learning the live executor's turn mode
+PASS the executor's replay restores the occupied turn-sweep gate after bridge reboot
+PASS repeated turn status does not restart clearance confirmations
+PASS confirmed turn end restores ordinary straight clearance
+PASS a rebooted bridge adopts a running controller from its recovery ping
+PASS stationary MPU fixture calibrates through the production reader
+PASS a recovery ping is not a reboot: notices, heading and operator state survive, nothing reaches the Pi
+PASS a controller reboot ends its segment and turn notices but not the bridge's heading reference
+PASS stationary MPU fixture calibrates through the production reader
+PASS a path packet racing a new heading reference does not stop the robot
+PASS a new reference that never gets fresh data still holds STOP
+PASS stationary MPU fixture calibrates through the production reader
+PASS eight lost UART lines in one session do not wedge the bridge in STOP:MCU_LINK
+PASS stationary MPU fixture calibrates through the production reader
+PASS a controller that stops acknowledging still faults the UART link
+PASS the heading stream keeps flowing while path commands are held
+PASS stationary MPU fixture calibrates through the production reader
+PASS diagnostics wait out the connection burst: live, sending them inside it made NimBLE reject a control write
+PASS bridge reports firmware, reset cause, last drop reason and link timing, without the MPU line in that burst
+PASS the MPU line follows on its own: bias, tilt, refresh count and heading epoch reach the Pi
+PASS a connection parameter update does not send diagnostics straight away
+PASS several reports in one settling window send a single diagnostics line
+PASS a report pending when the link drops is not sent into a session that is not ready
+PASS stationary MPU fixture calibrates through the production reader
+PASS a lost MPU stops the robot, withdraws readiness and tells the executor at once
+PASS a clear path cannot restart motion while the MPU is gone, and no heading line is sent
+PASS the Pi log is told why the MPU stopped the robot
+PASS the bridge reconfigures the MPU, keeps its measured bias and starts a new reference under a new epoch
+PASS motion resumes after an MPU fault with no console and no reset
+PASS the Pi log shows the recovery and keeps the last fault reason
+PASS a boot calibration can fail
+PASS a failed boot calibration still holds STOP
+PASS a failed boot calibration recovers with no console and no reset, and starts the heading stream
+PASS MPU fixture restored
+PASS stationary MPU fixture calibrates through the production reader
+PASS a duplicated wall field withdraws permission and counts as corrupt
+PASS a duplicated clearance field permits no steering
+PASS an invalid or missing acquisition (A=abc) fails closed and forwards nothing
+PASS an invalid or missing acquisition (A=99999999999) fails closed and forwards nothing
+PASS an invalid or missing acquisition (A=3|A=4) fails closed and forwards nothing
+PASS an invalid or missing acquisition () fails closed and forwards nothing
+PASS omitted walls are not counted as a corrupt steering frame
+PASS a steering frame older than the latest path packet is ignored
+PASS a steering frame older than its mailbox limit is dropped
+PASS permission fixture: a clean acquisition permits steering
+PASS an operator emergency stop withdraws steering permission
+PASS a BLE disconnect withdraws steering permission
+PASS stationary MPU fixture calibrates through the production reader
+PASS a STOP held for over a second re-measures the gyro bias
+PASS a robot that may be moving (GO flowing, executor RUNNING) never re-measures bias
+PASS an executor reporting IDLE re-measures bias even while the path is clear
+PASS a return route ends bias refresh at once
+PASS parked at the destination, bias refresh resumes
+PASS a parked state without its heartbeat expires
+PASS no bias refresh inside a turn, stopped or parked
+PASS stationary MPU fixture calibrates through the production reader
+PASS the USB console prints heading, rate, bias and epoch on H for the yaw-sign bench check
+PASS BLE connection alone does not announce complete startup to the executor
+PASS manual start is rejected before Pi readiness and executor handshake
+PASS manual start cannot reach an unready executor
+PASS manual start cannot cross an unhealthy UART
+PASS UART backpressure explicitly rejects a start instead of silently discarding it
+PASS start outcome query reaches the executor without becoming a START command
+PASS an unavailable outcome query cannot falsely reject an already accepted start
+PASS UART congestion during an outcome query is not a terminal start rejection
+PASS ready start command crosses ordered BLE ingress and expects an executor ACK
+PASS expired BLE start is discarded instead of executing later
+PASS start from a prior BLE or controller epoch is discarded
+PASS start is rechecked for a live BLE link at UART transmission
+PASS executor start acknowledgement returns to Pi through bounded notifications
+PASS manual disposal capability is relayed without supplying path evidence
+PASS unready or emergency-stopped bridge withholds disposal readiness
+PASS unready or emergency-stopped bridge withholds disposal readiness
+PASS unready or emergency-stopped bridge withholds disposal readiness
+PASS unready or emergency-stopped bridge withholds disposal readiness
+PASS bridge rejects noncanonical disposal IDs before UART relay
+PASS stale controller readiness cannot bypass Pi readiness
+PASS inactive advertising is restarted from loop
+PASS one path packet cannot release bridge STOP
+PASS second fresh clear path releases bridge STOP
+PASS out-of-order path latches STOP
+PASS path sequence wraps safely
+PASS duplicate path fields fail closed
+PASS telemetry cannot inject UART motion commands
+PASS missing MPU cannot initialize
+PASS clear LiDAR cannot start motion without a calibrated MPU
+PASS repaired stationary MPU can calibrate
+PASS controller reboot ends its segment notices but keeps the bridge's continuous heading
+PASS return retry is relayed without injecting STOP
+PASS disconnect callback performs no UART work
+PASS loop asserts STOP after BLE disconnect and retains reason for diagnostics
+PASS overflow discards uncertain path backlog and stops
+PASS path timeout stops even with BLE connected
+PASS connection parameter changes wait for Pi readiness
+PASS ready Pi gets connection parameter tuning after setup grace
+PASS long return outcome is delivered in default-MTU-safe notification chunks
+PASS fragmented start outcome retains each payload while NimBLE attribute updates are deferred
+PASS notification queue rejection is counted without sending a dangling continuation
+PASS slow initial GATT setup keeps motion stopped without premature BLE disconnect
+PASS silent incomplete BLE setup eventually disconnects
+PASS BLE callback immediately latches operator stop without UART or Tk-style cross-thread work
+PASS immediate operator latch blocks UART GO, slow GO and legacy resets
+PASS dedicated emergency mailbox survives control queue overflow and ingress fault clearing
+PASS matching executor stop acknowledgment establishes delivery evidence
+PASS fresh clear paths, manual starts and return requests cannot bypass operator stop
+PASS sending RELEASE alone never clears bridge latch
+PASS unmatched release acknowledgment cannot unlock motion
+PASS matching release clears operator latch but resets all ordinary motion confirmations
+PASS new callback-side emergency invalidates an older in-flight RELEASE acknowledgment
+PASS older status cannot clear or confirm a pending emergency
+PASS latest emergency acknowledgment confirms the new stop generation
+PASS emergency reaches UART before readiness and remains valid after BLE disconnect
+PASS navigation and reconnect reset never clears operator stop
+PASS emergency bypasses ordinary UART backlog cap
+PASS noncanonical and oversized operator IDs do not become accepted commands
+PASS full 20-digit operator ID is handled without integer overflow
+PASS reboot is rejected without acknowledged executor emergency stop
+PASS reboot transmission alone never schedules bridge restart
+PASS unmatched reboot ACK cannot restart bridge
+PASS matching executor commit is reported before delayed bridge reboot
+PASS bridge leaves notification drain time before reboot
+PASS bridge restart is delayed and preserves RTC operator stop
+PASS no-init RTC marker restores the latch after ordinary RAM reinitialization
+PASS cleared RTC marker does not reinstate a released emergency
+PASS post-reboot executor status recovers confirmed stop evidence without an old request ID
+PASS late UART ACK cannot commit reboot before the ingress timeout runs
+PASS missing reboot outcome expires correlation while keeping emergency stop
+PASS expired reboot ACK cannot restart the bridge
+PASS expired reboot permits a new deliberate recovery action
+
+test_controller.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS handshake replays an interrupted turn before announcing readiness
+PASS status reports explicitly restore non-turn mode before readiness
+PASS operator emergency stop force-stops both wheels and acknowledges the latch
+PASS GO, legacy reset, reconnect, and manual start cannot erase emergency stop
+PASS release cannot occur inside a still-active route stack
+PASS release after route unwinds leaves IDLE requiring a fresh deliberate start
+PASS high sensor readings cannot automatically restart a released emergency stop
+PASS operator ID cannot be reused for a different action
+PASS stale operator action cannot override the current mode
+PASS sonar disable is acknowledged at stationary IDLE and parks the servo
+PASS disabled sonar cannot ping, provide obstacle readings, or move the servo off center
+PASS re-enabled sonar fails closed until new clearance confirmations arrive
+PASS two new sonar clear samples cannot bypass rearm confirmation
+PASS three new clear samples rearm local obstacle sonar
+PASS MCU reboot requires acknowledged emergency stop
+PASS reboot is committed only while emergency-stopped and is delayed for ACK delivery
+PASS delayed reboot retains emergency latch for software restart
+PASS RTC no-init marker restores operator stop after RAM initialization
+PASS 20-digit operator IDs are validated without integer overflow
+PASS noncanonical operator IDs are ignored
+PASS sonar mode changes cannot apply during an active route
+PASS emergency stop inside actual motion aborts route without resuming from queued GO
+PASS GO traffic alone cannot replace the Pi/controller startup handshake
+PASS ready executor reports manual disposal without bin, gas or scale readings
+PASS emergency stop withholds manual disposal readiness
+PASS route fault withholds manual disposal readiness
+PASS querying an undelivered start reports failure without starting the route
+PASS manual start enters the normal outbound route with no scale/bin trigger
+PASS manual start cannot grant path permission or directly move either wheel
+PASS accepted manual disposal withholds eligibility for a second run
+PASS a lost manual-start ACK can be queried without changing the motion gate
+PASS duplicate manual start acknowledges its original outcome without changing motion gates
+PASS accepted start replay after return cannot start another cycle
+PASS querying a completed start cannot begin another cycle
+PASS manual start cannot clear a route fault
+PASS older accepted start remains non-replayable after a newer rejected request
+PASS manual start cannot interrupt a returning route
+PASS stale UART cannot be refreshed into readiness by the start command itself
+PASS BLE loss revokes the executor manual-start handshake
+PASS malformed manual-start IDs cannot change executor state
+PASS idle executor renews a revoked startup handshake even while UART traffic is fresh
+PASS manual start recovers after a new handshake without a controller reboot
+PASS uninitialized motor output is rejected instead of accepting an immobile route
+PASS status exposes an MPU motion hold to the Pi without clearing STOP
+PASS status exposes the executor's local sonar hold even with clear LiDAR
+PASS clear echoes separated by an outage cannot release obstacle latch
+PASS three consecutive fresh echoes recover after outage
+PASS one stalled software step counter stops both wheels and faults the route
+PASS retargeting a running wheel cannot hide stalled step progress
+PASS adjustment stops both wheels when one executor stalls
+PASS continuous start rejection cannot leave one wheel running
+PASS one GO cannot release STOP
+PASS widely separated GO evidence does not accumulate
+PASS two fresh GO commands release STOP
+PASS controller independently stops on silence
+PASS queued GO cannot erase STOP before braking
+PASS back-to-back buffered GO commands cannot release STOP
+PASS a later fresh GO supplies independent clearance evidence
+PASS oversized UART line immediately invalidates motion permission
+PASS queued GO after UART overflow cannot bypass new confirmation
+PASS non-printable UART data immediately invalidates permission
+PASS queued GO after corrupt UART cannot erase STOP
+PASS ordinary CRLF UART frames preserve live permission
+PASS embedded carriage return cannot be stripped into valid GO
+PASS one rejected motor command stops both wheels
+PASS single close echo stops despite clear median history
+PASS a single ping with no echo does not clear a latched obstacle
+PASS three valid clear echoes release local latch
+PASS two pings with no echo cannot release the latch
+PASS three pings with no echo in range (open hallway) release it as a far, fresh reading
+PASS an echo under 1.5 cm is a glitch, not an obstacle or a clear reading
+PASS halt continues sensing and resumes on local plus LiDAR clearance
+PASS local clearance hysteresis keeps reporting a hold until the halt actually exits
+PASS confirmed halt recovery clears the displayed motion hold
+PASS blocked move resumes the original target and completes
+PASS return from incomplete outbound is rejected
+PASS retry cannot turn rejected return into recovery
+PASS return accepted only from confirmed destination
+PASS same return ID is idempotent during return
+PASS completed retry returns matching completion without motion
+PASS invalid weight stays idle and publishes unavailable telemetry
+PASS out-of-range raw weight cannot contaminate load confirmation
+PASS one valid weight after invalid data cannot trigger outbound
+PASS valid weight recovers after invalid samples without a reset
+PASS stale cached weight cannot start outbound
+PASS weight after a stale gap starts a new confirmation streak
+PASS two new weight samples restore triggering after an outage
+PASS load helper uses the fresh worker snapshot without waiting on the converter
+PASS load helper rejects expired worker samples
+PASS load helper rejects invalid samples
+PASS missing converter cannot produce a valid untared weight
+PASS background tare retries and publishes only after calibration succeeds
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS one corrected 4kg sample cannot trigger route
+PASS two corrected 4kg samples trigger route
+PASS main loop leaves cellular UART and console bytes untouched for the single modem owner
+PASS executor boot returns promptly with no bridge and leaves motors stopped for loop recovery
+PASS a lost heading reference is not reported as a LiDAR block
+PASS an ordinary obstacle stop still reports the LiDAR
+PASS a link stop still reports the link
+PASS recovery ping during a route is distinct from the controller boot announcement
+PASS parked at the destination the controller polls status at the idle rate
+
+test_hold_resume.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS an obstacle that leaves an open hallway (no echo) releases the sonar hold
+PASS a re-enabled sonar with nothing in range releases its rearm latch
+PASS a STOP during the start gate is held and the segment completes
+PASS a 30 s bridge/MPU outage mid-straight holds stopped and then completes the straight
+PASS the sonar servo sweeps both sides of forward while driving
+PASS an echo 50 cm ahead, straight or at the body's corner (+25), is in the path
+PASS the 190 cm hallway's side walls and 82 cm pillars at +/-50 and +/-70 are not in the path
+PASS the spin check sees only what the base would sweep (not a wall 40 cm ahead of the sonar)
+PASS the survey covers the servo's whole span with forward between every side bearing
+PASS SONAR:SILENT needs three complete surveys without an echo, is reported once, and driving never counts
+PASS one echo at any bearing restarts the silence count
+PASS a near side echo needs two samples; one within 25 cm of the sonar blocks at once
+PASS a low object at the body's corner holds the straight, which resumes and completes once it is gone
+PASS hallway walls at the sweep's side bearings never hold or slow a straight
+INFO forward bearing re-read every 102 ms driving (worst 103), 203 ms held (worst 290)
+PASS the forward bearing stays fresh: ~0.13 s apart driving, ~0.2 s held, never past its age limit
+PASS buzzer patterns: beep per period driving, double chirp held, sparse chirp in low power, OFF silent
+PASS the buzzer runs during a route and is silent idle, parked at the destination and emergency-stopped
+INFO low power from +10040 ms to +15220 ms of the hold; it ended at +15400 ms
+PASS a long hold enters low power after 10 s, and the first clear evidence restores normal power well before the hold releases
+PASS after the hold the running beep returns
+PASS drive reports give the straight's speed in cm/s and the stop that follows
+Hold/resume checks PASS
+
+test_motor_direction.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\test_motor_direction.cpp(9): warning C4068: unknown pragma 'GCC'
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS setup connects motor 1 to STEP GPIO21 and motor 2 to STEP GPIO13
+PASS setup keeps motor 1 DIR on GPIO22 and motor 2 DIR on GPIO12: no wiring change
+PASS setup applies the named polarities
+PASS a rising step count rolls both wheels forward on the reported wiring
+PASS the November 7 true/false pair rolls both wheels backward: the reported fault
+PASS USB boot identifies this build, both direction polarities and MPU turns
+PASS a positive route leg moves forward with motor 1 as the left wheel
+PASS a positive route leg moves forward with motor 1 as the right wheel
+PASS a calibration bump moves forward, not backward
+PASS a negative move rolls backward without changing software target signs
+PASS safeTurnLeft(90) rotates the chassis left with motor 1 as the left wheel
+PASS the first MPU turn establishes that motor 1 is the left wheel
+PASS safeTurnRight(90) rotates the chassis back right with motor 1 as the left wheel
+PASS wall centring steers toward the centre with motor 1 as the left wheel
+PASS safeTurnLeft(90) rotates the chassis left with motor 1 as the right wheel
+PASS the first MPU turn establishes that motor 1 is the right wheel
+PASS safeTurnRight(90) rotates the chassis back right with motor 1 as the right wheel
+PASS wall centring steers toward the centre with motor 1 as the right wheel
+PASS the real route starts by moving forward
+PASS the unchanged route then turns left, measured by the MPU
+
+test_mpu_heading.cpp
+
+PASS repeated stale register contents cannot calibrate as new samples
+PASS stationary gyro offset within datasheet limits calibrates
+PASS calibrated stationary bias does not create fictitious heading corrections
+PASS stationary calibrated gyro offset is removed from the reported yaw rate
+PASS reported positive yaw rate subtracts the measured ten-degree boot bias
+PASS reported closing yaw rate remains signed after boot-bias subtraction
+PASS returning to the calibrated stationary reading immediately reports zero rate
+PASS boot calibration rejects missing gravity instead of arming bad yaw
+PASS MPU6050 is detected and configured through Wire
+PASS MPU I2C uses explicit S3 pins and a bounded transaction timeout
+PASS MPU gyro uses reference sketch range, filter and 100 Hz sample rate
+PASS requesting FRONT exposes no rate until a fresh reference sample arrives
+PASS first valid sample establishes FRONT without integrating the startup gap
+PASS the first reference reports its current gyro rate without integrating the startup gap
+PASS positive gyro Z integrates to a persistent left heading deviation
+PASS a fresh zero-rate sample is exposed while the heading deviation remains
+PASS stopping rotation does not erase heading deviation
+PASS left heading is retained above the one-degree release threshold
+PASS closing rotation is reported separately from the still-positive heading error
+PASS returning within one degree releases heading correction
+PASS a new segment discards the previous segment's closing rate
+PASS negative signed gyro data produces right heading deviation
+PASS a sampling gap over 100 ms invalidates heading until a new reference
+PASS a sampling-gap fault discards the previously nonzero yaw rate
+PASS later good reads cannot silently recover a lost heading
+PASS new segment reference explicitly recovers tracking
+PASS missing DATA_RDY cannot keep frozen gyro data fresh
+PASS one failed I2C transaction does not lose the heading reference
+PASS the next good sample resumes integration after a transient read failure
+PASS sustained I2C failure invalidates heading within the 100 ms gap budget
+PASS an I2C fault exposes no rate from the preceding valid sample
+PASS good reads after a sustained failure cannot silently recover heading
+PASS saturated gyro data cannot establish a heading reference
+PASS one glitched saturated sample is rejected without integrating it
+PASS sustained gyro saturation invalidates heading
+PASS partial gyro reads cannot be integrated
+PASS sustained partial reads invalidate heading
+PASS a reference that never gets fresh data becomes a fault
+PASS MPU6050 is detected with AD0 high at address 0x69
+PASS an unexpected WHO_AM_I is rejected
+PASS reversed mounting can explicitly reverse gyro Z
+PASS configured gyro sign reversal reverses heading direction
+PASS configured mounting reversal also reverses the reported yaw-rate sign
+PASS segment end disables the heading reference
+PASS explicit segment invalidation clears its nonzero yaw rate
+PASS normal mounting is restored for yaw-rate freshness checks
+PASS yaw rate follows the existing inclusive hundred-millisecond freshness boundary
+PASS an expired yaw rate is hidden even before the next sensor poll detects the gap
+PASS stale DATA_RDY cannot resurrect an old yaw rate while FRONT is pending
+PASS a fresh reference exposes only its new signed rate after the stale-data gap
+PASS normal gyro orientation is restored for the rollover check
+PASS gyro integration survives the micros clock rollover
+PASS a failed boot calibration records that the sensor gave no fresh data
+PASS recovery never blocks the main loop
+PASS a sensor that still has no fresh data stays not ready
+PASS a failed boot calibration recovers without a reset once the sensor is good
+PASS recovery measures a new gyro bias
+PASS an unavailable I2C bus is named
+PASS a missing MPU is named
+PASS missing gravity is named
+PASS a saturated sensor is named
+PASS an out-of-range gyro offset is named
+PASS recovery fixture starts healthy with a 5 deg/s bias
+PASS starting recovery withdraws MPU readiness at once
+PASS warm recovery reconfigures a sensor that reset itself
+PASS a recovery inside 500 ms keeps the heading reference and the boot bias
+PASS a longer blind time recovers the sensor but does not invent a heading reference
+PASS motion fixture has never measured a bias
+PASS a rate spread over the limit fails calibration and is named
+PASS repeated retries on a moving robot never calibrate
+PASS a rate spread at the unchanged limit still calibrates
+PASS yaw-jump fixture starts healthy
+PASS a yaw step over MAX_YAW_JUMP_DEG between two samples faults instead of integrating
+PASS the fastest rate the sensor can report, sampled normally, is not a jump
+PASS fault-reason fixture starts healthy
+PASS a fault from missing DATA_RDY is named
+PASS a fault from failed I2C reads is named
+PASS a fault from saturated data is named
+PASS a fault from a late sample is named
+PASS boot calibration measures the mount tilt from gravity
+PASS a tilted sensor reports the full yaw rate about the vertical
+PASS a 90 degree turn integrates to 90 degrees on a tilted mount
+PASS bias-refresh fixture calibrates at zero bias
+PASS drift is never re-measured unless the caller says the robot is held still
+PASS 1.5 s of still data re-measures the bias
+PASS the refreshed bias stops the drift and keeps the heading reference
+PASS rotation inside a still window restarts it
+PASS a steady rate beyond the drift limit is treated as motion, not bias
+PASS leaving the still state stops bias refresh
+PASS ratchet fixture calibrates at zero bias
+PASS bias follows slow drift in 0.15 deg/s steps but never passes the 1 deg/s total limit
+
+test_navigation.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\test_navigation.cpp(7): warning C4068: unknown pragma 'GCC'
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS route frame anchors on a confirmed MPU stream
+PASS without walls a turn ends where the gyro says, scale error included, and says so
+PASS each turn reports commanded angle, gyro-measured angle and the wall check
+PASS the wall alignment removes a 3% gyro scale error from a 90 degree turn
+PASS after alignment the route frame is the measured hallway direction
+PASS the next turn starts from the aligned frame and lands on the hallway again
+PASS an accurate gyro turn is confirmed by the walls without a correction spin
+PASS a 180 degree turn is measured and wall-checked the same way
+PASS a wrong motor-side guess is detected by the MPU, swapped, and the turn still lands
+PASS walls more than the correction limit from the commanded heading are not followed
+PASS a route does not start without the MPU heading stream
+PASS refusing the route moves no wheel
+PASS a turn without heading data holds, then fails the route instead of turning by step count
+PASS no wheel step is commanded while the heading is missing
+PASS a turn waits out a short heading outage and then completes by MPU
+PASS losing the heading stream mid-straight brakes the robot until it returns
+PASS after the outage the straight completes its commanded mean distance (to the half step)
+PASS a heading stream that stays lost ends the straight stopped, as a route failure
+PASS ROOT CAUSE reproduced: gyro-only heading hold from a 3 degree start error drifts over 60 cm in 15 m
+INFO gyro-only: end y +64.4 cm, heading vs hallway +1.69 deg
+PASS with wall fusion the same run ends within 5 cm of centre and 1.5 degrees of the hallway
+PASS the fused run never strays 20 cm from centre on the way
+PASS the steered straight keeps its wheel differential and ends on its mean distance (to the half step)
+PASS the straight hands the measured hallway direction to the route frame for the next turn
+INFO fused: end y +2.5 cm, heading -0.70 deg, max |y| 3.5 cm, drift estimate +0.074 dps
+PASS a 30 cm lateral offset is steered back to centre without overshooting the far side
+PASS the centring heading never exceeds its bound
+PASS a robot already centred gets no centring command at all
+PASS a 4 m stretch with no walls is crossed on the gyro and re-centred afterwards
+PASS with one wall missing the remaining wall and the learned width keep centring
+PASS missing walls remove centring evidence, not the MPU heading hold
+PASS a short run of wall headings 9 degrees off is rejected by the gate
+PASS a long straight completes for the notice check
+PASS a long straight sends START with its route error, END, and its straight report
+PASS an adjustment move is one plain ramp: no heading segment, both wheels the same distance
+PASS a rejected wheel command stops both wheels and still ends the heading segment
+PASS a path STOP mid-straight halts the robot; after fresh GO it finishes the remaining distance (to the half step)
+PASS a 15 m steered straight writes only its summary to the USB console
+PASS a stalled wheel during an MPU turn stops both wheels and faults the route
+PASS a reset during the post-turn wall check reports the turn as not completed
+PASS nearest-object clearance on the left vetoes every steering command toward it
+PASS the same correction runs when that side is permitted, and never steers to the vetoed side
+PASS with no permission bits the wheels are never steered
+PASS GO:SLOW drops the straight to caution speed and plain GO restores full speed
+INFO pre-run centring from y +22 cm, 3 deg: y +0.1 cm, heading -0.36 deg, 2475 steps forward
+PASS pre-run centring puts a robot 22 cm off centre and 3 degrees off the axis on the centre line, facing the hallway
+PASS the route frame is the measured hallway axis when the long straight starts
+PASS the reported forward progress is the sidestep's travel along the hallway
+PASS with the wheel distance off by 2x the sidestep learns the scale and still centres (k reported for calibration)
+PASS a robot already on the centre line is not moved
+PASS without walls the pre-run centring is skipped, not a fault
+PASS with LiDAR left/right reversed against the MPU, one sidestep shows it and the centring stops
+PASS a low object inside the spin circle holds the turn; it turns once the object is removed
+PASS objects outside the spin circle (40 cm from the sonar) do not hold a turn
+INFO long outage mid-turn: ok=1 heading 89.72 deg, verify OK
+PASS a 12 s outage 12 degrees into a turn is verified against the old hallway's walls and the turn completes
+PASS STOP:MPU recovery verifies the new reference and still waits for later GO before resuming
+PASS STOP:MPU recovery retains the original straight's remaining mean distance
+PASS an MPU outage inside an existing obstacle STOP cannot bypass the five-minute fault deadline
+PASS missing recovery walls keep both wheels still and fault within the original five-minute budget
+PASS walls arriving after the MPU release recovery only after two fresh agreeing scans
+PASS a long ordinary obstacle hold with continuous heading and no walls still resumes normally
+PASS reverse/plain moves brake and wait for heading feedback before resuming their targets
+PASS operator emergency stop aborts recovery while required walls are still absent
+INFO route: ok=1 end heading error +0.51 deg, last hallway y +5.8 cm, largest centring command on the long run 0.00 deg
+PASS the whole outbound route completes with a 2% gyro scale error, drift and unequal wheels
+PASS after the pre-run centring the long run starts centred: its centring never engages (no weaving)
+PASS the route ends within 2 degrees of the true final direction (gyro-only would be off by its scale error and drift)
+
+test_sms.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS an unrelated line containing OK cannot authorize SMS submission
+PASS a manual state reset cannot claim a completed return by SMS
+PASS critical notice queues without waiting for an unregistered modem
+PASS a notice queued before registration is later submitted by the owner
+PASS a completed notice is removed from the queue
+PASS pending notices coalesce to the latest state of their category
+PASS ordinary notices cannot bypass the minimum SMS spacing
+PASS another category becomes eligible after SMS spacing
+PASS a full queue preserves and prioritizes an emergency notice
+PASS an explicit pre-submission failure consumes one bounded attempt
+PASS a failed notice waits through retry backoff
+PASS a pre-submission failure receives one delayed retry
+PASS a failed notice cannot exceed two submission attempts
+PASS post-Ctrl-Z timeout finishes with an indeterminate result
+PASS an uncertain submission is never automatically resent
+PASS CMGS without final OK cannot be reported as submitted
+PASS all categories share a maximum of six attempts in ten minutes
+PASS the latest pending transition survives the global attempt cap
+PASS obsolete queued notices expire after ten minutes
+PASS valid health telemetry changes no handshake, path freshness, or motion permission
+PASS malformed health packets cannot refresh telemetry evidence
+PASS a brief internet outage produces no SMS
+PASS a sustained initially-down internet state produces one outage notice
+PASS a continuing confirmed outage cannot repeat its first notice
+PASS healthy evidence sustained after an announced fault produces one recovery
+PASS continued fault monitoring cannot recreate an uncertain submission
+PASS continued fault monitoring cannot reset an exhausted retry budget
+PASS continued recovery monitoring cannot recreate an uncertain submission
+PASS unknown health gaps cannot rearm an uncertain fault submission
+PASS a confirmed healthy episode permits a genuinely new fault notice
+PASS a confirmed fault is prioritized ahead of older routine notices
+PASS a new confirmed fault displaces routine or recovery traffic from a full queue
+PASS a fault returning before queued recovery cancels the obsolete recovery
+PASS a newer fault survives an older recovery already in flight
+PASS thermal fault uses its shorter sustained-fault threshold
+PASS missing health frames invalidate evidence without inventing a recovery
+PASS thermal recovery requires a longer stable healthy interval
+PASS thermal recovery submits only after thirty healthy seconds
+PASS a stale outage packet cannot mature into a fault notice
+PASS initial health cannot produce an unpaired recovery notice
+PASS a sustained observed Pi/controller link failure produces a distinct link notice
+PASS link recovery needs sustained fresh controller traffic after the handshake
+PASS late controller frames cannot bridge stale gaps into a false link recovery
+PASS an operator emergency stops both motors before queuing its critical notice
+PASS replayed emergency requests cannot generate duplicate stop notices
+PASS a reset before fault submission cannot emit an unpaired route recovery
+PASS an announced route fault reports explicit reset recovery
+PASS a new route fault after reset receives its own transition budget
+PASS a reset during in-flight fault submission retains a conditional paired recovery
+PASS a conditional local recovery is discarded if in-flight fault submission remains uncertain
+PASS an angle bracket inside unsolicited text cannot authorize the SMS body
+PASS SMS spacing and queue deadlines survive millis rollover
+PASS notice validation rejects control bytes, oversized bodies, and multi-septet ASCII extensions
+PASS network readiness requires an exact registered status and a successful query
+
+test_system.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(476): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(702): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../BLE_Receiver-Final/BLE_Receiver-Final.ino(731): warning C4018: '<': signed/unsigned mismatch
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2201): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS Pi path stream releases both bridge and controller confirmation gates
+PASS Pi health traverses both boards and acknowledges without refreshing path or readiness evidence
+PASS the bridge's continuous heading stream is confirmed by the executor before any route
+PASS real MPU samples flow through the bridge UART into the correct continuous wheel-speed correction
+PASS the heading hold brings the pushed chassis back to its route heading
+PASS the Pi's wall fit crosses BLE framing, the bridge and the UART into the executor's fusion
+PASS segment completion ends the bridge's segment notice and keeps its continuous heading
+PASS complete sensing-to-UART-to-motor flow stops and resumes original route target
+PASS STOP and GO ACKs drain without a permanent communication fault
+PASS BLE reconnect resumes interrupted target after fresh confirmations
+PASS heading reference exists before the long BLE outage
+PASS a 5 s BLE outage keeps the heading reference and its stream to the executor
+PASS reconnecting after a long outage resumes the same heading reference
+PASS confirmed load starts outbound state without bypassing path gate
+PASS scale threshold holds wheels on blocked LiDAR, then drives the full route after confirmed clearance
+PASS Pi readiness round trip confirms both controllers while scale and bin data are unavailable
+PASS executor disposal capability crosses the real bridge without any bin threshold
+PASS manual start travels Pi-to-bridge-to-executor and acknowledges the same request ID
+PASS lost start outcome is recovered through both UART boards without refreshing path permission
+PASS entire calibrated outbound route completes and remains stationary
+PASS entire return route reaches IDLE with matching completion through bridge
+PASS fresh dangerous gas confirmations start the next cycle after full reset
+PASS operator stop crosses actual BLE ingress/UART and confirms stopped IDLE through notifications
+PASS sonar disable travels both boards and acknowledges the centered servo mode
+PASS end-to-end release unlocks both latches without permitting automatic motion
+PASS coordinated reboot commits both stopped controllers before the Pi acknowledgement
+
+Firmware behavioral checks PASS; hardware timing/electrical acceptance remains required.

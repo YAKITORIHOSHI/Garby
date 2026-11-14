@@ -41,6 +41,7 @@ from runtime_support import SingleInstanceGuard
 from operator_support import OperatorControl, StopLatchStore, reboot_pi
 from notice_support import HealthReporter, probe_internet
 from firebase_support import resolve_firebase_credentials
+from disposal_support import DisposalRelay, READY_MAX_AGE_S
 from lidar_map import build_lidar_map_snapshot
 from lidar_geometry import robot_scan_angles
 from hallway_geometry import analyze_hallway, geometry_from_environment
@@ -182,6 +183,42 @@ class FirebaseManager:
 
     def mark_reset_failed(self, device_id, requested_at, reason):
         return self._transition_reset(device_id, requested_at, "failed", failedAt=int(time.time() * 1000), reason=reason)
+
+    def get_disposal_command(self, device_id):
+        return self._cloud_call(db.reference(f"/devices/{device_id}/commands/dispose").get)
+
+    def _transition_disposal(self, device_id, command, expected, status, **fields):
+        ref = db.reference(f"/devices/{device_id}/commands/dispose")
+        def transition(current):
+            if (not isinstance(current, dict)
+                    or any(current.get(key) != command.get(key)
+                           for key in ("requestId", "requestedAt", "requestedBy"))
+                    or current.get("status") not in expected):
+                return current
+            return {**current, "status": status, **fields}
+        result = self._cloud_call(ref.transaction, transition)
+        return (isinstance(result, dict) and result.get("status") == status
+                and all(result.get(key) == command.get(key)
+                        for key in ("requestId", "requestedAt", "requestedBy"))
+                and all(result.get(key) == value for key, value in fields.items()))
+
+    def claim_disposal(self, device_id, command, controller_id):
+        return self._transition_disposal(
+            device_id, command, ("pending",), "dispatching",
+            controllerRequestId=controller_id, claimedAt=int(time.time() * 1000))
+
+    def finish_disposal(self, device_id, command, status, reason=""):
+        if status not in ("accepted", "failed", "unconfirmed"):
+            raise ValueError("Invalid disposal outcome")
+        return self._transition_disposal(
+            device_id, command, ("pending", "dispatching"), status,
+            reason=reason, resultAt=int(time.time() * 1000))
+
+    def update_disposal_availability(self, enabled):
+        self._update({
+            f"devices/{RESET_DEVICE_ID}/status/manualDisposalReady": bool(enabled),
+            f"devices/{RESET_DEVICE_ID}/status/manualDisposalUpdatedAt": int(time.time() * 1000),
+        })
 
     def update_robot_state(self, state):
         ready = state == "AT_DESTINATION"
@@ -430,6 +467,7 @@ _ready_to_return = threading.Event()
 _robot_state = "UNKNOWN"
 latest_pi_health = {}
 _motion_hold = ""
+_disposal_ready_at = None
 front_disabled = threading.Event()
 back_disabled  = threading.Event()
 manual_start = ManualStartControl()
@@ -864,6 +902,37 @@ def firebase_reset_command_loop(stop_event):
 
     logger.info("Firebase reset command bridge stopped.")
 
+
+def manual_disposal_available():
+    age = time.monotonic() - _disposal_ready_at if _disposal_ready_at is not None else math.inf
+    return (0 <= age <= READY_MAX_AGE_S and not operator_control.blocks_motion()
+            and manual_start.status(ble_connected.is_set())["enabled"])
+
+
+def publish_disposal_availability():
+    if firebase and hasattr(firebase, "update_disposal_availability"):
+        firebase.update_disposal_availability(manual_disposal_available())
+
+
+def firebase_disposal_command_loop(stop_event):
+    relay = DisposalRelay(manual_start,
+                          lambda packet: ble_send_queue.put_nowait(packet, urgent=True),
+                          manual_disposal_available)
+    backoff = ExponentialBackoff(2.0, 30.0)
+    while not stop_event.is_set():
+        wait_s = 2.0
+        try:
+            if firebase:
+                relay.poll(firebase, RESET_DEVICE_ID, ble_connected.is_set(),
+                           operator_control.blocks_motion())
+                backoff.reset()
+            else:
+                wait_s = FIREBASE_IDLE_POLL_S
+        except Exception:
+            logger.exception("Manual disposal cloud relay unavailable")
+            wait_s = backoff.next_delay()
+        stop_event.wait(wait_s)
+
 # ═══ On-demand status responder ═══
 def on_demand_status_responder(lidar_node, stop_event):
     logger.info("On-demand status responder started.")
@@ -911,7 +980,7 @@ def on_demand_status_responder(lidar_node, stop_event):
             # immediate safety replies, but avoid repeating long steering writes
             # for every poll. Each emitted S retains this snapshot's P sequence.
             if last_sides_send is None or now - last_sides_send >= BLE_CMD_PERIOD:
-                ble_send_queue.put_nowait(sides_msg)
+                ble_send_queue.put_nowait(sides_msg, expires_at=path_deadline)
                 last_sides_send = now
             if now - last_sensor_send < SENSOR_TX_PERIOD_S:
                 continue
@@ -941,10 +1010,11 @@ def on_demand_status_responder(lidar_node, stop_event):
 
 # ═══ BLE notification handler ═══
 def publish_robot_state(state: str):
-    global _robot_state, _motion_hold
+    global _robot_state, _motion_hold, _disposal_ready_at
     changed = state != _robot_state
     _robot_state = state
     if state == "UNKNOWN":
+        _disposal_ready_at = None
         operator_control.disconnect()
     else:
         operator_control.note_state(state)
@@ -963,6 +1033,7 @@ def publish_robot_state(state: str):
         _ready_to_return.clear()
     if firebase:
         firebase.update_robot_state(state)
+    publish_disposal_availability()
 
 
 def request_manual_start():
@@ -974,6 +1045,7 @@ def request_manual_start():
         ble_send_queue.put_nowait(packet, urgent=True)
         _status_requested.set()
         logger.info("Manual start requested; bypassing scale/bin trigger thresholds.")
+        publish_disposal_availability()
     result = manual_start.status(ble_connected.is_set())
     if packet is None:
         logger.info("Manual start unavailable: %s", result["message"])
@@ -994,6 +1066,7 @@ def request_operator_action(action):
     if packet:
         logger.warning("Operator action requested: %s", action)
         _status_requested.set()
+    publish_disposal_availability()
     return operator_control.status(ble_connected.is_set())
 
 
@@ -1012,7 +1085,7 @@ def _reboot_after_controller_ack():
 
 
 def ble_notify_handler(msg: str):
-    global _last_load_cell_value, _last_load_cell_publish, _motion_hold
+    global _last_load_cell_value, _last_load_cell_publish, _motion_hold, _disposal_ready_at
     stripped = msg.strip()
     if stripped.startswith("[DRIVE:"):
         # Wheel motion for the moving-object prediction: on every change and every
@@ -1046,6 +1119,11 @@ def ble_notify_handler(msg: str):
         if operator_control.notification(stripped) == "REBOOT":
             threading.Thread(target=_reboot_after_controller_ack, daemon=True,
                              name="operator-pi-reboot").start()
+        publish_disposal_availability()
+        return
+    if stripped == "[DISPOSAL READY:1]":
+        _disposal_ready_at = time.monotonic()
+        publish_disposal_availability()
         return
     if stripped == "[SYSTEM READY]":
         manual_start.note_ready()
@@ -1079,6 +1157,7 @@ def ble_notify_handler(msg: str):
                 if manual_start.outcome(request_id, accepted, reason):
                     logger.info("Manual start %s: %s", request_id,
                                 "accepted by executor" if accepted else f"rejected ({reason})")
+                    publish_disposal_availability()
         return
     if stripped.startswith("[RESET ") and stripped.endswith("]"):
         try:
@@ -1429,10 +1508,6 @@ class BleService(threading.Thread):
         # while MTU negotiation is pending. Larger steering/telemetry frames
         # must use a write request rather than failing or being truncated.
         no_response_limit = getattr(write_char, "max_write_without_response_size", 20)
-        acknowledged = (
-            msg.startswith(("P:", "[RESET", "[START", "[OP", "[HEALTH:", "[RASPI READY]"))
-            or len(payload) > no_response_limit
-        )
         async with self._write_lock:
             if client is not self._client or not client.is_connected:
                 raise ConnectionError("BLE session changed before write")
@@ -1457,6 +1532,21 @@ class BleService(threading.Thread):
                 msg = msg.split("|", 1)[0] + "|F=S|B=S"
                 payload = msg.encode("utf-8")
                 logger.warning("Expired LiDAR path replaced with fail-closed STOP before BLE write")
+            if msg.startswith("S:") and expires_at is not None:
+                # The same acquisition deadline travels with P and S through
+                # coalescing and the writer lock. Refresh G at the write boundary
+                # so queue delays cannot rejuvenate clearance or misdate walls.
+                now = time.monotonic()
+                if now >= expires_at:
+                    msg = msg.split("|", 1)[0] + "|STABLE"
+                else:
+                    acquired_at = expires_at - LIDAR_STALE_TIMEOUT_S
+                    age_ms = max(0, math.ceil((now - acquired_at) * 1000.0))
+                    msg = "|".join(f"G={age_ms}" if part.startswith("G=") else part
+                                   for part in msg.split("|"))
+                    if len(msg.encode("utf-8")) > BLE_STEERING_MAX_BYTES:
+                        msg = msg.split("|", 1)[0] + "|STABLE"
+                payload = msg.encode("utf-8")
             # Re-check at the write itself: a blocked writer must not deliver
             # an expired operator action after a reconnect or controller boot.
             if msg.startswith("[START:") and not manual_start.can_send(msg, ble_connected.is_set()):
@@ -1469,6 +1559,10 @@ class BleService(threading.Thread):
                 manual_start.mark_sent(msg)
             if msg.startswith("[OP:"):
                 operator_control.mark_sent(msg)
+            acknowledged = (
+                msg.startswith(("P:", "[RESET", "[START", "[OP", "[HEALTH:", "[RASPI READY]"))
+                or len(payload) > no_response_limit
+            )
             await asyncio.wait_for(
                 client.write_gatt_char(write_char, payload, response=acknowledged),
                 timeout=self.WRITE_TIMEOUT,
@@ -1627,7 +1721,7 @@ def start_headless_key_listener():
         logger.info("stdin is not a TTY — headless operator keys disabled.")
         return
     import tty, termios
-    logger.info("Operator keys: f = all-front thresholds, b = all-back thresholds, s = manual start, q = quit.")
+    logger.info("Operator keys: f = all-front thresholds, b = all-back thresholds, s = manual disposal (confirm with y), q = quit.")
 
     def _listener():
         fd = sys.stdin.fileno()
@@ -1637,11 +1731,20 @@ def start_headless_key_listener():
             return
         try:
             tty.setcbreak(fd)
+            confirmation_until = None
             while not serial_stop.is_set():
                 ch = sys.stdin.read(1)
                 if not ch:
                     break
                 ch = ch.lower()
+                if confirmation_until is not None:
+                    if ch == 'y' and time.monotonic() <= confirmation_until:
+                        request_manual_start()
+                    else:
+                        logger.info("Manual disposal cancelled.")
+                    confirmation_until = None
+                    if ch != 'q':
+                        continue
                 if ch == 'f':
                     if not ALLOW_RUNTIME_SAFETY_DISABLE:
                         continue
@@ -1655,7 +1758,8 @@ def start_headless_key_listener():
                     else: back_disabled.set(); logger.info("BACK disabled.")
                     safety_checks_changed()
                 elif ch == 's':
-                    request_manual_start()
+                    logger.info("Manual disposal: are you sure? Press y within 10 seconds; any other key cancels.")
+                    confirmation_until = time.monotonic() + 10.0
                 elif ch == 'q':
                     os.kill(os.getpid(), signal.SIGINT); return
         except Exception:
@@ -2531,9 +2635,9 @@ class LidarDistanceReader(Node):
     def build_status_packets_with_deadline(self):
         """Return one path snapshot plus its LiDAR evidence deadline."""
         with self._history_lock:
-            path_msg, sides_msg = self._build_status_packets_locked()
             deadline = (None if self._lidar_is_stale()
                         else self._last_scan_time + LIDAR_STALE_TIMEOUT_S)
+            path_msg, sides_msg = self._build_status_packets_locked()
             return path_msg, sides_msg, deadline
 
     def _build_status_packets_locked(self):
@@ -2721,6 +2825,9 @@ def _run_application(args):
         name="firebase-reset",
     )
     reset_thread.start()
+
+    threading.Thread(target=lambda: firebase_disposal_command_loop(serial_stop),
+                     daemon=True, name="firebase-disposal").start()
 
     rclpy.init()
     node = LidarDistanceReader(None, data_queue, ble_service)

@@ -2,11 +2,15 @@ package com.thesis.garby.realtime
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.firebase.auth.FirebaseAuth
+import com.thesis.garby.network.NetworkConnectivityManager
+import com.thesis.garby.performance.GarbyDispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,13 +38,20 @@ data class DeviceStatusUiState(
 
 data class DeviceUiState(
     val connection: ConnectionState = ConnectionState.Reconnecting,
+    val internetAvailable: Boolean = true,
     val level: SensorReadingUiState = SensorReadingUiState(),
     val weight: SensorReadingUiState = SensorReadingUiState(),
     val mq135: SensorReadingUiState = SensorReadingUiState(),
     val mq137: SensorReadingUiState = SensorReadingUiState(),
     val mq4: SensorReadingUiState = SensorReadingUiState(),
-    val device: DeviceStatusUiState = DeviceStatusUiState()
-)
+    val device: DeviceStatusUiState = DeviceStatusUiState(),
+    val disposal: DisposalUiState = DisposalUiState(),
+    /** Clock used for every age shown on screen; ticks every [RtdbConstants.FRESHNESS_TICK_MS]. */
+    val nowMs: Long = 0L
+) {
+    val cloudConnected: Boolean get() = connection is ConnectionState.Connected
+    val presence: RobotPresence get() = robotPresence(device.status, nowMs)
+}
 
 /** Owns all live dashboard subscriptions and continuously re-evaluates freshness. */
 class DeviceViewModel : ViewModel() {
@@ -50,14 +61,24 @@ class DeviceViewModel : ViewModel() {
     }
 
     private val deviceId = RtdbConstants.DEFAULT_DEVICE_ID
-    private val _uiState = MutableStateFlow(DeviceUiState())
+    private var disposalJob: Job? = null
+    private val _uiState = MutableStateFlow(DeviceUiState(nowMs = System.currentTimeMillis()))
     val uiState: StateFlow<DeviceUiState> = _uiState.asStateFlow()
 
     /** Called inside repeatOnLifecycle(STARTED); cancellation detaches all listeners. */
     suspend fun observeWhileVisible(): Unit = coroutineScope {
         // Never show cached pre-background data as ready before fresh callbacks.
-        _uiState.value = DeviceUiState()
+        _uiState.value = DeviceUiState(
+            internetAvailable = NetworkConnectivityManager.isInternetAvailable.value,
+            disposal = DisposalUiState(
+                submitting = _uiState.value.disposal.submitting,
+                notice = _uiState.value.disposal.notice,
+                noticeRequestId = _uiState.value.disposal.noticeRequestId
+            ),
+            nowMs = System.currentTimeMillis()
+        )
         collectConnection(this)
+        collectInternet(this)
         // Stagger subscription times so container hydration (and the first
         // compose burst) is spread out instead of hitting one frame at once.
         collectSensor(this, SensorKey.Level, startupDelayMs = 0L)
@@ -66,12 +87,57 @@ class DeviceViewModel : ViewModel() {
         collectSensor(this, SensorKey.Mq137, startupDelayMs = 240L)
         collectSensor(this, SensorKey.Mq4, startupDelayMs = 320L)
         collectDeviceStatus(this)
+        collectDisposal(this)
         startFreshnessTicker(this)
         awaitCancellation()
     }
 
+    private fun collectDisposal(scope: CoroutineScope) {
+        scope.launch(GarbyDispatchers.background) {
+            GarbyRealtimeDb.disposalCommand(deviceId)
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { state -> state.copy(disposal = state.disposal.copy(
+                        loaded = true, error = "Manual disposal status unavailable"
+                    )) }
+                }
+                .collect { command ->
+                    _uiState.update { state -> state.copy(disposal = state.disposal.withCommand(command)) }
+                }
+        }
+    }
+
+    /** Called only after explicit confirmation; recheck the gate before doing any cloud work. */
+    fun requestDisposal() {
+        if (disposalJob?.isActive == true) return
+        val state = _uiState.value
+        val blocked = disposalBlockReason(state.device.status, state.cloudConnected,
+            state.internetAvailable, state.disposal, System.currentTimeMillis())
+        val uid = FirebaseAuth.getInstance().currentUser?.uid?.takeIf { it.isNotBlank() }
+        if (blocked != null || uid == null) {
+            _uiState.update { it.copy(disposal = it.disposal.copy(
+                notice = blocked ?: "Your session ended. Connect again.", noticeRequestId = null
+            )) }
+            return
+        }
+        _uiState.update { it.copy(disposal = it.disposal.copy(
+            submitting = true, notice = null, noticeRequestId = null)) }
+        disposalJob = viewModelScope.launch(GarbyDispatchers.background) {
+            try {
+                val result = GarbyRealtimeDb.requestDisposal(deviceId = deviceId, requestedBy = uid)
+                _uiState.update { it.copy(disposal = it.disposal.withSubmission(result)) }
+            } finally {
+                _uiState.update { it.copy(disposal = it.disposal.copy(submitting = false)) }
+            }
+        }
+    }
+
+    fun clearDisposalNotice() {
+        _uiState.update { it.copy(disposal = it.disposal.copy(notice = null, noticeRequestId = null)) }
+    }
+
     private fun collectConnection(scope: CoroutineScope) {
-        scope.launch(Dispatchers.Default) {
+        scope.launch(GarbyDispatchers.background) {
             GarbyRealtimeDb.connectionState
                 .catch { error ->
                     if (error is CancellationException) throw error
@@ -79,58 +145,50 @@ class DeviceViewModel : ViewModel() {
                     emit(ConnectionState.Disconnected)
                 }
                 .collect { connection ->
-                    val now = System.currentTimeMillis()
                     _uiState.update { state ->
-                        val connected = connection is ConnectionState.Connected
-                        state.copy(
-                            connection = connection,
-                            level = state.level.recheckFreshness(now, connected),
-                            weight = state.weight.recheckFreshness(now, connected),
-                            mq135 = state.mq135.recheckFreshness(now, connected),
-                            mq137 = state.mq137.recheckFreshness(now, connected),
-                            mq4 = state.mq4.recheckFreshness(now, connected),
-                            device = state.device.recheckFreshness(now, connected)
-                        )
+                        state.copy(connection = connection).recheckAll(System.currentTimeMillis())
                     }
                 }
         }
     }
 
+    private fun collectInternet(scope: CoroutineScope) {
+        scope.launch(GarbyDispatchers.background) {
+            NetworkConnectivityManager.isInternetAvailable.collect { available ->
+                _uiState.update { it.copy(internetAvailable = available) }
+            }
+        }
+    }
+
     private fun collectSensor(scope: CoroutineScope, key: SensorKey, startupDelayMs: Long = 0L) {
-        scope.launch(Dispatchers.Default) {
+        scope.launch(GarbyDispatchers.background) {
             if (startupDelayMs > 0L) delay(startupDelayMs.milliseconds)
             GarbyRealtimeDb.sensorValue(deviceId, key).collect { state ->
-                when (state) {
-                    SensorUiState.Loading -> updateSensor(
-                        key,
-                        SensorReadingUiState(isLoading = true)
+                val next = when (state) {
+                    SensorUiState.Loading -> SensorReadingUiState(isLoading = true)
+                    is SensorUiState.Value -> SensorReadingUiState(
+                        reading = state.data,
+                        isLoading = false,
+                        isStale = true,
+                        error = null
                     )
-                    is SensorUiState.Value -> updateSensor(
-                        key,
-                        SensorReadingUiState(
-                            reading = state.data,
-                            isLoading = false,
-                            isStale = _uiState.value.connection !is ConnectionState.Connected ||
-                                !isFreshTimestamp(state.data.updatedAtMs),
-                            error = null
-                        )
+                    is SensorUiState.Error -> SensorReadingUiState(
+                        reading = null,
+                        isLoading = false,
+                        isStale = true,
+                        error = state.message
                     )
-                    is SensorUiState.Error -> updateSensor(
-                        key,
-                        SensorReadingUiState(
-                            reading = null,
-                            isLoading = false,
-                            isStale = true,
-                            error = state.message
-                        )
-                    )
+                }
+                _uiState.update { current ->
+                    val now = System.currentTimeMillis()
+                    current.withSensor(key, next.recheckFreshness(now, current.cloudConnected))
                 }
             }
         }
     }
 
     private fun collectDeviceStatus(scope: CoroutineScope) {
-        scope.launch(Dispatchers.Default) {
+        scope.launch(GarbyDispatchers.background) {
             GarbyRealtimeDb.deviceStatus(deviceId)
                 .catch { error ->
                     if (error is CancellationException) throw error
@@ -141,21 +199,21 @@ class DeviceViewModel : ViewModel() {
                                 status = null,
                                 isLoading = false,
                                 isStale = true,
-                                error = "Device status unavailable"
+                                error = "Robot status unavailable"
                             )
                         )
                     }
                 }
                 .collect { status ->
-                    _uiState.update {
-                        it.copy(
+                    _uiState.update { current ->
+                        val now = System.currentTimeMillis()
+                        current.copy(
                             device = DeviceStatusUiState(
                                 status = status,
                                 isLoading = false,
-                                isStale = _uiState.value.connection !is ConnectionState.Connected ||
-                                    !isFreshTimestamp(status.lastSeenMs),
+                                isStale = true,
                                 error = null
-                            )
+                            ).recheckFreshness(now, current.cloudConnected)
                         )
                     }
                 }
@@ -163,23 +221,25 @@ class DeviceViewModel : ViewModel() {
     }
 
     private fun startFreshnessTicker(scope: CoroutineScope) {
-        scope.launch(Dispatchers.Default) {
+        scope.launch(GarbyDispatchers.background) {
             while (isActive) {
                 delay(RtdbConstants.FRESHNESS_TICK_MS.milliseconds)
-                val now = System.currentTimeMillis()
-                _uiState.update { state ->
-                    val connected = state.connection is ConnectionState.Connected
-                    state.copy(
-                        level = state.level.recheckFreshness(now, connected),
-                        weight = state.weight.recheckFreshness(now, connected),
-                        mq135 = state.mq135.recheckFreshness(now, connected),
-                        mq137 = state.mq137.recheckFreshness(now, connected),
-                        mq4 = state.mq4.recheckFreshness(now, connected),
-                        device = state.device.recheckFreshness(now, connected)
-                    )
-                }
+                _uiState.update { it.recheckAll(System.currentTimeMillis()) }
             }
         }
+    }
+
+    private fun DeviceUiState.recheckAll(now: Long): DeviceUiState {
+        val connected = cloudConnected
+        return copy(
+            level = level.recheckFreshness(now, connected),
+            weight = weight.recheckFreshness(now, connected),
+            mq135 = mq135.recheckFreshness(now, connected),
+            mq137 = mq137.recheckFreshness(now, connected),
+            mq4 = mq4.recheckFreshness(now, connected),
+            device = device.recheckFreshness(now, connected),
+            nowMs = now
+        )
     }
 
     private fun SensorReadingUiState.recheckFreshness(
@@ -202,15 +262,12 @@ class DeviceViewModel : ViewModel() {
         )
     }
 
-    private fun updateSensor(key: SensorKey, value: SensorReadingUiState) {
-        _uiState.update { current ->
-            when (key) {
-                SensorKey.Level -> current.copy(level = value)
-                SensorKey.Weight -> current.copy(weight = value)
-                SensorKey.Mq135 -> current.copy(mq135 = value)
-                SensorKey.Mq137 -> current.copy(mq137 = value)
-                SensorKey.Mq4 -> current.copy(mq4 = value)
-            }
+    private fun DeviceUiState.withSensor(key: SensorKey, value: SensorReadingUiState): DeviceUiState =
+        when (key) {
+            SensorKey.Level -> copy(level = value)
+            SensorKey.Weight -> copy(weight = value)
+            SensorKey.Mq135 -> copy(mq135 = value)
+            SensorKey.Mq137 -> copy(mq137 = value)
+            SensorKey.Mq4 -> copy(mq4 = value)
         }
-    }
 }

@@ -13,7 +13,9 @@ python3 -m pip install -r RasPi/requirements-firebase.txt
 ```
 
 For a lean local installation, use `RasPi/requirements.txt` instead. It installs
-only `bleak` and `pyserial`. Without the optional Firebase SDK, cloud updates and
+`bleak`, `pyserial` and `numpy`. NumPy is required for chassis zones, hallway walls
+and moving-object prediction; runtime preflight fails when it is absent.
+Without the optional Firebase SDK, cloud updates and
 remote return requests are unavailable; local sensing, BLE, and the safety bridge
 continue to operate. Installing the lean list does not remove an existing SDK.
 
@@ -216,7 +218,7 @@ to restore its thresholds:
   LiDAR distance thresholds only. Both groups return to checks on when the Pi
   process restarts.
 
-**Start (skip scale/sensors)** starts the normal outbound route manually from
+**Manual disposal** asks **Start manual disposal?** before starting the normal outbound route from
 IDLE. It bypasses the weight and bin/gas trigger thresholds; it does not need a
 valid scale reading, sensor-board data, or Firebase. Automatic triggering still
 works as before. The route continues to use its normal motion and obstacle gates.
@@ -255,8 +257,17 @@ and restart the Pi runtime. Older firmware cannot supply the required readiness
 and start acknowledgements.
 
 In headless mode with an interactive terminal, use `f` / `b` for the groups,
-`s` for manual start, and `q` to quit. A system service has no interactive keys.
+`s` then `y` within 10 seconds for confirmed manual disposal, and `q` to quit.
+Any other confirmation key cancels. A system service has no interactive keys.
 The UI preview demonstrates the controls using sample data only.
+
+The Android app can request the same route through `devices/garby-bin-01/commands/dispose`.
+`disposal_support.py` polls in a dedicated worker, validates a 30-second request deadline,
+and durably claims each request before queuing one START. Recovery only queries the recorded
+controller ID. The executor's `[DISPOSAL READY:1]` capability and fresh IDLE/readiness are
+required for cloud requests. Cloud writes never supply GO. Deploy the whole `RasPi/`
+directory, including this helper. Protocol, Firebase setup and acceptance steps:
+[`docs/manual-disposal-2026-11-13.md`](../docs/manual-disposal-2026-11-13.md).
 
 ## Important SMS notices
 

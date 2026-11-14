@@ -40,6 +40,8 @@ static MpuHeading mpuHeading;
 // continuous reference from boot and the executor owns its segment/route frames.
 static bool straightRunActive = false;
 static bool turnActive = false;
+// Unknown after bridge boot until the executor reports its current turn scope.
+static bool turnStateKnown = false;
 static bool haveSteeringAcquisition = false;
 static uint32_t lastSteeringAcquisition = 0;
 static uint8_t steeringAllow = 0;               // STEER_ALLOW_* of the newest acquisition
@@ -93,7 +95,7 @@ static uint32_t executorStateAtMs = 0;
 #define TRANSPORT_STATS_INTERVAL_MS   10000UL
 #define BRIDGE_CPU_FREQUENCY_MHZ         160
 #define BRIDGE_TX_POWER_DBM                9
-#define BRIDGE_FIRMWARE_ID       "NAV-20261111"
+#define BRIDGE_FIRMWARE_ID       "RECONNECT-20261114"
 
 // Steering is continuous in the executor (HeadingControl.h). Bridge steering
 // tunables, the permission rules and the W line format are in SteeringAssist.h.
@@ -305,7 +307,8 @@ static void resetNavigationState() {
   lastSteeringAcquisition = 0;
   steeringAllow          = 0;
   steeringAllowAtMs      = 0;
-  turnActive             = false;
+  // A BLE session change invalidates path evidence, not the executor's turn.
+  // Only executor notices/restart or a confirmed operator release end that scope.
 }
 
 void sendNotification(const char* msg) {
@@ -582,15 +585,22 @@ static void evaluateSteeringFrame(const String& sidesVal) {
     extractField(sidesVal, "CR=", f.clearRight) == FieldParseStatus::VALID &&
     f.clearFront > 0 && f.clearLeft > 0 && f.clearRight > 0;
 
-  steeringAllow = steeringAllowMask(f);
-  steeringAllowAtMs = (uint32_t)millis();
+  const uint32_t nowMs = (uint32_t)millis();
+  const uint32_t queuedMs = nowMs - currentFrameReceivedAtMs;
+  if (queuedMs > MAX_WALL_AGE_MS) {
+    withdrawSteering();
+    return;
+  }
+  // G is source acquisition age at the Pi's write, not a fresh arrival clock.
+  // Include the bridge mailbox wait without capping it and retain that age for
+  // the lifetime of the permission. Missing age withdraws permission as well.
+  const uint32_t totalAgeMs = f.ageMs + queuedMs + BLE_TRANSIT_ESTIMATE_MS;
+  steeringAllow = f.ageKnown && totalAgeMs <= STEERING_MAX_AGE_MS ? steeringAllowMask(f) : 0;
+  steeringAllowAtMs = nowMs - totalAgeMs;
 
   // The wall fit is measurement only. It is forwarded with its total age so the
   // executor can line it up with the gyro heading at the moment of the scan.
   if (ENABLE_LIDAR_CENTERING && f.ageKnown) {
-    const uint32_t queuedMs = (uint32_t)millis() - currentFrameReceivedAtMs;
-    const uint32_t totalAgeMs = f.ageMs + (queuedMs < 1000U ? queuedMs : 1000U) +
-                                BLE_TRANSIT_ESTIMATE_MS;
     char line[96];
     if (formatWallLine(line, sizeof(line), acquisition, totalAgeMs, f) &&
         sendMcuLine(line, false)) {
@@ -792,6 +802,10 @@ static void handlePathPacket(const String& raw) {
 
   // Between [TURN:START] and [TURN:END] the spin sweep must be clear as well.
   // A Pi that sends no T, or an unknown sweep, is never a clear turn.
+  if (!turnStateKnown) {
+    relayStop("STOP:TURN_UNKNOWN");
+    return;
+  }
   if (turnActive && turnCode != "C") {
     relayStop(turnCode == "O" ? "STOP:TURN" : "STOP:TURN_UNKNOWN");
     return;
@@ -995,7 +1009,7 @@ static void processAndRelayMessage(const char* incoming) {
   if (raw.startsWith("[START:") || startQuery) {
     if (!raw.endsWith("]")) return;
     const String id = raw.substring(startQuery ? 14 : 7, raw.length() - 1);
-    if (id.length() == 0 || id.length() > 16) return;
+    if (id.length() == 0 || id.length() > 16 || id.charAt(0) == '0') return;
     for (unsigned int i = 0; i < id.length(); ++i) {
       if (id.charAt(i) < '0' || id.charAt(i) > '9') return;
     }
@@ -1475,6 +1489,8 @@ static void handleMcuLine(const char* mcuMsg) {
         pendingReleaseId = "";
         if (released) {
           pendingEmergencyId = "";
+          turnActive = false;
+          turnStateKnown = true; // RELEASE is acknowledged only after route unwind to IDLE.
           resetNavigationState();
           relayStop("STOP:WAITING_DATA");
         }
@@ -1527,13 +1543,18 @@ static void handleMcuLine(const char* mcuMsg) {
   }
   if (strcmp(mcuMsg, "[TURN:START]") == 0) {
     // GO evidence from before the turn ignored the spin sweep. Confirm afresh.
+    // Status heartbeats repeat this notice; they must not restart confirmations.
+    if (!turnStateKnown || !turnActive) {
+      stopLatched = true;
+      clearConfirmCount = 0;
+    }
     turnActive = true;
-    stopLatched = true;
-    clearConfirmCount = 0;
+    turnStateKnown = true;
     return;
   }
   if (strcmp(mcuMsg, "[TURN:END]") == 0) {
     turnActive = false;
+    turnStateKnown = true;
     return;
   }
 
@@ -1553,6 +1574,9 @@ static void handleMcuLine(const char* mcuMsg) {
     // until its next state line.
     straightRunActive = false;
     turnActive = false;
+    // READY is an executor restart at idle; ALIVE can be an interrupted spin.
+    // The latter needs its status replay before any new path can grant GO.
+    turnStateKnown = !recoveryPing;
     executorParked = false;
     // Treat every READY as a controller boot epoch, even if BLE stayed up.
     // This fixes the case where a rebooted executor waits forever because the
@@ -1607,8 +1631,10 @@ static void handleMcuLine(const char* mcuMsg) {
     executorParked = false;
     executorStateAtMs = (uint32_t)millis();
   }
-  if (strcmp(mcuMsg, "[SYSTEM READY]") == 0 &&
-      (!deviceConnected || !piReady || !mcuReady || !bleBridgeSignalSent || mcuAckFault)) {
+  if ((strcmp(mcuMsg, "[SYSTEM READY]") == 0 || strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0) &&
+      (!deviceConnected || !piReady || !mcuReady || !bleBridgeSignalSent || mcuAckFault ||
+       mcuBackpressureStopPending ||
+       (strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0 && operatorStopLatched))) {
     return;
   }
   if (VERBOSE_PROTOCOL_LOGS) {

@@ -1,0 +1,133 @@
+test_controller.cpp
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(245): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\SonarSweep.h(252): warning C4244: 'initializing': conversion from 'double' to 'const float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(800): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(805): warning C4244: 'argument': conversion from 'double' to 'float', possible loss of data
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(818): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\MAIN_EXECUTOR_CODE\HeadingControl.h(963): warning C4244: '=': conversion from '_Ty' to 'float', possible loss of data
+        with
+        [
+            _Ty=constrain::T
+        ]
+\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\firmware_tests\../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp(2198): warning C4305: 'initializing': truncation from 'double' to 'float'
+
+PASS operator emergency stop force-stops both wheels and acknowledges the latch
+PASS GO, legacy reset, reconnect, and manual start cannot erase emergency stop
+PASS release cannot occur inside a still-active route stack
+PASS release after route unwinds leaves IDLE requiring a fresh deliberate start
+PASS high sensor readings cannot automatically restart a released emergency stop
+PASS operator ID cannot be reused for a different action
+PASS stale operator action cannot override the current mode
+PASS sonar disable is acknowledged at stationary IDLE and parks the servo
+PASS disabled sonar cannot ping, provide obstacle readings, or move the servo off center
+PASS re-enabled sonar fails closed until new clearance confirmations arrive
+PASS two new sonar clear samples cannot bypass rearm confirmation
+PASS three new clear samples rearm local obstacle sonar
+PASS MCU reboot requires acknowledged emergency stop
+PASS reboot is committed only while emergency-stopped and is delayed for ACK delivery
+PASS delayed reboot retains emergency latch for software restart
+PASS RTC no-init marker restores operator stop after RAM initialization
+PASS 20-digit operator IDs are validated without integer overflow
+PASS noncanonical operator IDs are ignored
+PASS sonar mode changes cannot apply during an active route
+PASS emergency stop inside actual motion aborts route without resuming from queued GO
+PASS GO traffic alone cannot replace the Pi/controller startup handshake
+PASS ready executor reports manual disposal without bin, gas or scale readings
+PASS emergency stop withholds manual disposal readiness
+PASS route fault withholds manual disposal readiness
+PASS querying an undelivered start reports failure without starting the route
+PASS manual start enters the normal outbound route with no scale/bin trigger
+PASS manual start cannot grant path permission or directly move either wheel
+PASS accepted manual disposal withholds eligibility for a second run
+PASS a lost manual-start ACK can be queried without changing the motion gate
+PASS duplicate manual start acknowledges its original outcome without changing motion gates
+PASS accepted start replay after return cannot start another cycle
+PASS querying a completed start cannot begin another cycle
+PASS manual start cannot clear a route fault
+PASS older accepted start remains non-replayable after a newer rejected request
+PASS manual start cannot interrupt a returning route
+PASS stale UART cannot be refreshed into readiness by the start command itself
+PASS BLE loss revokes the executor manual-start handshake
+PASS malformed manual-start IDs cannot change executor state
+PASS idle executor renews a revoked startup handshake even while UART traffic is fresh
+PASS manual start recovers after a new handshake without a controller reboot
+PASS uninitialized motor output is rejected instead of accepting an immobile route
+PASS status exposes an MPU motion hold to the Pi without clearing STOP
+PASS status exposes the executor's local sonar hold even with clear LiDAR
+PASS clear echoes separated by an outage cannot release obstacle latch
+PASS three consecutive fresh echoes recover after outage
+PASS one stalled software step counter stops both wheels and faults the route
+PASS retargeting a running wheel cannot hide stalled step progress
+PASS adjustment stops both wheels when one executor stalls
+PASS continuous start rejection cannot leave one wheel running
+PASS one GO cannot release STOP
+PASS widely separated GO evidence does not accumulate
+PASS two fresh GO commands release STOP
+PASS controller independently stops on silence
+PASS queued GO cannot erase STOP before braking
+PASS back-to-back buffered GO commands cannot release STOP
+PASS a later fresh GO supplies independent clearance evidence
+PASS oversized UART line immediately invalidates motion permission
+PASS queued GO after UART overflow cannot bypass new confirmation
+PASS non-printable UART data immediately invalidates permission
+PASS queued GO after corrupt UART cannot erase STOP
+PASS ordinary CRLF UART frames preserve live permission
+PASS embedded carriage return cannot be stripped into valid GO
+PASS one rejected motor command stops both wheels
+PASS single close echo stops despite clear median history
+PASS a single ping with no echo does not clear a latched obstacle
+PASS three valid clear echoes release local latch
+PASS two pings with no echo cannot release the latch
+PASS three pings with no echo in range (open hallway) release it as a far, fresh reading
+PASS an echo under 1.5 cm is a glitch, not an obstacle or a clear reading
+PASS halt continues sensing and resumes on local plus LiDAR clearance
+PASS local clearance hysteresis keeps reporting a hold until the halt actually exits
+PASS confirmed halt recovery clears the displayed motion hold
+PASS blocked move resumes the original target and completes
+PASS return from incomplete outbound is rejected
+PASS retry cannot turn rejected return into recovery
+PASS return accepted only from confirmed destination
+PASS same return ID is idempotent during return
+PASS completed retry returns matching completion without motion
+PASS invalid weight stays idle and publishes unavailable telemetry
+PASS out-of-range raw weight cannot contaminate load confirmation
+PASS one valid weight after invalid data cannot trigger outbound
+PASS valid weight recovers after invalid samples without a reset
+PASS stale cached weight cannot start outbound
+PASS weight after a stale gap starts a new confirmation streak
+PASS two new weight samples restore triggering after an outage
+PASS load helper uses the fresh worker snapshot without waiting on the converter
+PASS load helper rejects expired worker samples
+PASS load helper rejects invalid samples
+PASS missing converter cannot produce a valid untared weight
+PASS background tare retries and publishes only after calibration succeeds
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS empty, below corrected 4kg, or negative load cannot trigger route
+PASS one corrected 4kg sample cannot trigger route
+PASS two corrected 4kg samples trigger route
+PASS main loop leaves cellular UART and console bytes untouched for the single modem owner
+PASS executor boot returns promptly with no bridge and leaves motors stopped for loop recovery
+PASS a lost heading reference is not reported as a LiDAR block
+PASS an ordinary obstacle stop still reports the LiDAR
+PASS a link stop still reports the link
+PASS recovery ping during a route is distinct from the controller boot announcement
+PASS parked at the destination the controller polls status at the idle rate
+FAIL handshake replays an interrupted turn before announcing readiness
+FAIL status reports explicitly restore non-turn mode before readiness
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\run_firmware_tests.py", line 63, in <module>
+    main()
+  File "\\garby-desktop\SharedGarby\GARBY-CODEBASE\GarbyMostLatest-ForTesting\tools\run_firmware_tests.py", line 59, in main
+    result.check_returncode()
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 502, in check_returncode
+    raise CalledProcessError(self.returncode, self.args, self.stdout,
+subprocess.CalledProcessError: Command '['C:\\Users\\napht\\AppData\\Local\\Temp\\garby-firmware-tests-c6ss46rz\\test_controller.exe']' returned non-zero exit status 1.
+

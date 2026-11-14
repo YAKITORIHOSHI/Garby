@@ -7,8 +7,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.installations.FirebaseInstallations
 import com.thesis.garby.network.NetworkConnectivityManager
+import com.thesis.garby.performance.GarbyDispatchers
+import com.thesis.garby.realtime.GarbyRealtimeDb
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -51,14 +56,7 @@ class AuthViewModel : ViewModel() {
         val authenticated = auth.currentUser != null
         if (authenticated) {
             _signInError.value = null
-            com.google.firebase.messaging.FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val token = task.result
-                    if (!token.isNullOrBlank()) {
-                        com.thesis.garby.realtime.GarbyRealtimeDb.saveFcmToken(token)
-                    }
-                }
-            }
+            publishMessagingInstallationId()
             // While signIn() is in flight, the coroutine drives the state
             // change so background RTDB warm-up completes before routing.
             if (_isSigningIn.value) return@AuthStateListener
@@ -75,13 +73,27 @@ class AuthViewModel : ViewModel() {
         firebaseAuth.addAuthStateListener(authStateListener)
     }
 
+    /** FCM registers this app instance by its Firebase Installation ID; see the messaging service. */
+    private fun publishMessagingInstallationId() {
+        FirebaseInstallations.getInstance().id.addOnCompleteListener { task ->
+            val installationId = if (task.isSuccessful) task.result else null
+            if (!installationId.isNullOrBlank()) {
+                GarbyRealtimeDb.saveMessagingInstallationId(installationId)
+            }
+        }
+    }
+
     fun signIn() {
         if (_isSigningIn.value) return
+        if (!NetworkConnectivityManager.isNetworkConnected() && firebaseAuth.currentUser == null) {
+            _signInError.value = "This phone is offline. Connect to the internet and try again."
+            return
+        }
         _signInError.value = null
         _isSigningIn.value = true
 
         signInJob?.cancel()
-        signInJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        signInJob = viewModelScope.launch(GarbyDispatchers.background) {
             var authenticated = firebaseAuth.currentUser != null
             try {
                 if (!authenticated) {
@@ -92,17 +104,17 @@ class AuthViewModel : ViewModel() {
                 }
                 // Warm up Firebase RTDB (lazy init + socket) before the
                 // dashboard is routed to, so the transition stays smooth.
-                com.thesis.garby.realtime.GarbyRealtimeDb.prewarm()
+                GarbyRealtimeDb.prewarm()
                 authenticated = firebaseAuth.currentUser != null
             } catch (_: TimeoutCancellationException) {
                 _signInError.value = "Firebase connection timed out. Check internet and try again."
                 authenticated = false
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: FirebaseAuthInvalidUserException) {
+            } catch (_: FirebaseAuthInvalidUserException) {
                 _signInError.value = "Firebase user is disabled or no longer exists."
                 authenticated = false
-            } catch (e: FirebaseAuthInvalidCredentialsException) {
+            } catch (_: FirebaseAuthInvalidCredentialsException) {
                 _signInError.value = "Firebase credentials were rejected."
                 authenticated = false
             } catch (e: FirebaseAuthException) {
@@ -113,7 +125,7 @@ class AuthViewModel : ViewModel() {
                 _signInError.value = "Sign-in failed. Check internet and Firebase access."
                 authenticated = false
             } finally {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                withContext(Dispatchers.Main) {
                     _authState.value = if (authenticated) {
                         AuthState.Authenticated
                     } else {
@@ -135,11 +147,10 @@ class AuthViewModel : ViewModel() {
     override fun onCleared() {
         firebaseAuth.removeAuthStateListener(authStateListener)
         signInJob?.cancel()
-        super.onCleared()
     }
 }
 
 sealed interface AuthState {
-    object Authenticated : AuthState
-    object Unauthenticated : AuthState
+    data object Authenticated : AuthState
+    data object Unauthenticated : AuthState
 }

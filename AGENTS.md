@@ -32,8 +32,8 @@ User instructions and authorization in the current session take precedence.
 ## Source and hardware boundaries
 
 - Production Pi entry point is `RasPi/final_w_serial.py`. Deploy its entire
-  directory; local helpers are required. Mobile-app compatibility launchers and
-  the serial test sketches are not alternative production implementations.
+  directory; local helpers are required. The serial test sketches are not
+  alternative production implementations.
 - Firmware source changes belong in root sketch `.ino/.cpp/.h` files. Respect
   each sketch's `AGENTS.md`. Never modify flasher caches, `.pio` or `.opencode`.
   A user-authorized coordinated system change can also update its Pi, bridge,

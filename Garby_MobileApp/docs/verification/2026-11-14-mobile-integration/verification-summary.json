@@ -1,0 +1,91 @@
+{
+  "android": {
+    "command": "java -classpath gradle/wrapper/gradle-wrapper.jar org.gradle.wrapper.GradleWrapperMain :app:testDebugUnitTest :app:lintDebug :app:assembleBenchmark :app:assembleRelease --console=plain",
+    "result": "BUILD SUCCESSFUL",
+    "unitTests": 64,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "lint": "No issues found.",
+    "log": "android-final.log"
+  },
+  "firmwareHost": {
+    "command": "python -B tools/run_firmware_tests.py (from coordinated root; Python 3.12.8, MSVC host compiler)",
+    "result": "PASS",
+    "programs": 8,
+    "passingAssertions": 596,
+    "log": "firmware-host-final.log"
+  },
+  "bridgeTarget": {
+    "fqbn": "esp32:esp32:esp32s3:FlashSize=8M,PSRAM=disabled",
+    "command": "arduino-cli compile --fqbn esp32:esp32:esp32s3:FlashSize=8M,PSRAM=disabled --jobs 1 --build-path %TEMP%/garby-native-review-20261114/bridge-build --output-dir %TEMP%/garby-native-review-20261114/firmware/BLE_Receiver-Final %TEMP%/garby-native-review-20261114/source/BLE_Receiver-Final",
+    "exitCode": 0,
+    "flashBytes": 590168,
+    "staticRamBytes": 38068,
+    "log": "bridge-target.log"
+  },
+  "executorTarget": {
+    "fqbn": "esp32:esp32:esp32:FlashSize=4M,PSRAM=disabled",
+    "command": "arduino-cli compile --fqbn esp32:esp32:esp32:FlashSize=4M,PSRAM=disabled --jobs 1 --build-path %TEMP%/garby-native-review-20261114/executor-build --output-dir %TEMP%/garby-native-review-20261114/firmware/MAIN_EXECUTOR_CODE %TEMP%/garby-native-review-20261114/source/MAIN_EXECUTOR_CODE",
+    "exitCode": 0,
+    "flashBytes": 416274,
+    "staticRamBytes": 29448,
+    "log": "executor-target.log"
+  },
+  "piSuite": {
+    "command": "python -B -c \"import faulthandler, unittest; faulthandler.dump_traceback_later(90, exit=True); result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('RasPi', pattern='test_*.py')); faulthandler.cancel_dump_traceback_later(); raise SystemExit(not result.wasSuccessful())\"",
+    "platform": "Windows 11, Python 3.12.8, lean requirements installed in task-local venv",
+    "result": "FAILED",
+    "tests": 464,
+    "failures": 3,
+    "errors": 6,
+    "log": "pi-final.log",
+    "linuxTargetRetest": "not performed"
+  },
+  "sourceSanity": {
+    "command": "python -B tools/source_sanity.py . (from coordinated root)",
+    "result": "PASS",
+    "cppFiles": 75,
+    "jsonFiles": 234,
+    "log": "source-sanity.log"
+  },
+  "androidStatic": {
+    "command": "python -B tools/static_quality_check.py",
+    "result": "PASS",
+    "log": "android-static.log"
+  },
+  "apkSignatures": {
+    "command": "Android SDK build-tools/36.0.0/apksigner.bat verify --verbose --print-certs <APK>",
+    "oldExitCode": 0,
+    "newExitCode": 0,
+    "sameCertificateSha256": "778bad0096f273b6dba8db1d5fda2b45e9924e20a3faa10e89177aebeb20bef6"
+  },
+  "robotPatch": {
+    "command": "git apply --reverse --check --ignore-space-change Garby_MobileApp/docs/verification/2026-11-14-mobile-integration/robot-integration.patch (from coordinated root)",
+    "exitCode": 0
+  },
+  "regressionsBefore": {
+    "bridge": "firmware-regression-before.log: reconnect occupied sweep assertion failed before source repair",
+    "executor": "executor-regression-before.log: both missing turn-replay assertions failed before source repair"
+  },
+  "environment": {
+    "arduinoCli": "1.5.1",
+    "esp32Core": "3.3.11",
+    "libraries": {
+      "ESP32Servo": "3.2.1",
+      "FastAccelStepper": "1.2.7",
+      "HX711": "0.6.4",
+      "NimBLE-Arduino": "2.5.1"
+    },
+    "buildId": "RECONNECT-20261114",
+    "nativeSourceHashesMatchWorkspace": true
+  },
+  "limits": [
+    "Windows full Pi suite is not green; Linux-specific cases and one scan fixture remain unresolved in this run.",
+    "Firebase rules example is JSON-checked, not emulator/live-tested or deployed.",
+    "Physical phone performance for this feature and robot acceptance remain unverified.",
+    "No upload, live robot command, database/rule mutation, SMS, Pi service restart or app installation performed.",
+    "Installed robot firmware identity and earlier pending deployment status remain unknown.",
+    "Kernel crash cause unestablished: minidump access denied; Studio dump alone cannot identify the kernel fault."
+  ]
+}

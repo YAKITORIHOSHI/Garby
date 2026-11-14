@@ -42,6 +42,8 @@ if 'android:usesCleartextTraffic="false"' not in manifest_text:
     fail("Cleartext traffic must remain disabled")
 if "CHANGE_NETWORK_STATE" in manifest_text:
     fail("CHANGE_NETWORK_STATE should not be requested")
+if 'android:dataExtractionRules="@xml/data_extraction_rules"' not in manifest_text:
+    fail("Android 12+ device transfer must stay excluded by data extraction rules")
 
 source_files = list(JAVA.rglob("*.kt"))
 source_text = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
@@ -54,6 +56,7 @@ for label, pattern in {
     "legacy direct HTTP stack": r"org\.apache\.hc|SensorAPIHelper|BasicCredentialsProvider",
     "unbounded/dead custom executor": r"LinkedBlockingQueue|AdaptiveThreadPool|ExecutorServices",
     "FCM registration token value logging": r"Log\.[A-Za-z]+\([^\n]*(?:\$token|\+\s*token)",
+    "deprecated FCM registration-token API": r"FirebaseMessaging\.getInstance\(\)\.token|override\s+fun\s+onNewToken",
 }.items():
     if re.search(pattern, source_text, re.IGNORECASE):
         fail(f"Forbidden pattern detected: {label}")
@@ -67,6 +70,8 @@ for required in [
     "waitForFirebaseConnection()",
     "requestedBy = uid",
     "else -> Unknown",
+    # The server copy of the robot state is re-checked immediately before the write.
+    "notReadyMessage(unmet, status)",
 ]:
     if required not in source_text:
         fail(f"Reset safety invariant missing: {required}")
@@ -84,11 +89,39 @@ for forbidden_dependency in [
     if forbidden_dependency in build_text:
         fail(f"Unused/legacy dependency returned: {forbidden_dependency}")
 
-# Local resource references must resolve by resource stem.
+# The new control must remain confirmed, transactional and lifecycle-bound.
+disposal_sources = {
+    "MainDashboard.kt": ["Start manual disposal?", "Yes, start disposal", "confirmDisposal = false"],
+    "realtime/GarbyRealtimeDb.kt": ["commands/dispose", "ref.runTransaction(",
+        "canReplaceDisposal(", "extractDeviceStatus(null, statusSnapshot)"],
+    "realtime/DeviceViewModel.kt": ["collectDisposal(this)", "disposalJob?.isActive",
+        "GarbyDispatchers.background"],
+    "realtime/DisposalLogic.kt": ["manualDisposalReady != true", "RobotState.Idle",
+        "DisposalStatus.Unknown", "Follow the robot status for arrival"],
+}
+for relative, required in disposal_sources.items():
+    path = JAVA / "com/thesis/garby" / relative
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    for marker in required:
+        if marker not in text:
+            fail(f"Manual disposal invariant missing in {relative}: {marker}")
+
+# Local resource references must resolve by resource stem, in any qualified folder
+# (for example drawable-nodpi).
 resource_stems: dict[str, set[str]] = {}
 for resource_type in ("drawable", "font"):
-    folder = SRC / "res" / resource_type
-    resource_stems[resource_type] = {p.stem for p in folder.iterdir() if p.is_file()}
+    stems: set[str] = set()
+    for folder in (SRC / "res").glob(f"{resource_type}*"):
+        if folder.is_dir():
+            stems.update(p.stem for p in folder.iterdir() if p.is_file())
+    resource_stems[resource_type] = stems
+
+# Bitmaps in the densityless drawable/ folder are treated as mdpi and scaled up on every
+# high-density phone (a 2000 px logo decoded at about 80 MB). Raster images belong in
+# drawable-nodpi or a density folder.
+for path in (SRC / "res" / "drawable").iterdir():
+    if path.suffix.lower() in {".png", ".webp", ".jpg", ".jpeg"}:
+        fail(f"Raster image in densityless res/drawable: {path.name}")
 for resource_type, name in re.findall(r"R\.(drawable|font)\.([A-Za-z0-9_]+)", source_text):
     if name not in resource_stems[resource_type]:
         fail(f"Missing R.{resource_type}.{name}")

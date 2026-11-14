@@ -667,6 +667,7 @@ class ManualStartControl:
     def __init__(self):
         self._lock = threading.RLock()
         self._last_id = 0
+        self._outcomes = {}
         self.reset()
 
     def reset(self):
@@ -773,10 +774,36 @@ class ManualStartControl:
         with self._lock:
             if not self._pending or request_id != self._pending[0]:
                 return False
+            self._outcomes[request_id] = (accepted, reason)
+            while len(self._outcomes) > 32:
+                del self._outcomes[next(iter(self._outcomes))]
             self._pending = None
             self._message = "Manual start accepted" if accepted else f"Start rejected: {reason}"
             # The next state report decides whether another start is allowed.
             self._state_at = None
+            return True
+
+    def result(self, request_id):
+        """A matching executor result survives BLE loss until cloud reconciliation."""
+        with self._lock:
+            return self._outcomes.get(request_id)
+
+    def cancel(self, request_id):
+        with self._lock:
+            if self._pending and self._pending[0] == request_id:
+                self._pending = None
+                self._state_at = None
+
+    def recover_query(self, request_id, now=None):
+        """Recover a durably claimed request by QUERY only, never by sending START."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if self._pending:
+                return self._pending[0] == request_id
+            self._pending = (request_id, now)
+            self._sent_at = now  # can_send() must reject the original START.
+            self._last_query_at = now - self.QUERY_INTERVAL_S
+            self._last_id = max(self._last_id, int(request_id))
             return True
 
 

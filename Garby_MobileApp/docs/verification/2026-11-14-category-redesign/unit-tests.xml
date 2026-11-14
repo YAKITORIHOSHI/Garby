@@ -1,0 +1,105 @@
+<testsuites>
+  <testsuite name="com.thesis.garby.performance.PerformanceProfileTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:22.575Z" hostname="NATSUKI" time="0.037">
+    <properties />
+    <testcase name="sixGbEightCorePhoneStillUsesLightRendering" classname="com.thesis.garby.performance.PerformanceProfileTest" time="0.007" />
+    <testcase name="lowRamSmallHeapAndFewCoresAreIndependentSignals" classname="com.thesis.garby.performance.PerformanceProfileTest" time="0.004" />
+    <testcase name="artworkSamplingCutsPixelMemoryToOneQuarterWithoutUpscaling" classname="com.thesis.garby.performance.PerformanceProfileTest" time="0.007" />
+    <testcase name="capableDeviceKeepsEffectsWithBoundedBackgroundWork" classname="com.thesis.garby.performance.PerformanceProfileTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.DatabaseSchemaTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:22.616Z" hostname="NATSUKI" time="0.001">
+    <properties />
+    <testcase name="sensorKeysMatchDeployedFirebaseExport" classname="com.thesis.garby.realtime.DatabaseSchemaTest" time="0.001" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.MonitoringFlowTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:22.620Z" hostname="NATSUKI" time="0.667">
+    <properties />
+    <testcase name="slowObserverSkipsObsoleteTelemetryDuringABurst" classname="com.thesis.garby.realtime.MonitoringFlowTest" time="0.588" />
+    <testcase name="dashboardAndReturnShareListenerAndResumeWithFreshCallback" classname="com.thesis.garby.realtime.MonitoringFlowTest" time="0.046" />
+    <testcase name="sharedListenerFailureReachesBothObserversInsteadOfLeavingLiveCachedState" classname="com.thesis.garby.realtime.MonitoringFlowTest" time="0.032" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.ReturnCommandTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.293Z" hostname="NATSUKI" time="0.026">
+    <properties />
+    <testcase name="everyPiFailureCodeHasOperatorText" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.007" />
+    <testcase name="noRecordMeansNoProgress" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.002" />
+    <testcase name="knownStatusesParseCaseInsensitively" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.005" />
+    <testcase name="newerRequestFromAnyoneReplacesTheTrackedOne" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.001" />
+    <testcase name="pendingRequestWaitsThenExpiresAfterThePiAcceptanceWindow" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.0" />
+    <testcase name="acceptedReturnBecomesOverdueOnlyAfterTheCompletionWindow" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.0" />
+    <testcase name="requestIdentityNeedsTheExactTimestampAndOperator" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.0" />
+    <testcase name="terminalOutcomesAreReportedAsRecorded" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.002" />
+    <testcase name="malformedStatusDoesNotBecomePending" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.0" />
+    <testcase name="acceptanceCountdownNeverGoesNegative" classname="com.thesis.garby.realtime.ReturnCommandTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.ReturnReadinessTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.325Z" hostname="NATSUKI" time="0.015">
+    <properties />
+    <testcase name="blockedPlaceholderNeverSends" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.01" />
+    <testcase name="readyFlagMustAgreeWithPublishedState" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.003" />
+    <testcase name="liveDestinationCanReturn" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.0" />
+    <testcase name="disconnectedOrUnknownLinksCannotReturn" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.0" />
+    <testcase name="olderPiWithoutStateFieldStillUsesItsReadyFlag" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.0" />
+    <testcase name="incompleteOutboundCannotReturn" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.0" />
+    <testcase name="missingOrStaleRobotCannotReturn" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.001" />
+    <testcase name="requestInFlightBlocksAnother" classname="com.thesis.garby.realtime.ReturnReadinessTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.SensorFreshnessTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.343Z" hostname="NATSUKI" time="0.0">
+    <properties />
+    <testcase name="oldTimestampIsStale" classname="com.thesis.garby.realtime.SensorFreshnessTest" time="0.0" />
+    <testcase name="excessiveFutureTimestampIsStale" classname="com.thesis.garby.realtime.SensorFreshnessTest" time="0.0" />
+    <testcase name="missingTimestampIsStale" classname="com.thesis.garby.realtime.SensorFreshnessTest" time="0.0" />
+    <testcase name="currentAndBoundaryTimestampAreFresh" classname="com.thesis.garby.realtime.SensorFreshnessTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.StatusDecodingTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.347Z" hostname="NATSUKI" time="0.01">
+    <properties />
+    <testcase name="powerAndTemperatureLevels" classname="com.thesis.garby.realtime.StatusDecodingTest" time="0.007" />
+    <testcase name="throttleFlagsDecodeLikeBridgeCore" classname="com.thesis.garby.realtime.StatusDecodingTest" time="0.001" />
+    <testcase name="robotStatesParseFromThePiWireValues" classname="com.thesis.garby.realtime.StatusDecodingTest" time="0.001" />
+    <testcase name="presenceFollowsTheHeartbeat" classname="com.thesis.garby.realtime.StatusDecodingTest" time="0.0" />
+    <testcase name="linksDistinguishDownFromNotReported" classname="com.thesis.garby.realtime.StatusDecodingTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.realtime.ThresholdsTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.360Z" hostname="NATSUKI" time="0.004">
+    <properties />
+    <testcase name="methaneAndAmmoniaBandsMatchTheExecutor" classname="com.thesis.garby.realtime.ThresholdsTest" time="0.002" />
+    <testcase name="unavailableSentinelHasNoBand" classname="com.thesis.garby.realtime.ThresholdsTest" time="0.0" />
+    <testcase name="dangerRuleFollowsSensorReadDecisionMaker" classname="com.thesis.garby.realtime.ThresholdsTest" time="0.0" />
+    <testcase name="loadLevelsUseTheFourKilogramTrigger" classname="com.thesis.garby.realtime.ThresholdsTest" time="0.001" />
+    <testcase name="airQualityHasFourBandsLikeTheExecutor" classname="com.thesis.garby.realtime.ThresholdsTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.ui.DashboardIndicatorsTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.369Z" hostname="NATSUKI" time="0.022">
+    <properties />
+    <testcase name="dispatchWeightIsDistinctFromAnInvalidReading" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.006" />
+    <testcase name="unavailableAndNonFiniteValuesNeverCountAsLive" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.002" />
+    <testcase name="offlineAndDisconnectedSnapshotsCannotLookLive" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.001" />
+    <testcase name="freshDangerRemainsVisibleWhenAnotherSensorIsMissing" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.0" />
+    <testcase name="loadingIsDistinctFromUnavailable" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.001" />
+    <testcase name="summariesRespectEachSensorsDifferentBands" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.0" />
+    <testcase name="systemIssuesTakePriorityAndUnknownHealthCannotProduceAnAllClear" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.011" />
+    <testcase name="completeFreshReadingsAreRequiredForAPositiveSummary" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.0" />
+    <testcase name="staleDangerIsNeverPresentedAsACurrentWarning" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.0" />
+    <testcase name="timestampExpiryIsCheckedEvenBeforeTheNextFreshnessUpdate" classname="com.thesis.garby.ui.DashboardIndicatorsTest" time="0.0" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+  <testsuite name="com.thesis.garby.ui.FormattingTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-11-13T18:15:23.392Z" hostname="NATSUKI" time="0.021">
+    <properties />
+    <testcase name="timeOfDayAddsTheDateOnlyForOtherDays" classname="com.thesis.garby.ui.FormattingTest" time="0.011" />
+    <testcase name="agesRoundDownToTheirUnit" classname="com.thesis.garby.ui.FormattingTest" time="0.006" />
+    <testcase name="countdownRoundsUpAndNeverGoesNegative" classname="com.thesis.garby.ui.FormattingTest" time="0.002" />
+    <system-out><![CDATA[]]></system-out>
+    <system-err><![CDATA[]]></system-err>
+  </testsuite>
+</testsuites>

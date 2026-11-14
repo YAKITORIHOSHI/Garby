@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import math
 import os
 
-try:  # numpy ships with ROS 2 on the Pi. Without it the zones still work.
+try:  # Required by requirements.txt and runtime preflight; fail closed if absent.
     import numpy as np
 except ImportError:  # pragma: no cover - exercised only on a stripped install
     np = None

@@ -12,6 +12,16 @@ from port_detection import LIDAR, SENSOR, PortDetector
 from runtime_support import SingleInstanceGuard
 from firebase_support import resolve_firebase_credentials
 
+def check_python_dependencies():
+    """Report required imports without contacting hardware or cloud services."""
+    missing = []
+    for package in ("rclpy", "sensor_msgs", "serial", "bleak", "numpy"):
+        available = importlib.util.find_spec(package) is not None
+        print(f"{'PASS' if available else 'FAIL'} Python dependency: {package}")
+        if not available:
+            missing.append(package)
+    return missing
+
 def _detect_serial_devices(lidar, sensor):
     """Listen for any device without an explicit port. Never transmits."""
     if lidar and sensor:
@@ -83,10 +93,7 @@ def main():
         if not os.access("/dev/vcio", os.R_OK | os.W_OK):
             print("ADVISE no /dev/vcio access: throttling is unreadable, only undervoltage is "
                   "logged; add this user to the video group")
-    for package in ("rclpy","sensor_msgs","serial","bleak"):
-        available=importlib.util.find_spec(package) is not None
-        print(f"{'PASS' if available else 'FAIL'} Python dependency: {package}")
-        if not available: failures.append(package)
+    failures.extend(check_python_dependencies())
     ros=shutil.which("ros2")
     try:
         available=bool(ros) and subprocess.run([ros,"pkg","prefix","ydlidar_ros2_driver"],capture_output=True,timeout=10).returncode==0

@@ -387,9 +387,12 @@ static void checkLongOutageMidTurn() {
   bool cut = false, restored = false;
   uint32_t cutAt = 0;
   tickHook = [&]() {
-    if (!cut && plant.thetaDeg > 12.0) { cut = true; cutAt = fakeNow; plant.streamMpu = false; }
+    if (!cut && plant.thetaDeg > 12.0) {
+      cut = true; cutAt = fakeNow; plant.streamMpu = false; plant.sendGo = false;
+      ESP_Serial.rx += "STOP:MPU\n";
+    }
     if (cut && !restored && fakeNow - cutAt >= 12000) {
-      restored = true; plant.epoch += 1; plant.streamMpu = true;
+      restored = true; plant.epoch += 1; plant.streamMpu = true; plant.sendGo = true;
     }
   };
   const bool ok = turnLeft(90);
@@ -399,6 +402,123 @@ static void checkLongOutageMidTurn() {
   check(cut && restored && ok && !routeFaultLatched && std::fabs(plant.thetaDeg - 90.0) < 1.5 &&
         sent("[HEADING LOST verify=OK"),
         "a 12 s outage 12 degrees into a turn is verified against the old hallway's walls and the turn completes");
+}
+
+static void checkHeadingRecoveryOnEveryResume() {
+  // A real S3 outage carries STOP:MPU. GO may return later than heading/walls.
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  bool cut = false, restored = false, movedBeforeClear = false;
+  bool lowPowerSeen = false; uint32_t cutAt = 0;
+  long held1 = 0, held2 = 0;
+  const long start1 = wheelA.getCurrentPosition(), start2 = wheelB.getCurrentPosition();
+  tickHook = [&]() {
+    if (!cut && plant.xCm > 150) {
+      cut = true; cutAt = fakeNow; plant.streamMpu = plant.sendGo = false;
+      ESP_Serial.rx += "STOP:MPU\n";
+    }
+    if (!cut) return;
+    lowPowerSeen = lowPowerSeen || lowPowerActive;
+    const uint32_t age = fakeNow - cutAt;
+    if (age > 1000 && held1 == 0) {
+      held1 = wheelA.getCurrentPosition(); held2 = wheelB.getCurrentPosition();
+    }
+    if (held1 != 0 && age < 20000 &&
+        (wheelA.getCurrentPosition() != held1 || wheelB.getCurrentPosition() != held2)) movedBeforeClear = true;
+    if (!restored && age >= 12000) { restored = true; plant.epoch++; plant.streamMpu = true; }
+    if (age >= 20000) plant.sendGo = true;
+  };
+  const bool ok = safeMoveDistance(40000, false, true);
+  tickHook = nullptr;
+  check(ok && cut && restored && lowPowerSeen && !lowPowerActive && !movedBeforeClear &&
+        sent("[HEADING LOST holding]") && sent("[HEADING LOST verify=OK"),
+        "STOP:MPU recovery verifies the new reference and still waits for later GO before resuming");
+  check(std::labs((wheelA.getCurrentPosition() - start1) + (wheelB.getCurrentPosition() - start2) - 80000) <= 1,
+        "STOP:MPU recovery retains the original straight's remaining mean distance");
+
+  // Heading can fail after an ordinary obstacle hold has already begun.
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  cut = false; uint32_t blockedAt = 0;
+  tickHook = [&]() {
+    if (!cut && plant.xCm > 150) {
+      cut = true; blockedAt = fakeNow; plant.sendGo = false; ESP_Serial.rx += "STOP:OBSTACLE\n";
+    }
+    if (cut && fakeNow - blockedAt >= 1500) plant.streamMpu = false;
+  };
+  const bool completed = safeMoveDistance(40000, false, true);
+  tickHook = nullptr;
+  check(!completed && cut && fakeNow - blockedAt >= HeadingControl::HEADING_RECOVERY_MS &&
+        fakeNow - blockedAt < HeadingControl::HEADING_RECOVERY_MS + 4000 &&
+        sent("[HEADING LOST fault]") && !wheelA.isRunning() && !wheelB.isRunning() &&
+        !headingHoldActive && !lowPowerActive,
+        "an MPU outage inside an existing obstacle STOP cannot bypass the five-minute fault deadline");
+
+  // New reference after 12 s: missing walls cannot authorize recovery.
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  plant.walls = plant.streamMpu = false; settle(300);
+  uint32_t started = fakeNow; restored = false; lowPowerSeen = false;
+  const long before1 = wheelA.getCurrentPosition(), before2 = wheelB.getCurrentPosition();
+  tickHook = [&]() {
+    lowPowerSeen = lowPowerSeen || lowPowerActive;
+    if (!restored && fakeNow - started >= 12000) { restored = true; plant.epoch++; plant.streamMpu = true; }
+  };
+  const bool accepted = holdForHeading();
+  tickHook = nullptr;
+  check(!accepted && restored && lowPowerSeen && fakeNow - started >= HeadingControl::HEADING_RECOVERY_MS &&
+        fakeNow - started < HeadingControl::HEADING_RECOVERY_MS + 50 &&
+        sent("verify=WAIT_WALLS") && sent("[HEADING LOST fault]") &&
+        !sent("verify=OK") && !headingHoldActive && !lowPowerActive &&
+        wheelA.getCurrentPosition() == before1 && wheelB.getCurrentPosition() == before2,
+        "missing recovery walls keep both wheels still and fault within the original five-minute budget");
+
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  plant.walls = plant.streamMpu = false; settle(300);
+  started = fakeNow; restored = false;
+  tickHook = [&]() {
+    if (!restored && fakeNow - started >= 12000) { restored = true; plant.epoch++; plant.streamMpu = true; }
+    if (fakeNow - started >= 25000) plant.walls = true;
+  };
+  const bool wallsRecovered = holdForHeading();
+  tickHook = nullptr;
+  check(wallsRecovered && fakeNow - started >= 25000 && sent("verify=WAIT_WALLS") &&
+        sent("verify=OK") && !headingHoldActive && !lowPowerActive,
+        "walls arriving after the MPU release recovery only after two fresh agreeing scans");
+
+  // Ordinary wall gaps/obstacles never start the heading deadline if the stream
+  // remains valid, even when the obstacle hold exceeds five minutes.
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  plant.walls = plant.sendGo = false; processESPMessage("STOP:OBSTACLE");
+  started = fakeNow;
+  tickHook = [&]() { if (fakeNow - started >= HeadingControl::HEADING_RECOVERY_MS + 1000) plant.sendGo = true; };
+  const bool obstacleCleared = waitUntilMotionPermitted("regression obstacle");
+  tickHook = nullptr;
+  check(obstacleCleared && fakeNow - started > HeadingControl::HEADING_RECOVERY_MS &&
+        !sent("[HEADING LOST holding]") && !routeFaultLatched,
+        "a long ordinary obstacle hold with continuous heading and no walls still resumes normally");
+
+  // The short/reverse path uses the same recovery gate as a cruise.
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  cut = false; restored = false;
+  tickHook = [&]() {
+    if (!cut && plant.xCm < -30) { cut = true; cutAt = fakeNow; plant.streamMpu = false; }
+    if (cut && !restored && fakeNow - cutAt >= 1000) { restored = true; plant.streamMpu = true; }
+  };
+  const bool reverseCompleted = safeMoveDistance(-10000, false, false);
+  tickHook = nullptr;
+  check(reverseCompleted && cut && restored && sent("[HEADING LOST holding]"),
+        "reverse/plain moves brake and wait for heading feedback before resuming their targets");
+
+  freshRobot(); heading.confirmTurnSides(); settle(400); beginRouteHeading();
+  plant.walls = plant.streamMpu = false; settle(300);
+  started = fakeNow; restored = false;
+  tickHook = [&]() {
+    if (!restored && fakeNow - started >= 12000) { restored = true; plant.epoch++; plant.streamMpu = true; }
+    if (fakeNow - started >= 18000) processESPMessage("[OP:900:ESTOP]");
+  };
+  const bool stopped = holdForHeading();
+  tickHook = nullptr;
+  check(!stopped && operatorEmergencyLatched && !wheelA.isRunning() && !wheelB.isRunning() &&
+        !headingHoldActive && !lowPowerActive,
+        "operator emergency stop aborts recovery while required walls are still absent");
 }
 
 // Floor-level spin clearance (2026-11-12): the LiDAR's turn sweep is above the bin,
@@ -479,6 +599,7 @@ int main() {
   checkPreRunCentring();
   checkSpinFloorCheck();
   checkLongOutageMidTurn();
+  checkHeadingRecoveryOnEveryResume();
   checkWholeRoute();
   if (failures) { std::fprintf(stderr, "%d navigation check(s) failed\n", failures); return 1; }
   return 0;

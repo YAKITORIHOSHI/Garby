@@ -1,0 +1,1248 @@
+test_bench_uses_scanned_device_and_acknowledged_ready_after_notify (test_bench_ble.BenchTests.test_bench_uses_scanned_device_and_acknowledged_ready_after_notify) ... ok
+test_stop_cancels_pending_bench_setup_and_disconnects (test_bench_ble.BenchTests.test_stop_cancels_pending_bench_setup_and_disconnects) ... ok
+test_configured_wrong_address_never_connects_to_other_robot (test_ble_support.ConnectionTests.test_configured_wrong_address_never_connects_to_other_robot) ... 11:08:24 [WARNING] asyncio: Executing <Task finished name='Task-13' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.125 seconds
+11:08:24 [WARNING] combined_app: BLE discovery failed: ConnectionError: GarbyESP32: GARBY-identifying advertisements rejected by pinned address; events=1; adapter=platform default; pinned_address=00:00:00:00:00:00; rejected_candidates=AA:BB:CC:DD:EE:FF; check selection, adapter/rfkill, ESP32 advertising, and other connected clients
+ok
+test_connection_cancellation_cleans_up_candidate (test_ble_support.ConnectionTests.test_connection_cancellation_cleans_up_candidate) ... 11:08:24 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+ok
+test_connection_timeout_cleans_up_and_retries (test_ble_support.ConnectionTests.test_connection_timeout_cleans_up_and_retries) ... 11:08:25 [WARNING] asyncio: Executing <Task finished name='Task-23' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.172 seconds
+11:08:25 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:25 [WARNING] combined_app: BLE connection/GATT discovery failed: TimeoutError: 
+ok
+test_disconnect_during_subscription_cannot_publish_a_ready_session (test_ble_support.ConnectionTests.test_disconnect_during_subscription_cannot_publish_a_ready_session) ... 11:08:25 [WARNING] asyncio: Executing <Task finished name='Task-28' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.203 seconds
+11:08:25 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:25 [WARNING] combined_app: BLE link lost: session 0.0 s, last write -1.00 s ago, Pi unknown, CPU unknown C
+11:08:25 [WARNING] combined_app: BLE notification subscription failed: ConnectionError: BLE session changed during notification setup
+ok
+test_discovery_wrong_pin_reports_observed_rejected_candidate (test_ble_support.ConnectionTests.test_discovery_wrong_pin_reports_observed_rejected_candidate) ... 11:08:25 [WARNING] asyncio: Executing <Task finished name='Task-33' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.203 seconds
+FAIL
+test_expired_lidar_clear_is_replaced_by_stop_at_ble_write (test_ble_support.ConnectionTests.test_expired_lidar_clear_is_replaced_by_stop_at_ble_write) ... 11:08:25 [WARNING] asyncio: Executing <Task finished name='Task-38' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.109 seconds
+11:08:25 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:25 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:25 [WARNING] combined_app: Expired LiDAR path replaced with fail-closed STOP before BLE write
+ok
+test_failed_connect_is_cleaned_up_and_can_retry (test_ble_support.ConnectionTests.test_failed_connect_is_cleaned_up_and_can_retry) ... 11:08:25 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:25 [WARNING] combined_app: BLE connection/GATT discovery failed: RuntimeError: connection failed
+11:08:25 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:25 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_failed_readiness_write_cannot_publish_ready (test_ble_support.ConnectionTests.test_failed_readiness_write_cannot_publish_ready) ... 11:08:26 [WARNING] asyncio: Executing <Task finished name='Task-50' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.109 seconds
+11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [WARNING] combined_app: BLE readiness write failed: RuntimeError: write failed
+ok
+test_failing_close_of_the_old_session_cannot_block_reconnecting (test_ble_support.ConnectionTests.test_failing_close_of_the_old_session_cannot_block_reconnecting) ... 11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:26 [WARNING] combined_app: BLE link lost: session 0.0 s, last write 0.00 s ago, Pi unknown, CPU unknown C
+11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_link_loss_closes_the_old_session_before_reconnecting (test_ble_support.ConnectionTests.test_link_loss_closes_the_old_session_before_reconnecting) ... 11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:26 [WARNING] combined_app: BLE link lost: session 0.0 s, last write 0.02 s ago, Pi unknown, CPU unknown C
+11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_link_loss_log_records_session_length_and_last_write_age (test_ble_support.ConnectionTests.test_link_loss_log_records_session_length_and_last_write_age) ... 11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_missing_gatt_is_cleaned_up (test_ble_support.ConnectionTests.test_missing_gatt_is_cleaned_up) ... 11:08:26 [WARNING] asyncio: Executing <Task finished name='Task-75' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.110 seconds
+11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [WARNING] combined_app: BLE connection/GATT discovery failed: RuntimeError: GARBY service/write/notify UUIDs are missing; check firmware and UUID overrides
+ok
+test_notification_timeout_cannot_publish_ready (test_ble_support.ConnectionTests.test_notification_timeout_cannot_publish_ready) ... 11:08:26 [WARNING] asyncio: Executing <Task finished name='Task-80' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.157 seconds
+11:08:26 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:26 [WARNING] combined_app: BLE notification subscription failed: TimeoutError: 
+ok
+test_old_notifications_cannot_publish_or_corrupt_new_session (test_ble_support.ConnectionTests.test_old_notifications_cannot_publish_or_corrupt_new_session) ... 11:08:27 [WARNING] asyncio: Executing <Task finished name='Task-85' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.125 seconds
+11:08:27 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:27 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:27 [WARNING] combined_app: BLE link lost: session 0.0 s, last write 0.02 s ago, Pi unknown, CPU unknown C
+11:08:27 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:27 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_persistent_write_failure_invalidates_stuck_client_and_retries (test_ble_support.ConnectionTests.test_persistent_write_failure_invalidates_stuck_client_and_retries) ... 11:08:27 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:27 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:27 [WARNING] combined_app: BLE write glitch (1/5): RuntimeError: write failed [packet=CONTROL, connected=True]
+11:08:27 [WARNING] combined_app: BLE write glitch (2/5): RuntimeError: write failed [packet=RESET, connected=True]
+11:08:27 [WARNING] combined_app: BLE write glitch (3/5): RuntimeError: write failed [packet=RESET, connected=True]
+11:08:27 [WARNING] combined_app: BLE write glitch (4/5): RuntimeError: write failed [packet=RESET, connected=True]
+11:08:27 [WARNING] combined_app: BLE write glitch (5/5): RuntimeError: write failed [packet=RESET, connected=True]
+11:08:27 [ERROR] combined_app: BLE persistent write failure: RuntimeError: write failed; session 0.1 s, last write 0.09 s ago, Pi unknown, CPU unknown C
+ok
+test_read_only_lidar_control_allows_fresh_path_and_start (test_ble_support.ConnectionTests.test_read_only_lidar_control_allows_fresh_path_and_start) ... 11:08:27 [WARNING] asyncio: Executing <Task finished name='Task-98' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.140 seconds
+11:08:27 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:27 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:27 [INFO] combined_app: Executor state: IDLE
+11:08:27 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:08:27 [INFO] combined_app: Manual start 1794625707769 written to BLE bridge; awaiting executor acknowledgement
+ok
+test_scanned_device_is_used_and_ready_requires_subscription_and_write (test_ble_support.ConnectionTests.test_scanned_device_is_used_and_ready_requires_subscription_and_write) ... 11:08:27 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:27 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_shutdown_waits_for_in_progress_candidate_cleanup (test_ble_support.ConnectionTests.test_shutdown_waits_for_in_progress_candidate_cleanup) ... 11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+ok
+test_steering_age_growth_cannot_exceed_the_gatt_packet_limit (test_ble_support.ConnectionTests.test_steering_age_growth_cannot_exceed_the_gatt_packet_limit) ... 11:08:28 [WARNING] asyncio: Executing <Task finished name='Task-117' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.109 seconds
+11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:28 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+ok
+test_steering_age_keeps_queue_and_writer_lock_wait (test_ble_support.ConnectionTests.test_steering_age_keeps_queue_and_writer_lock_wait) ... 11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:28 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:28 [WARNING] asyncio: Executing <Task pending name='Task-124' coro=<ConnectionTests.test_steering_age_keeps_queue_and_writer_lock_wait() running at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:233> wait_for=<Task pending name='Task-126' coro=<BleService._write_message() running at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py:1511> wait_for=<Future finished result=True created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:448> cb=[Task.task_wakeup()] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\tasks.py:420> cb=[_run_until_complete_cb() at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:181] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.400 seconds
+11:08:28 [WARNING] asyncio: Executing <Task finished name='Task-124' coro=<ConnectionTests.test_steering_age_keeps_queue_and_writer_lock_wait() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:213> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 1430.431 seconds
+ok
+test_steering_expiring_behind_writer_becomes_stable (test_ble_support.ConnectionTests.test_steering_expiring_behind_writer_becomes_stable) ... 11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:28 [INFO] combined_app: BLE ready: notifications subscribed and readiness write acknowledged
+11:08:28 [WARNING] asyncio: Executing <Task pending name='Task-131' coro=<ConnectionTests.test_steering_expiring_behind_writer_becomes_stable() running at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:254> wait_for=<Task pending name='Task-133' coro=<BleService._write_message() running at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py:1511> wait_for=<Future finished result=True created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:448> cb=[Task.task_wakeup()] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\tasks.py:420> cb=[_run_until_complete_cb() at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:181] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.710 seconds
+11:08:28 [WARNING] asyncio: Executing <Task finished name='Task-131' coro=<ConnectionTests.test_steering_expiring_behind_writer_becomes_stable() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:240> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 1430.377 seconds
+ok
+test_stop_during_readiness_write_cannot_publish_ready (test_ble_support.ConnectionTests.test_stop_during_readiness_write_cannot_publish_ready) ... 11:08:28 [WARNING] asyncio: Executing <Task finished name='Task-137' coro=<ConnectionTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py:136> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.125 seconds
+11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:28 [WARNING] combined_app: BLE readiness write failed: ConnectionError: BLE disconnected during readiness write
+ok
+test_wrong_characteristic_properties_reject_firmware (test_ble_support.ConnectionTests.test_wrong_characteristic_properties_reject_firmware) ... 11:08:28 [INFO] combined_app: BLE found GarbyESP32 [AA:BB:CC:DD:EE:FF]; connecting
+11:08:28 [WARNING] combined_app: BLE connection/GATT discovery failed: RuntimeError: GARBY GATT properties do not support write/notify; check flashed firmware
+ok
+test_diagnostic_counter_and_stored_fields_stay_bounded (test_ble_support.DiscoveryEvidenceTests.test_diagnostic_counter_and_stored_fields_stay_bounded) ... ok
+test_reused_diagnostics_reset_for_each_scan (test_ble_support.DiscoveryEvidenceTests.test_reused_diagnostics_reset_for_each_scan) ... ok
+test_strict_pin_candidates_are_unique_bounded_and_from_one_scan (test_ble_support.DiscoveryEvidenceTests.test_strict_pin_candidates_are_unique_bounded_and_from_one_scan) ... ERROR
+test_success_returns_original_device_with_or_without_diagnostics (test_ble_support.DiscoveryEvidenceTests.test_success_returns_original_device_with_or_without_diagnostics) ... ok
+test_configured_address_does_not_fall_back_to_a_different_robot (test_ble_support.DiscoveryTests.test_configured_address_does_not_fall_back_to_a_different_robot) ... ok
+test_service_identifies_robot_without_a_name (test_ble_support.DiscoveryTests.test_service_identifies_robot_without_a_name) ... ok
+test_unrelated_substring_name_is_not_a_robot (test_ble_support.DiscoveryTests.test_unrelated_substring_name_is_not_a_robot) ... ok
+test_default_mtu_chunks_reassemble_exact_return_identity (test_ble_support.NotificationTests.test_default_mtu_chunks_reassemble_exact_return_identity) ... ok
+test_legacy_and_invalid_notifications_are_bounded (test_ble_support.NotificationTests.test_legacy_and_invalid_notifications_are_bounded) ... ok
+test_new_start_discards_partial_or_lost_notification (test_ble_support.NotificationTests.test_new_start_discards_partial_or_lost_notification) ... ok
+test_boundary_floor_equals_cap (test_bridge_core.AdaptiveToleranceTests.test_boundary_floor_equals_cap) ... ok
+test_invalid_intervals_are_ignored (test_bridge_core.AdaptiveToleranceTests.test_invalid_intervals_are_ignored) ... ok
+test_jittered_throttling_cadence (test_bridge_core.AdaptiveToleranceTests.test_jittered_throttling_cadence) ... ok
+test_normal_fast_cadence_stays_at_floor (test_bridge_core.AdaptiveToleranceTests.test_normal_fast_cadence_stays_at_floor) ... ok
+test_reset_returns_to_floor (test_bridge_core.AdaptiveToleranceTests.test_reset_returns_to_floor) ... ok
+test_step_throttling_gradual_convergence (test_bridge_core.AdaptiveToleranceTests.test_step_throttling_gradual_convergence) ... ok
+test_throttled_cadence_widens_and_caps (test_bridge_core.AdaptiveToleranceTests.test_throttled_cadence_widens_and_caps) ... ok
+test_untoleranced_cadence_uses_floor (test_bridge_core.AdaptiveToleranceTests.test_untoleranced_cadence_uses_floor) ... ok
+test_widening_never_drops_below_floor_mid_stream (test_bridge_core.AdaptiveToleranceTests.test_widening_never_drops_below_floor_mid_stream) ... ok
+test_zero_interval_burst (test_bridge_core.AdaptiveToleranceTests.test_zero_interval_burst) ... ok
+test_backoff_is_bounded_and_resettable (test_bridge_core.BackoffTests.test_backoff_is_bounded_and_resettable) ... ok
+test_bad_sequence_does_not_replace_admitted_stop (test_bridge_core.CoalescingBleQueueTests.test_bad_sequence_does_not_replace_admitted_stop) ... ok
+test_blocked_stale_and_malformed_path_bodies_get_stop_priority (test_bridge_core.CoalescingBleQueueTests.test_blocked_stale_and_malformed_path_bodies_get_stop_priority) ... ok
+test_burst_keeps_latest_stop_and_bounded_telemetry (test_bridge_core.CoalescingBleQueueTests.test_burst_keeps_latest_stop_and_bounded_telemetry) ... ok
+test_clear_restarts_sequence_epoch_and_priority (test_bridge_core.CoalescingBleQueueTests.test_clear_restarts_sequence_epoch_and_priority) ... ok
+test_estop_admission_takes_priority_over_existing_path (test_bridge_core.CoalescingBleQueueTests.test_estop_admission_takes_priority_over_existing_path) ... ok
+test_latest_path_replacement_uses_its_own_deadline (test_bridge_core.CoalescingBleQueueTests.test_latest_path_replacement_uses_its_own_deadline) ... ok
+test_new_clear_replaces_stop_without_inheriting_stop_priority (test_bridge_core.CoalescingBleQueueTests.test_new_clear_replaces_stop_without_inheriting_stop_priority) ... ok
+test_normal_clear_stays_behind_existing_traffic (test_bridge_core.CoalescingBleQueueTests.test_normal_clear_stays_behind_existing_traffic) ... ok
+test_old_and_duplicate_paths_cannot_replace_latest_stop (test_bridge_core.CoalescingBleQueueTests.test_old_and_duplicate_paths_cannot_replace_latest_stop) ... ok
+test_path_admission_does_not_evict_queued_estop (test_bridge_core.CoalescingBleQueueTests.test_path_admission_does_not_evict_queued_estop) ... ok
+test_path_deadline_survives_queueing_and_is_removed_when_read (test_bridge_core.CoalescingBleQueueTests.test_path_deadline_survives_queueing_and_is_removed_when_read) ... ok
+test_periodic_blocked_replacement_keeps_stop_ahead_of_telemetry (test_bridge_core.CoalescingBleQueueTests.test_periodic_blocked_replacement_keeps_stop_ahead_of_telemetry) ... ok
+test_queued_estop_remains_ahead_of_new_obstacle_stop (test_bridge_core.CoalescingBleQueueTests.test_queued_estop_remains_ahead_of_new_obstacle_stop) ... ok
+test_single_slot_estop_is_not_evicted_by_path (test_bridge_core.CoalescingBleQueueTests.test_single_slot_estop_is_not_evicted_by_path) ... ok
+test_wrap_replacement_keeps_latest_stop_first (test_bridge_core.CoalescingBleQueueTests.test_wrap_replacement_keeps_latest_stop_first) ... ok
+test_available_thermal_source_preserves_ok_and_warning_states (test_bridge_core.HealthTests.test_available_thermal_source_preserves_ok_and_warning_states) ... ok
+test_unknown_thermal_sources_do_not_report_false_ok (test_bridge_core.HealthTests.test_unknown_thermal_sources_do_not_report_false_ok) ... ok
+test_alternating_x3_scan_lengths_stay_cached (test_bridge_core.LidarTests.test_alternating_x3_scan_lengths_stay_cached) ... ok
+test_between_cone_obstacle_is_safety_visible_but_not_steering_input (test_bridge_core.LidarTests.test_between_cone_obstacle_is_safety_visible_but_not_steering_input) ... ok
+test_changed_steering_cone_rechecks_same_geometry (test_bridge_core.LidarTests.test_changed_steering_cone_rechecks_same_geometry) ... ok
+test_geometry_cache_is_bounded_and_large_scans_use_uncached_path (test_bridge_core.LidarTests.test_geometry_cache_is_bounded_and_large_scans_use_uncached_path) ... ok
+test_geometry_changes_and_range_validity_never_reuse_old_clearance (test_bridge_core.LidarTests.test_geometry_changes_and_range_validity_never_reuse_old_clearance) ... ok
+test_lidar_named_sector_orientation_and_boundaries (test_bridge_core.LidarTests.test_lidar_named_sector_orientation_and_boundaries) ... ok
+test_lidar_nearest_sectors_have_no_angular_gaps (test_bridge_core.LidarTests.test_lidar_nearest_sectors_have_no_angular_gaps) ... ok
+test_lidar_representatives_and_tilt_clamp (test_bridge_core.LidarTests.test_lidar_representatives_and_tilt_clamp) ... ok
+test_positive_infinity_is_clear_at_range_max (test_bridge_core.LidarTests.test_positive_infinity_is_clear_at_range_max) ... ok
+test_repeated_geometry_avoids_reclassifying_rays_but_reads_new_distances (test_bridge_core.LidarTests.test_repeated_geometry_avoids_reclassifying_rays_but_reads_new_distances) ... ok
+test_side_obstacle_envelope_is_direction_independent (test_bridge_core.LidarTests.test_side_obstacle_envelope_is_direction_independent) ... ok
+test_sparse_steering_cone_falls_back_to_gap_free_samples (test_bridge_core.LidarTests.test_sparse_steering_cone_falls_back_to_gap_free_samples) ... ok
+test_trash_ultrasonic_cannot_change_path_classification (test_bridge_core.LidarTests.test_trash_ultrasonic_cannot_change_path_classification) ... ok
+test_zero_return_cannot_count_as_live_scan_data (test_bridge_core.LidarTests.test_zero_return_cannot_count_as_live_scan_data) ... ok
+test_initial_unavailable_sentinels_are_emitted_once (test_bridge_core.SensorTrackerTests.test_initial_unavailable_sentinels_are_emitted_once) ... ok
+test_live_refresh_is_rate_bounded (test_bridge_core.SensorTrackerTests.test_live_refresh_is_rate_bounded) ... ok
+test_partial_sensor_failure_does_not_overwrite_live_sensor (test_bridge_core.SensorTrackerTests.test_partial_sensor_failure_does_not_overwrite_live_sensor) ... ok
+test_recovery_rearms_exactly_one_future_sentinel (test_bridge_core.SensorTrackerTests.test_recovery_rearms_exactly_one_future_sentinel) ... ok
+test_repeated_explicit_unavailable_does_not_republish (test_bridge_core.SensorTrackerTests.test_repeated_explicit_unavailable_does_not_republish) ... ok
+test_decodes_live_and_sticky_flags (test_bridge_core.ThrottleDescriptionTests.test_decodes_live_and_sticky_flags) ... ok
+test_backoff_pacing_under_connection_throttling (test_bridge_core.ThrottlingResilienceTests.test_backoff_pacing_under_connection_throttling) ... ok
+test_health_status_under_cpu_thermal_throttling (test_bridge_core.ThrottlingResilienceTests.test_health_status_under_cpu_thermal_throttling) ... ok
+test_sensor_tracker_cadence_stretching (test_bridge_core.ThrottlingResilienceTests.test_sensor_tracker_cadence_stretching) ... ok
+test_update_worker_coalescing_under_cpu_contention (test_bridge_core.ThrottlingResilienceTests.test_update_worker_coalescing_under_cpu_contention) ... ok
+test_close_deadline_stops_permanent_failure_retries (test_bridge_core.UpdateWorkerTests.test_close_deadline_stops_permanent_failure_retries) ... ok
+test_close_does_not_retry_inflight_failure_after_timeout (test_bridge_core.UpdateWorkerTests.test_close_does_not_retry_inflight_failure_after_timeout) ... ok
+test_close_reports_success_after_flushing (test_bridge_core.UpdateWorkerTests.test_close_reports_success_after_flushing) ... ok
+test_update_retry_backoff_is_not_bypassed_by_new_samples (test_bridge_core.UpdateWorkerTests.test_update_retry_backoff_is_not_bypassed_by_new_samples) ... ok
+test_update_worker_coalesces_to_one_atomic_map (test_bridge_core.UpdateWorkerTests.test_update_worker_coalesces_to_one_atomic_map) ... ok
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_gatt_failure_identifies_phase_and_cleans_up (test_check_ble.DiagnosticTests.test_gatt_failure_identifies_phase_and_cleans_up) ... ok
+DISCOVERY PASS: GarbyESP32 [AA:BB:CC:DD:EE:FF]
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_notification_failure_is_explicit_and_cleans_up (test_check_ble.DiagnosticTests.test_notification_failure_is_explicit_and_cleans_up) ... ok
+DISCOVERY PASS: GarbyESP32 [AA:BB:CC:DD:EE:FF]
+CONNECTION/GATT PASS: expected service, write, notify
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_other_events_report_unmatched_and_do_not_expose_unrelated_devices (test_check_ble.DiagnosticTests.test_other_events_report_unmatched_and_do_not_expose_unrelated_devices) ... ok
+DISCOVERY scanning for GARBY service/name (or configured address)...
+DISCOVERY PASS: GarbyESP32 [AA:BB:CC:DD:EE:FF]
+CONNECTION/GATT PASS: expected service, write, notify
+NOTIFY PASS: subscription accepted
+RX CONNECTED...
+test_round_trip_writes_only_readiness_and_disconnects (test_check_ble.DiagnosticTests.test_round_trip_writes_only_readiness_and_disconnects) ... ok
+READINESS WRITE PASS: acknowledged; no GO sent
+BLE ROUND TRIP PASS. LiDAR, UART, motors, and route remain separate acceptance items.
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_scan_only_never_connects_or_writes (test_check_ble.DiagnosticTests.test_scan_only_never_connects_or_writes) ... ok
+DISCOVERY PASS: GarbyESP32 [AA:BB:CC:DD:EE:FF]
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_wrong_pin_reports_rejected_garby_instead_of_absent_advertising (test_check_ble.DiagnosticTests.test_wrong_pin_reports_rejected_garby_instead_of_absent_advertising) ... FAIL
+DISCOVERY scanning for GARBY service/name (or configured address)...
+test_zero_events_reports_scan_evidence_without_claiming_radio_absence (test_check_ble.DiagnosticTests.test_zero_events_reports_scan_evidence_without_claiming_radio_absence) ... ok
+test_anonymous_permission_denial_is_not_reported_as_authenticated_success (test_check_firebase.FirebaseProbeTests.test_anonymous_permission_denial_is_not_reported_as_authenticated_success) ... ok
+test_invalid_explicit_or_ambiguous_credentials_do_not_probe_anonymously (test_check_firebase.FirebaseProbeTests.test_invalid_explicit_or_ambiguous_credentials_do_not_probe_anonymously) ... ok
+test_missing_credential_file_reports_incomplete (test_check_firebase.FirebaseProbeTests.test_missing_credential_file_reports_incomplete) ... ok
+test_readback_failure_still_cleans_only_its_diagnostic_record (test_check_firebase.FirebaseProbeTests.test_readback_failure_still_cleans_only_its_diagnostic_record) ... ok
+test_write_probe_discovers_credentials_and_removes_its_record (test_check_firebase.FirebaseProbeTests.test_write_probe_discovers_credentials_and_removes_its_record) ... ok
+test_numpy_is_required_by_preflight_and_both_install_profiles (test_check_runtime.DependencyTests.test_numpy_is_required_by_preflight_and_both_install_profiles) ... ok
+test_present_numpy_passes_without_probing_devices (test_check_runtime.DependencyTests.test_present_numpy_passes_without_probing_devices) ... ok
+test_available_display_returns_a_gui_root (test_display_startup.DisplayStartupTests.test_available_display_returns_a_gui_root) ... ok
+test_explicit_headless_does_not_import_tk (test_display_startup.DisplayStartupTests.test_explicit_headless_does_not_import_tk) ... ok
+test_missing_or_empty_display_uses_headless_without_tk (test_display_startup.DisplayStartupTests.test_missing_or_empty_display_uses_headless_without_tk) ... 11:08:29 [INFO] combined_app: No DISPLAY is set; running in headless mode.
+11:08:29 [INFO] combined_app: No DISPLAY is set; running in headless mode.
+ok
+test_missing_tk_falls_back_with_a_display_configured (test_display_startup.DisplayStartupTests.test_missing_tk_falls_back_with_a_display_configured) ... 11:08:30 [WARNING] combined_app: Tkinter is unavailable (import of tkinter halted; None in sys.modules); running in headless mode.
+ok
+test_monitor_is_painted_before_any_backend_worker_starts (test_display_startup.DisplayStartupTests.test_monitor_is_painted_before_any_backend_worker_starts) ... ok
+test_unexpected_display_failure_happens_before_workers_start (test_display_startup.DisplayStartupTests.test_unexpected_display_failure_happens_before_workers_start) ... ok
+test_unusable_display_falls_back_instead_of_raising (test_display_startup.DisplayStartupTests.test_unusable_display_falls_back_instead_of_raising) ... 11:08:30 [WARNING] combined_app: GUI display is unavailable (couldn't connect to display :99); running in headless mode.
+ok
+test_android_and_pi_target_same_database_and_device (test_firebase_contract.FirebaseContractTests.test_android_and_pi_target_same_database_and_device) ... ok
+test_cloud_health_requires_success_expires_and_reports_failure (test_firebase_contract.FirebaseContractTests.test_cloud_health_requires_success_expires_and_reports_failure) ... ok
+test_firebase_failure_retries_real_writer_without_dropping_update (test_firebase_contract.FirebaseContractTests.test_firebase_failure_retries_real_writer_without_dropping_update) ... 11:08:31 [ERROR] combined_app: Firebase write failed; retrying with backoff: simulated outage
+ok
+test_manager_passes_the_discovered_key_to_the_admin_sdk (test_firebase_contract.FirebaseContractTests.test_manager_passes_the_discovered_key_to_the_admin_sdk) ... ok
+test_readiness_and_heartbeat_do_not_grant_motion (test_firebase_contract.FirebaseContractTests.test_readiness_and_heartbeat_do_not_grant_motion) ... ok
+test_return_transition_preserves_request_identity (test_firebase_contract.FirebaseContractTests.test_return_transition_preserves_request_identity) ... ok
+test_sensor_batch_matches_dashboard_and_legacy_paths (test_firebase_contract.FirebaseContractTests.test_sensor_batch_matches_dashboard_and_legacy_paths) ... ok
+test_terminal_or_replaced_return_requests_are_not_overwritten (test_firebase_contract.FirebaseContractTests.test_terminal_or_replaced_return_requests_are_not_overwritten) ... ok
+test_unavailable_weight_invalidates_all_timestamp_mirrors (test_firebase_contract.FirebaseContractTests.test_unavailable_weight_invalidates_all_timestamp_mirrors) ... ok
+test_discovers_service_account_and_ignores_android_web_and_invalid_json (test_firebase_support.FirebaseCredentialTests.test_discovers_service_account_and_ignores_android_web_and_invalid_json) ... ok
+test_explicit_argument_wins_over_environment_and_auto_discovery (test_firebase_support.FirebaseCredentialTests.test_explicit_argument_wins_over_environment_and_auto_discovery) ... ok
+test_lookup_follows_a_moved_runtime_directory_and_renamed_key (test_firebase_support.FirebaseCredentialTests.test_lookup_follows_a_moved_runtime_directory_and_renamed_key) ... ok
+test_missing_explicit_file_is_not_replaced_with_another_key (test_firebase_support.FirebaseCredentialTests.test_missing_explicit_file_is_not_replaced_with_another_key) ... ok
+test_no_key_and_multiple_keys_have_actionable_errors (test_firebase_support.FirebaseCredentialTests.test_no_key_and_multiple_keys_have_actionable_errors) ... ok
+test_relative_override_is_relative_to_runtime_not_launch_directory (test_firebase_support.FirebaseCredentialTests.test_relative_override_is_relative_to_runtime_not_launch_directory) ... ok
+test_hallway_frames_carry_wall_fit_heading_and_age (test_hallway_geometry.RuntimeIntegrationTests.test_hallway_frames_carry_wall_fit_heading_and_age) ... 11:08:32 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:32 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_mailbox_keeps_turn_clear_ordinary_and_anything_else_urgent (test_hallway_geometry.RuntimeIntegrationTests.test_mailbox_keeps_turn_clear_ordinary_and_anything_else_urgent) ... ok
+test_monitor_footer_describes_the_wall_fit_without_a_display (test_hallway_geometry.RuntimeIntegrationTests.test_monitor_footer_describes_the_wall_fit_without_a_display) ... ok
+test_round_room_omits_wall_fields_instead_of_inventing_walls (test_hallway_geometry.RuntimeIntegrationTests.test_round_room_omits_wall_fields_instead_of_inventing_walls) ... 11:08:33 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:33 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_side_band_blocks_both_directions_and_is_never_bypassed (test_hallway_geometry.RuntimeIntegrationTests.test_side_band_blocks_both_directions_and_is_never_bypassed) ... 11:08:33 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:33 [INFO] combined_app: LiDAR chassis zones: LEFT_BAND, TURN_FRONT
+ok
+test_turn_sweep_return_blocks_turns_and_respects_group_bypass (test_hallway_geometry.RuntimeIntegrationTests.test_turn_sweep_return_blocks_turns_and_respects_group_bypass) ... 11:08:33 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:33 [INFO] combined_app: LiDAR chassis zones: TURN_BACK
+ok
+test_wall_nearer_than_the_body_is_not_a_hallway_wall (test_hallway_geometry.RuntimeIntegrationTests.test_wall_nearer_than_the_body_is_not_a_hallway_wall) ... ok
+test_zone_block_is_named_in_the_log_and_the_gui_frame (test_hallway_geometry.RuntimeIntegrationTests.test_zone_block_is_named_in_the_log_and_the_gui_frame) ... ok
+test_zone_log_names_new_evidence_at_once_and_coalesces_a_flapping_boundary (test_hallway_geometry.RuntimeIntegrationTests.test_zone_log_names_new_evidence_at_once_and_coalesces_a_flapping_boundary) ... ok
+test_centered_hallway_reads_the_measured_95_cm_walls (test_hallway_geometry.WallFitTests.test_centered_hallway_reads_the_measured_95_cm_walls) ... ok
+test_disagreeing_walls_keep_only_the_stronger_one (test_hallway_geometry.WallFitTests.test_disagreeing_walls_keep_only_the_stronger_one) ... ok
+test_door_leaf_swung_into_the_hallway_is_not_a_wall (test_hallway_geometry.WallFitTests.test_door_leaf_swung_into_the_hallway_is_not_a_wall) ... ok
+test_offset_and_heading_signs_are_left_positive (test_hallway_geometry.WallFitTests.test_offset_and_heading_signs_are_left_positive) ... ok
+test_one_wall_still_gives_heading (test_hallway_geometry.WallFitTests.test_one_wall_still_gives_heading) ... ok
+test_open_door_room_does_not_become_the_right_wall (test_hallway_geometry.WallFitTests.test_open_door_room_does_not_become_the_right_wall) ... ok
+test_open_space_reports_no_wall_and_no_heading (test_hallway_geometry.WallFitTests.test_open_space_reports_no_wall_and_no_heading) ... ok
+test_posts_at_82_cm_do_not_replace_the_95_cm_walls (test_hallway_geometry.WallFitTests.test_posts_at_82_cm_do_not_replace_the_95_cm_walls) ... ok
+test_front_box_covers_the_swept_corridor_edge (test_hallway_geometry.ZoneTests.test_front_box_covers_the_swept_corridor_edge) ... ok
+test_invalid_geometry_values_keep_defaults_and_warn (test_hallway_geometry.ZoneTests.test_invalid_geometry_values_keep_defaults_and_warn) ... ok
+test_invalid_metadata_yields_no_analysis (test_hallway_geometry.ZoneTests.test_invalid_metadata_yields_no_analysis) ... ok
+test_returns_inside_the_body_outline_are_self_returns (test_hallway_geometry.ZoneTests.test_returns_inside_the_body_outline_are_self_returns) ... ok
+test_side_band_is_two_centimetres_beyond_the_body (test_hallway_geometry.ZoneTests.test_side_band_is_two_centimetres_beyond_the_body) ... ok
+test_slow_zone_lies_between_the_stop_and_160_cm (test_hallway_geometry.ZoneTests.test_slow_zone_lies_between_the_stop_and_160_cm) ... ok
+test_turn_sweep_is_split_into_front_and_back_halves (test_hallway_geometry.ZoneTests.test_turn_sweep_is_split_into_front_and_back_halves) ... ok
+test_missing_explicit_setup_fails_before_python (test_launcher.LauncherTests.test_missing_explicit_setup_fails_before_python) ... ERROR
+test_ros_setup_can_read_unset_variables_and_preflight_is_forwarded (test_launcher.LauncherTests.test_ros_setup_can_read_unset_variables_and_preflight_is_forwarded) ... ERROR
+test_cardinal_angles_and_mount_yaw_use_forward_left_coordinates (test_lidar_map.LidarMapTests.test_cardinal_angles_and_mount_yaw_use_forward_left_coordinates) ... ok
+test_complete_scan_has_360_actual_angles_and_nearest_hit_per_bin (test_lidar_map.LidarMapTests.test_complete_scan_has_360_actual_angles_and_nearest_hit_per_bin) ... ok
+test_geometry_cache_is_bounded_and_never_keeps_oversized_scan (test_lidar_map.LidarMapTests.test_geometry_cache_is_bounded_and_never_keeps_oversized_scan) ... ok
+test_invalid_metadata_cannot_create_a_display_snapshot (test_lidar_map.LidarMapTests.test_invalid_metadata_cannot_create_a_display_snapshot) ... ok
+test_only_finite_in_range_positive_measured_returns_are_plotted (test_lidar_map.LidarMapTests.test_only_finite_in_range_positive_measured_returns_are_plotted) ... ok
+test_partial_clockwise_scan_keeps_gaps_and_applies_negative_yaw (test_lidar_map.LidarMapTests.test_partial_clockwise_scan_keeps_gaps_and_applies_negative_yaw) ... ok
+test_regular_degree_scan_keeps_every_bin_in_both_directions (test_lidar_map.LidarMapTests.test_regular_degree_scan_keeps_every_bin_in_both_directions) ... ok
+test_snapshot_is_immutable_and_keeps_source_acquisition_time (test_lidar_map.LidarMapTests.test_snapshot_is_immutable_and_keeps_source_acquisition_time) ... ok
+test_chair_removed_recovers_with_new_scans (test_lidar_offline.LidarOfflineTests.test_chair_removed_recovers_with_new_scans) ... 11:08:35 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:35 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_close_side_chair_blocks_both_directions (test_lidar_offline.LidarOfflineTests.test_close_side_chair_blocks_both_directions) ... 11:08:35 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:35 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_fresh_clear_scan_allows_both_directions (test_lidar_offline.LidarOfflineTests.test_fresh_clear_scan_allows_both_directions) ... 11:08:35 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:35 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_invalid_scan_never_grants_permission (test_lidar_offline.LidarOfflineTests.test_invalid_scan_never_grants_permission) ... 11:08:35 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:35 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_missing_lidar_holds_both_directions (test_lidar_offline.LidarOfflineTests.test_missing_lidar_holds_both_directions) ... ok
+test_periodic_obstacle_snapshot_cannot_demote_urgent_scan_stop (test_lidar_offline.LidarOfflineTests.test_periodic_obstacle_snapshot_cannot_demote_urgent_scan_stop) ... 11:08:37 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:37 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_periodic_stale_snapshot_cannot_demote_watchdog_stop (test_lidar_offline.LidarOfflineTests.test_periodic_stale_snapshot_cannot_demote_watchdog_stop) ... 11:08:38 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:38 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_rear_obstacle_blocks_reverse (test_lidar_offline.LidarOfflineTests.test_rear_obstacle_blocks_reverse) ... 11:08:38 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:38 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_scan_loss_after_clear_revokes_permission (test_lidar_offline.LidarOfflineTests.test_scan_loss_after_clear_revokes_permission) ... 11:08:39 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:39 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_single_chair_leg_at_front_angles_blocks_forward (test_lidar_offline.LidarOfflineTests.test_single_chair_leg_at_front_angles_blocks_forward) ... 11:08:39 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:39 [INFO] combined_app: LiDAR chassis zones: TURN_FRONT
+11:08:39 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_alternate_mount_can_disable_reflection_consistently (test_lidar_orientation.LidarOrientationTests.test_alternate_mount_can_disable_reflection_consistently) ... 11:08:39 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:39 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_default_reflection_keeps_invalid_metadata_fail_closed (test_lidar_orientation.LidarOrientationTests.test_default_reflection_keeps_invalid_metadata_fail_closed) ... 11:08:40 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:40 [INFO] combined_app: LiDAR chassis zones: clear
+11:08:41 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:41 [INFO] combined_app: LiDAR chassis zones: clear
+Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\motion_tracker.py:247: RuntimeWarning: invalid value encountered in cos
+  return index, r_cm * np.cos(a), r_cm * np.sin(a) + float(lidar_y_cm), r_cm
+Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\motion_tracker.py:247: RuntimeWarning: invalid value encountered in sin
+  return index, r_cm * np.cos(a), r_cm * np.sin(a) + float(lidar_y_cm), r_cm
+11:08:41 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:41 [INFO] combined_app: LiDAR chassis zones: clear
+11:08:42 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:42 [INFO] combined_app: LiDAR chassis zones: clear
+Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\motion_tracker.py:241: RuntimeWarning: invalid value encountered in multiply
+  angle = float(angle_min) + np.arange(distance.size, dtype=float) * float(angle_increment)
+11:08:42 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:42 [INFO] combined_app: LiDAR chassis zones: clear
+11:08:42 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:42 [INFO] combined_app: LiDAR chassis zones: clear
+11:08:42 [ERROR] combined_app: LiDAR scan processing failed; holding STOP
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py", line 2324, in scan_callback
+    display_frame = self._scan_callback_locked(msg)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py", line 2433, in _scan_callback_locked
+    minimum_range = float(msg.range_min)
+                    ^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+11:08:43 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:43 [INFO] combined_app: LiDAR chassis zones: clear
+11:08:43 [ERROR] combined_app: LiDAR scan processing failed; holding STOP
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py", line 2324, in scan_callback
+    display_frame = self._scan_callback_locked(msg)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py", line 2434, in _scan_callback_locked
+    maximum_range = float(msg.range_max)
+                    ^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'NoneType'
+ok
+test_default_reflection_preserves_bypass_scope_and_nearest_veto (test_lidar_orientation.LidarOrientationTests.test_default_reflection_preserves_bypass_scope_and_nearest_veto) ... 11:08:43 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:43 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_invalid_mount_option_retains_reported_default (test_lidar_orientation.LidarOrientationTests.test_invalid_mount_option_retains_reported_default) ... 11:08:44 [WARNING] combined_app: Invalid GARBY_LIDAR_REFLECT_LEFT_RIGHT; using enabled
+11:08:44 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:44 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_reflection_only_exchanges_lateral_sectors_even_with_yaw (test_lidar_orientation.LidarOrientationTests.test_reflection_only_exchanges_lateral_sectors_even_with_yaw) ... 11:08:44 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:44 [INFO] combined_app: LiDAR chassis zones: SLOW
+11:08:44 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:44 [INFO] combined_app: LiDAR chassis zones: SLOW
+11:08:44 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:44 [INFO] combined_app: LiDAR chassis zones: SLOW
+11:08:44 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:44 [INFO] combined_app: LiDAR chassis zones: SLOW
+
+  test_reflection_only_exchanges_lateral_sectors_even_with_yaw (test_lidar_orientation.LidarOrientationTests.test_reflection_only_exchanges_lateral_sectors_even_with_yaw) (yaw=-90) ... ERROR
+test_reported_mount_default_maps_summaries_walls_and_nearest_clearance (test_lidar_orientation.LidarOrientationTests.test_reported_mount_default_maps_summaries_walls_and_nearest_clearance) ... 11:08:45 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:45 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:08:45 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:45 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:08:45 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:45 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:08:45 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:08:45 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_a_claim_taking_longer_than_queue_budget_never_sends (test_manual_disposal.DisposalRelayTests.test_a_claim_taking_longer_than_queue_budget_never_sends) ... 11:08:45 [INFO] combined_app: Executor state: IDLE
+ok
+test_claim_after_ble_reconnect_queries_without_requeueing_start (test_manual_disposal.DisposalRelayTests.test_claim_after_ble_reconnect_queries_without_requeueing_start) ... 11:08:46 [INFO] combined_app: Executor state: IDLE
+11:08:46 [INFO] combined_app: Executor state: UNKNOWN
+11:08:46 [INFO] combined_app: Manual start 1794625726212: accepted by executor
+ok
+test_claim_precedes_one_start_and_matching_ack_is_the_only_success (test_manual_disposal.DisposalRelayTests.test_claim_precedes_one_start_and_matching_ack_is_the_only_success) ... 11:08:46 [INFO] combined_app: Executor state: IDLE
+11:08:46 [INFO] combined_app: Manual start 1794625726585: accepted by executor
+11:08:46 [INFO] combined_app: Executor state: UNKNOWN
+ok
+test_claimed_stop_stays_unconfirmed_and_replaced_requester_is_untouched (test_manual_disposal.DisposalRelayTests.test_claimed_stop_stays_unconfirmed_and_replaced_requester_is_untouched) ... 11:08:46 [INFO] combined_app: Executor state: IDLE
+11:08:46 [WARNING] combined_app: Operator action requested: ESTOP
+ok
+test_confirmed_ack_survives_a_long_cloud_outage_without_replaying (test_manual_disposal.DisposalRelayTests.test_confirmed_ack_survives_a_long_cloud_outage_without_replaying) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+11:08:47 [INFO] combined_app: Manual start 1794625727132: accepted by executor
+ok
+test_emergency_stop_blocks_pending_and_cannot_turn_uncertainty_into_success (test_manual_disposal.DisposalRelayTests.test_emergency_stop_blocks_pending_and_cannot_turn_uncertainty_into_success) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+11:08:47 [WARNING] combined_app: Operator action requested: ESTOP
+ok
+test_expired_or_missing_capability_and_busy_local_start_reject_cloud_intent (test_manual_disposal.DisposalRelayTests.test_expired_or_missing_capability_and_busy_local_start_reject_cloud_intent) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+ok
+test_invalid_expired_future_and_unready_requests_never_start (test_manual_disposal.DisposalRelayTests.test_invalid_expired_future_and_unready_requests_never_start) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+11:08:47 [INFO] combined_app: Executor state: UNKNOWN
+ok
+test_missing_ack_expires_as_unconfirmed_and_never_replays_start (test_manual_disposal.DisposalRelayTests.test_missing_ack_expires_as_unconfirmed_and_never_replays_start) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+ok
+test_replaced_request_cannot_be_claimed_or_overwritten_by_an_old_outcome (test_manual_disposal.DisposalRelayTests.test_replaced_request_cannot_be_claimed_or_overwritten_by_an_old_outcome) ... 11:08:47 [INFO] combined_app: Executor state: IDLE
+ok
+test_slow_claim_or_state_change_prevents_late_queue_admission (test_manual_disposal.DisposalRelayTests.test_slow_claim_or_state_change_prevents_late_queue_admission) ... 11:08:48 [INFO] combined_app: Executor state: IDLE
+ok
+test_terminal_result_is_immutable_even_when_callback_retries (test_manual_disposal.DisposalRelayTests.test_terminal_result_is_immutable_even_when_callback_retries) ... 11:08:48 [INFO] combined_app: Executor state: IDLE
+ok
+test_uncertain_claim_and_process_restart_query_only (test_manual_disposal.DisposalRelayTests.test_uncertain_claim_and_process_restart_query_only) ... 11:08:48 [INFO] combined_app: Executor state: IDLE
+11:08:48 [INFO] combined_app: Manual start 1794625728298: rejected (NOT_RECEIVED)
+ok
+test_executor_capability_is_required_and_does_not_grant_go (test_manual_disposal.ManualDisposalRegressionTests.test_executor_capability_is_required_and_does_not_grant_go) ... 11:08:48 [INFO] combined_app: Executor state: IDLE
+11:08:48 [INFO] combined_app: Executor state: OUTBOUND
+11:08:48 [INFO] combined_app: Executor state: UNKNOWN
+ok
+test_monitor_cancel_does_not_send_and_accept_rechecks_readiness (test_manual_disposal.ManualDisposalRegressionTests.test_monitor_cancel_does_not_send_and_accept_rechecks_readiness) ... ok
+test_ack_timeout_needs_new_status_before_another_click (test_manual_start.ManualStartTests.test_ack_timeout_needs_new_status_before_another_click) ... ok
+test_ble_alone_and_partial_handshakes_cannot_start (test_manual_start.ManualStartTests.test_ble_alone_and_partial_handshakes_cannot_start) ... ok
+test_delayed_queue_or_changed_state_cancels_instead_of_starting_later (test_manual_start.ManualStartTests.test_delayed_queue_or_changed_state_cancels_instead_of_starting_later) ... ok
+test_one_click_queues_one_request_until_matching_outcome (test_manual_start.ManualStartTests.test_one_click_queues_one_request_until_matching_outcome) ... ok
+test_only_an_attempted_start_is_queried_and_queries_are_rate_limited (test_manual_start.ManualStartTests.test_only_an_attempted_start_is_queried_and_queries_are_rate_limited) ... ok
+test_rejection_is_visible_and_ids_increase_across_connection_reset (test_manual_start.ManualStartTests.test_rejection_is_visible_and_ids_increase_across_connection_reset) ... ok
+test_running_returning_destination_and_fault_are_not_idle (test_manual_start.ManualStartTests.test_running_returning_destination_and_fault_are_not_idle) ... ok
+test_simultaneous_clicks_cannot_create_two_starts (test_manual_start.ManualStartTests.test_simultaneous_clicks_cannot_create_two_starts) ... ok
+test_stale_handshake_or_state_cannot_enable_start (test_manual_start.ManualStartTests.test_stale_handshake_or_state_cannot_enable_start) ... ok
+test_stale_session_disconnected_and_expired_queries_are_not_written (test_manual_start.ManualStartTests.test_stale_session_disconnected_and_expired_queries_are_not_written) ... ok
+test_fresh_but_unusable_scan_needs_attention_not_loading (test_monitor_ui.AvailabilityTests.test_fresh_but_unusable_scan_needs_attention_not_loading) ... ok
+test_loading_names_the_driver_phase_then_times_out_as_unavailable (test_monitor_ui.AvailabilityTests.test_loading_names_the_driver_phase_then_times_out_as_unavailable) ... ok
+test_malformed_driver_status_is_ignored (test_monitor_ui.AvailabilityTests.test_malformed_driver_status_is_ignored) ... ok
+test_reported_failure_stays_shown_through_retries_until_a_live_scan (test_monitor_ui.AvailabilityTests.test_reported_failure_stays_shown_through_retries_until_a_live_scan) ... ok
+test_scope_geometry_keeps_front_up_left_left_and_arcs_on_their_sector (test_monitor_ui.AvailabilityTests.test_scope_geometry_keeps_front_up_left_left_and_arcs_on_their_sector) ... ok
+test_sector_labels_write_the_state_that_color_reinforces (test_monitor_ui.AvailabilityTests.test_sector_labels_write_the_state_that_color_reinforces) ... ok
+test_sweep_trail_fades_from_beam_to_scope (test_monitor_ui.AvailabilityTests.test_sweep_trail_fades_from_beam_to_scope) ... ok
+test_all_eight_sectors_are_written_on_their_own_side_of_the_scope (test_monitor_ui.CircularCanvasTests.test_all_eight_sectors_are_written_on_their_own_side_of_the_scope) ... ok
+test_bypassed_group_keeps_readings_says_read_only_and_drops_its_arcs (test_monitor_ui.CircularCanvasTests.test_bypassed_group_keeps_readings_says_read_only_and_drops_its_arcs) ... ok
+test_close_sector_says_close_and_highlights_only_its_stop_arc (test_monitor_ui.CircularCanvasTests.test_close_sector_says_close_and_highlights_only_its_stop_arc) ... ok
+test_hidden_tab_does_no_canvas_work (test_monitor_ui.CircularCanvasTests.test_hidden_tab_does_no_canvas_work) ... ok
+test_hidden_updates_retain_last_rendered_object_then_draw_newest (test_monitor_ui.CircularCanvasTests.test_hidden_updates_retain_last_rendered_object_then_draw_newest) ... ok
+test_invalid_explicit_source_age_never_becomes_receipt_time (test_monitor_ui.CircularCanvasTests.test_invalid_explicit_source_age_never_becomes_receipt_time) ... ok
+test_invalid_snapshot_source_age_never_becomes_receipt_time (test_monitor_ui.CircularCanvasTests.test_invalid_snapshot_source_age_never_becomes_receipt_time) ... ok
+test_legacy_frames_without_source_age_keep_receipt_time (test_monitor_ui.CircularCanvasTests.test_legacy_frames_without_source_age_keep_receipt_time) ... ok
+test_loading_sweeps_only_while_the_map_is_visible (test_monitor_ui.CircularCanvasTests.test_loading_sweeps_only_while_the_map_is_visible) ... ok
+test_queued_snapshot_retains_acquisition_age_for_all_readings (test_monitor_ui.CircularCanvasTests.test_queued_snapshot_retains_acquisition_age_for_all_readings) ... ok
+test_real_renderer_hides_expired_or_invalid_scan_and_never_invents_walls (test_monitor_ui.CircularCanvasTests.test_real_renderer_hides_expired_or_invalid_scan_and_never_invents_walls) ... ok
+test_real_renderer_projects_measured_points_and_reuses_items (test_monitor_ui.CircularCanvasTests.test_real_renderer_projects_measured_points_and_reuses_items) ... ok
+test_reported_failure_shows_the_reason_instead_of_the_sweep (test_monitor_ui.CircularCanvasTests.test_reported_failure_shows_the_reason_instead_of_the_sweep) ... ok
+test_source_age_survives_absent_optional_geometry (test_monitor_ui.CircularCanvasTests.test_source_age_survives_absent_optional_geometry) ... ok
+test_ble_worker_only_updates_mailbox_until_main_thread_polls (test_monitor_ui.DashboardTests.test_ble_worker_only_updates_mailbox_until_main_thread_polls) ... ok
+test_bypass_toggle_preserves_pending_start_and_status_query (test_monitor_ui.DashboardTests.test_bypass_toggle_preserves_pending_start_and_status_query) ... 11:08:49 [INFO] combined_app: Executor state: IDLE
+11:08:49 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:08:49 [INFO] combined_app: Manual start 1794625729093 written to BLE bridge; awaiting executor acknowledgement
+11:08:50 [INFO] combined_app: Manual start 1794625729093: accepted by executor
+11:08:50 [INFO] combined_app: Executor state: OUTBOUND
+11:08:50 [INFO] combined_app: Executor motion: MPU not ready
+11:08:50 [INFO] combined_app: BLE drain loop exiting.
+ok
+test_clear_logs_removes_displayed_history_and_keeps_incoming_messages (test_monitor_ui.DashboardTests.test_clear_logs_removes_displayed_history_and_keeps_incoming_messages) ... ok
+test_cloud_badge_uses_measured_connection_state (test_monitor_ui.DashboardTests.test_cloud_badge_uses_measured_connection_state) ... ok
+test_emergency_stop_needs_no_connection_or_confirmation (test_monitor_ui.DashboardTests.test_emergency_stop_needs_no_connection_or_confirmation) ... ok
+test_expired_scan_hides_previously_valid_distance (test_monitor_ui.DashboardTests.test_expired_scan_hides_previously_valid_distance) ... ok
+test_explicitly_allowed_bypass_updates_flags_and_written_warning (test_monitor_ui.DashboardTests.test_explicitly_allowed_bypass_updates_flags_and_written_warning) ... ok
+test_failed_core_health_cannot_be_presented_as_live_scan (test_monitor_ui.DashboardTests.test_failed_core_health_cannot_be_presented_as_live_scan) ... ok
+test_front_diagonals_use_their_own_stop_distance (test_monitor_ui.DashboardTests.test_front_diagonals_use_their_own_stop_distance) ... ok
+test_group_toggles_keep_distances_and_notify_runtime_immediately (test_monitor_ui.DashboardTests.test_group_toggles_keep_distances_and_notify_runtime_immediately) ... ok
+test_lidar_failure_reaches_the_status_and_the_map (test_monitor_ui.DashboardTests.test_lidar_failure_reaches_the_status_and_the_map) ... ok
+test_loading_sweep_runs_while_shown_and_stops_on_close (test_monitor_ui.DashboardTests.test_loading_sweep_runs_while_shown_and_stops_on_close) ... ok
+test_locked_safety_controls_cannot_change_core_flags (test_monitor_ui.DashboardTests.test_locked_safety_controls_cannot_change_core_flags) ... ok
+test_log_is_bounded_and_does_not_interrupt_manual_scrollback (test_monitor_ui.DashboardTests.test_log_is_bounded_and_does_not_interrupt_manual_scrollback) ... ok
+test_log_work_per_poll_is_bounded (test_monitor_ui.DashboardTests.test_log_work_per_poll_is_bounded) ... ok
+test_manual_start_requires_current_readiness_and_disables_while_pending (test_monitor_ui.DashboardTests.test_manual_start_requires_current_readiness_and_disables_while_pending) ... ok
+test_map_keeps_sector_readings_and_bypass_controls_accessible (test_monitor_ui.DashboardTests.test_map_keeps_sector_readings_and_bypass_controls_accessible) ... ok
+test_message_panel_can_be_opened_and_closed_on_small_display (test_monitor_ui.DashboardTests.test_message_panel_can_be_opened_and_closed_on_small_display) ... ok
+test_missing_sector_does_not_reuse_old_value (test_monitor_ui.DashboardTests.test_missing_sector_does_not_reuse_old_value) ... ok
+test_one_failed_refresh_does_not_freeze_the_monitor_after_a_start (test_monitor_ui.DashboardTests.test_one_failed_refresh_does_not_freeze_the_monitor_after_a_start) ... ok
+test_optional_bypass_controls_leave_small_display_values_visible (test_monitor_ui.DashboardTests.test_optional_bypass_controls_leave_small_display_values_visible) ... ok
+test_partial_fresh_scan_keeps_valid_readings_visible (test_monitor_ui.DashboardTests.test_partial_fresh_scan_keeps_valid_readings_visible) ... ok
+test_pending_or_disconnected_operator_controls_cannot_release_or_reset (test_monitor_ui.DashboardTests.test_pending_or_disconnected_operator_controls_cannot_release_or_reset) ... ok
+test_queue_burst_renders_the_newest_snapshot (test_monitor_ui.DashboardTests.test_queue_burst_renders_the_newest_snapshot) ... ok
+test_reset_confirmation_can_cancel_and_rechecks_after_dialog (test_monitor_ui.DashboardTests.test_reset_confirmation_can_cancel_and_rechecks_after_dialog) ... ok
+test_sensor_absence_is_readable_and_recovers (test_monitor_ui.DashboardTests.test_sensor_absence_is_readable_and_recovers) ... ok
+test_small_display_keeps_the_map_and_sensors_visible (test_monitor_ui.DashboardTests.test_small_display_keeps_the_map_and_sensors_visible) ... ok
+test_tabs_separate_readings_connections_and_controls_with_global_stop (test_monitor_ui.DashboardTests.test_tabs_separate_readings_connections_and_controls_with_global_stop) ... ok
+test_ultrasonic_uses_confirmed_state_and_rechecks_at_click (test_monitor_ui.DashboardTests.test_ultrasonic_uses_confirmed_state_and_rechecks_at_click) ... ok
+test_unknown_status_never_claims_enabled_or_released (test_monitor_ui.DashboardTests.test_unknown_status_never_claims_enabled_or_released) ... ok
+test_bypass_has_an_explicit_written_state (test_monitor_ui.ReadingTests.test_bypass_has_an_explicit_written_state) ... ok
+test_circular_point_work_is_bounded (test_monitor_ui.ReadingTests.test_circular_point_work_is_bounded) ... ok
+test_circular_projection_keeps_front_up_and_left_left (test_monitor_ui.ReadingTests.test_circular_projection_keeps_front_up_and_left_left) ... ok
+test_circular_scan_uses_acquisition_age_and_only_finite_measured_points (test_monitor_ui.ReadingTests.test_circular_scan_uses_acquisition_age_and_only_finite_measured_points) ... ok
+test_close_threshold_is_inclusive_and_direction_specific (test_monitor_ui.ReadingTests.test_close_threshold_is_inclusive_and_direction_specific) ... ok
+test_missing_and_invalid_distance_never_look_live (test_monitor_ui.ReadingTests.test_missing_and_invalid_distance_never_look_live) ... ok
+test_stale_snapshot_suppresses_distances_even_when_bypassed (test_monitor_ui.ReadingTests.test_stale_snapshot_suppresses_distances_even_when_bypassed) ... ok
+test_transport_sentinels_and_invalid_sensor_values_show_unavailable (test_monitor_ui.ReadingTests.test_transport_sentinels_and_invalid_sensor_values_show_unavailable) ... ok
+test_zero_is_a_real_reading_and_gas_values_have_no_invented_alarm (test_monitor_ui.ReadingTests.test_zero_is_a_real_reading_and_gas_values_have_no_invented_alarm) ... ok
+test_parses_drive_lines (test_motion_tracker.EgoMotionStateTest.test_parses_drive_lines) ... ok
+test_stop_ttc_matches_the_stopping_budget (test_motion_tracker.GeometryTest.test_stop_ttc_matches_the_stopping_budget) ... ok
+test_time_to_box (test_motion_tracker.GeometryTest.test_time_to_box) ... ok
+test_time_to_circle (test_motion_tracker.GeometryTest.test_time_to_circle) ... ok
+test_a_spin_without_drive_reports_never_holds_the_robot (test_motion_tracker.PeopleTest.test_a_spin_without_drive_reports_never_holds_the_robot) ... ok
+test_person_catching_up_from_behind_does_not_stop_the_robot (test_motion_tracker.PeopleTest.test_person_catching_up_from_behind_does_not_stop_the_robot) ... ok
+test_person_crossing_into_the_robots_path_stops_it (test_motion_tracker.PeopleTest.test_person_crossing_into_the_robots_path_stops_it) ... ok
+test_person_crossing_well_ahead_does_not_stop_the_robot (test_motion_tracker.PeopleTest.test_person_crossing_well_ahead_does_not_stop_the_robot) ... ok
+test_person_passing_beside_the_robot_slows_it_but_does_not_stop_it (test_motion_tracker.PeopleTest.test_person_passing_beside_the_robot_slows_it_but_does_not_stop_it) ... ok
+test_person_walking_against_the_wall_does_not_stop_the_robot (test_motion_tracker.PeopleTest.test_person_walking_against_the_wall_does_not_stop_the_robot) ... ok
+test_person_walking_away_ahead_neither_stops_nor_slows (test_motion_tracker.PeopleTest.test_person_walking_away_ahead_neither_stops_nor_slows) ... ok
+test_person_walking_toward_a_stopped_robot_keeps_it_stopped (test_motion_tracker.PeopleTest.test_person_walking_toward_a_stopped_robot_keeps_it_stopped) ... ok
+test_person_walking_toward_the_robot_is_stopped_for_metres_away (test_motion_tracker.PeopleTest.test_person_walking_toward_the_robot_is_stopped_for_metres_away) ... ok
+test_runner_is_stopped_while_still_far (test_motion_tracker.PeopleTest.test_runner_is_stopped_while_still_far) ... ok
+test_spinning_resets_tracking (test_motion_tracker.PeopleTest.test_spinning_resets_tracking) ... ok
+test_stop_releases_once_the_person_has_passed (test_motion_tracker.PeopleTest.test_stop_releases_once_the_person_has_passed) ... ok
+test_walker_is_still_stopped_when_the_robots_own_speed_is_unknown (test_motion_tracker.PeopleTest.test_walker_is_still_stopped_when_the_robots_own_speed_is_unknown) ... ok
+test_a_still_cluttered_scene_never_produces_a_mover_or_a_hold (test_motion_tracker.RealBenchRecordingTest.test_a_still_cluttered_scene_never_produces_a_mover_or_a_hold) ... ok
+test_a_thin_object_lost_and_another_found_nearby_is_not_a_mover (test_motion_tracker.StillWorldTest.test_a_thin_object_lost_and_another_found_nearby_is_not_a_mover) ... ok
+test_driving_past_pillars_doors_and_a_leaf_is_never_a_moving_object (test_motion_tracker.StillWorldTest.test_driving_past_pillars_doors_and_a_leaf_is_never_a_moving_object) ... ok
+test_empty_hallway_has_no_objects (test_motion_tracker.StillWorldTest.test_empty_hallway_has_no_objects) ... ok
+test_standing_still_for_a_long_time_stays_quiet (test_motion_tracker.StillWorldTest.test_standing_still_for_a_long_time_stays_quiet) ... ok
+test_starting_and_braking_with_late_drive_reports_never_stops_for_still_things (test_motion_tracker.StillWorldTest.test_starting_and_braking_with_late_drive_reports_never_stops_for_still_things) ... ok
+test_a_delayed_health_write_cannot_refresh_old_evidence_at_the_controller (test_notice_support.HealthRuntimeTests.test_a_delayed_health_write_cannot_refresh_old_evidence_at_the_controller) ... ok
+test_health_queue_coalesces_without_displacing_the_path_snapshot (test_notice_support.HealthRuntimeTests.test_health_queue_coalesces_without_displacing_the_path_snapshot) ... ok
+test_monitor_failure_invalidates_old_health_without_inventing_cloud_failure (test_notice_support.HealthRuntimeTests.test_monitor_failure_invalidates_old_health_without_inventing_cloud_failure) ... 11:09:04 [INFO] combined_app: SMS health monitor started.
+11:09:04 [ERROR] combined_app: SMS health check unavailable; reporting unknown
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\final_w_serial.py", line 703, in notice_health_loop
+    internet = probe_internet()
+               ^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\unittest\mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\unittest\mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\unittest\mock.py", line 1198, in _execute_mock_call
+    raise effect
+RuntimeError: probe worker failure
+11:09:04 [INFO] combined_app: SMS health monitor stopped.
+ok
+test_probe_time_is_included_in_the_background_monitor_period (test_notice_support.HealthRuntimeTests.test_probe_time_is_included_in_the_background_monitor_period) ... 11:09:04 [INFO] combined_app: SMS health monitor started.
+11:09:04 [INFO] combined_app: SMS health monitor stopped.
+ok
+test_runtime_packet_uses_sensor_freshness_and_real_cloud_status (test_notice_support.HealthRuntimeTests.test_runtime_packet_uses_sensor_freshness_and_real_cloud_status) ... ok
+test_cloud_failure_does_not_claim_internet_loss (test_notice_support.NoticeSupportTests.test_cloud_failure_does_not_claim_internet_loss) ... ok
+test_cloud_requires_measured_success_and_has_initialization_grace (test_notice_support.NoticeSupportTests.test_cloud_requires_measured_success_and_has_initialization_grace) ... ok
+test_current_temperature_and_active_power_flags_trigger_thermal_notice (test_notice_support.NoticeSupportTests.test_current_temperature_and_active_power_flags_trigger_thermal_notice) ... ok
+test_historical_throttling_does_not_become_permanent_current_fault (test_notice_support.NoticeSupportTests.test_historical_throttling_does_not_become_permanent_current_fault) ... ok
+test_internet_check_falls_back_without_accepting_captive_portal (test_notice_support.NoticeSupportTests.test_internet_check_falls_back_without_accepting_captive_portal) ... ok
+test_missing_fault_source_cannot_claim_thermal_or_power_recovery (test_notice_support.NoticeSupportTests.test_missing_fault_source_cannot_claim_thermal_or_power_recovery) ... ok
+test_missing_optional_firebase_does_not_generate_an_outage (test_notice_support.NoticeSupportTests.test_missing_optional_firebase_does_not_generate_an_outage) ... ok
+test_recent_completed_cloud_operation_can_prove_reachability_when_probe_hosts_are_filtered (test_notice_support.NoticeSupportTests.test_recent_completed_cloud_operation_can_prove_reachability_when_probe_hosts_are_filtered) ... ok
+test_sensor_and_lidar_faults_remain_distinct_from_connectivity (test_notice_support.NoticeSupportTests.test_sensor_and_lidar_faults_remain_distinct_from_connectivity) ... ok
+test_successful_204_probe_stops_before_the_second_network_request (test_notice_support.NoticeSupportTests.test_successful_204_probe_stops_before_the_second_network_request) ... ok
+test_unknown_probe_and_expired_worker_snapshot_are_never_healthy (test_notice_support.NoticeSupportTests.test_unknown_probe_and_expired_worker_snapshot_are_never_healthy) ... ok
+test_unreachable_and_redirected_probe_targets_do_not_report_internet_online (test_notice_support.NoticeSupportTests.test_unreachable_and_redirected_probe_targets_do_not_report_internet_online) ... ok
+test_driving_past_a_post_stays_clear_for_the_whole_approach (test_nudge_lidar.NudgeLidarTests.test_driving_past_a_post_stays_clear_for_the_whole_approach) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_every_return_in_the_body_lane_keeps_the_full_front_limit (test_nudge_lidar.NudgeLidarTests.test_every_return_in_the_body_lane_keeps_the_full_front_limit) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+ok
+test_front_diagonal_limit_is_inclusive_and_reports_nearest_clearance (test_nudge_lidar.NudgeLidarTests.test_front_diagonal_limit_is_inclusive_and_reports_nearest_clearance) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_front_diagonal_object_participates_in_both_clearance_groups (test_nudge_lidar.NudgeLidarTests.test_front_diagonal_object_participates_in_both_clearance_groups) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_isolated_front_obstacle_uses_nearest_not_wall_geometry (test_nudge_lidar.NudgeLidarTests.test_isolated_front_obstacle_uses_nearest_not_wall_geometry) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+ok
+test_measured_hallway_and_post_widths_keep_moving (test_nudge_lidar.NudgeLidarTests.test_measured_hallway_and_post_widths_keep_moving) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_missing_current_sector_cannot_borrow_old_clearance (test_nudge_lidar.NudgeLidarTests.test_missing_current_sector_cannot_borrow_old_clearance) ... 11:09:05 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:05 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_missing_front_does_not_publish_previous_front_clearance (test_nudge_lidar.NudgeLidarTests.test_missing_front_does_not_publish_previous_front_clearance) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_pathological_distance_cannot_overflow_steering_frame (test_nudge_lidar.NudgeLidarTests.test_pathological_distance_cannot_overflow_steering_frame) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_read_only_bypass_preserves_nearest_nudge_clearance (test_nudge_lidar.NudgeLidarTests.test_read_only_bypass_preserves_nearest_nudge_clearance) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+ok
+test_rejected_source_acquisitions_never_advance_identifier (test_nudge_lidar.NudgeLidarTests.test_rejected_source_acquisitions_never_advance_identifier) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_repeated_polls_reuse_acquisition_but_advance_path_sequence (test_nudge_lidar.NudgeLidarTests.test_repeated_polls_reuse_acquisition_but_advance_path_sequence) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_stale_source_omits_numeric_clearance_and_acquisition_evidence (test_nudge_lidar.NudgeLidarTests.test_stale_source_omits_numeric_clearance_and_acquisition_evidence) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_straight_ahead_stop_distance_is_not_shortened (test_nudge_lidar.NudgeLidarTests.test_straight_ahead_stop_distance_is_not_shortened) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX
+11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: SLOW
+11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: SLOW
+11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_thin_right_object_has_an_independent_clearance (test_nudge_lidar.NudgeLidarTests.test_thin_right_object_has_an_independent_clearance) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_thin_side_object_survives_wall_median_and_nearest_history (test_nudge_lidar.NudgeLidarTests.test_thin_side_object_survives_wall_median_and_nearest_history) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_uint32_wrap_and_normal_packet_fit_current_att_budget (test_nudge_lidar.NudgeLidarTests.test_uint32_wrap_and_normal_packet_fit_current_att_budget) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_wall_too_close_to_a_front_diagonal_still_stops (test_nudge_lidar.NudgeLidarTests.test_wall_too_close_to_a_front_diagonal_still_stops) ... 11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: TURN_FRONT, TURN_BACK
+11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:06 [INFO] combined_app: LiDAR chassis zones: TURN_FRONT, TURN_BACK
+11:09:06 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:07 [INFO] combined_app: LiDAR chassis zones: TURN_FRONT, TURN_BACK
+ok
+test_wide_parallel_hallway_has_realistic_clear_path_and_wall_estimates (test_nudge_lidar.NudgeLidarTests.test_wide_parallel_hallway_has_realistic_clear_path_and_wall_estimates) ... 11:09:07 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:07 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_delayed_ack_cannot_reboot_or_release_after_timeout (test_operator_support.OperatorControlTests.test_delayed_ack_cannot_reboot_or_release_after_timeout) ... ok
+test_emergency_stop_latches_offline_and_is_first_after_reconnection (test_operator_support.OperatorControlTests.test_emergency_stop_latches_offline_and_is_first_after_reconnection) ... ok
+test_expired_or_disconnected_commands_cannot_be_written_later (test_operator_support.OperatorControlTests.test_expired_or_disconnected_commands_cannot_be_written_later) ... ok
+test_failed_release_persistence_reapplies_stop (test_operator_support.OperatorControlTests.test_failed_release_persistence_reapplies_stop) ... ok
+test_new_stop_cancels_pending_release_and_reboot (test_operator_support.OperatorControlTests.test_new_stop_cancels_pending_release_and_reboot) ... ok
+test_only_matching_attempted_ack_changes_displayed_setting (test_operator_support.OperatorControlTests.test_only_matching_attempted_ack_changes_displayed_setting) ... ok
+test_reboot_requires_confirmed_stop_and_matching_ack_once (test_operator_support.OperatorControlTests.test_reboot_requires_confirmed_stop_and_matching_ack_once) ... ok
+test_reboot_uses_orderly_fixed_command_and_reports_permission_failure (test_operator_support.OperatorControlTests.test_reboot_uses_orderly_fixed_command_and_reports_permission_failure) ... ok
+test_request_ids_survive_clock_rollback_process_restart_and_release (test_operator_support.OperatorControlTests.test_request_ids_survive_clock_rollback_process_restart_and_release) ... ok
+test_second_stop_cannot_invalidate_durable_reboot_when_disk_becomes_readonly (test_operator_support.OperatorControlTests.test_second_stop_cannot_invalidate_durable_reboot_when_disk_becomes_readonly) ... ok
+test_stop_after_committed_reboot_keeps_coordinated_pi_reboot (test_operator_support.OperatorControlTests.test_stop_after_committed_reboot_keeps_coordinated_pi_reboot) ... ok
+test_stop_survives_process_restart_until_confirmed_release (test_operator_support.OperatorControlTests.test_stop_survives_process_restart_until_confirmed_release) ... ok
+test_storage_failure_keeps_stop_and_disables_restart (test_operator_support.OperatorControlTests.test_storage_failure_keeps_stop_and_disables_restart) ... ok
+test_uncertain_stop_is_repeatable_but_release_and_reboot_never_are (test_operator_support.OperatorControlTests.test_uncertain_stop_is_repeatable_but_release_and_reboot_never_are) ... ok
+test_unknown_disconnected_running_and_stale_cannot_change_sonar (test_operator_support.OperatorControlTests.test_unknown_disconnected_running_and_stale_cannot_change_sonar) ... ok
+test_reboot_worker_only_starts_for_attempted_matching_ack (test_operator_support.RuntimeOperatorTests.test_reboot_worker_only_starts_for_attempted_matching_ack) ... ok
+test_serialized_writer_suppresses_motion_and_never_releases_stop_from_scan (test_operator_support.RuntimeOperatorTests.test_serialized_writer_suppresses_motion_and_never_releases_stop_from_scan) ... 11:09:07 [WARNING] combined_app: Operator action requested: ESTOP
+ok
+test_stop_cancels_queued_manual_start_and_return (test_operator_support.RuntimeOperatorTests.test_stop_cancels_queued_manual_start_and_return) ... 11:09:07 [WARNING] combined_app: Operator action requested: ESTOP
+ok
+test_lists_all_serial_families_prefers_stable_names_and_skips_consoles (test_port_detection.CandidateListTests.test_lists_all_serial_families_prefers_stable_names_and_skips_consoles) ... ok
+test_probe_never_asserts_reset_lines_or_transmits (test_port_detection.CandidateListTests.test_probe_never_asserts_reset_lines_or_transmits) ... ok
+test_a_held_port_is_never_opened_again (test_port_detection.PortDetectorTests.test_a_held_port_is_never_opened_again) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+ok
+test_a_port_that_cannot_be_opened_is_skipped (test_port_detection.PortDetectorTests.test_a_port_that_cannot_be_opened_is_skipped) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB1
+ok
+test_a_port_with_no_matching_data_is_never_selected (test_port_detection.PortDetectorTests.test_a_port_with_no_matching_data_is_never_selected) ... ok
+test_custom_baud_rates_are_used (test_port_detection.PortDetectorTests.test_custom_baud_rates_are_used) ... ok
+test_devices_are_found_whichever_way_round_they_are_plugged (test_port_detection.PortDetectorTests.test_devices_are_found_whichever_way_round_they_are_plugged) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB1
+11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB1
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB0
+11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyACM3
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB9
+11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB2
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyAMA0
+ok
+test_explicitly_configured_port_of_the_other_role_is_left_alone (test_port_detection.PortDetectorTests.test_explicitly_configured_port_of_the_other_role_is_left_alone) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB1
+FAIL
+test_holding_a_role_returns_its_port_without_another_probe (test_port_detection.PortDetectorTests.test_holding_a_role_returns_its_port_without_another_probe) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+ok
+test_identical_adapters_are_told_apart_by_their_data (test_port_detection.PortDetectorTests.test_identical_adapters_are_told_apart_by_their_data) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB1
+ok
+test_lidar_moved_to_a_new_port_is_found_and_unplugged_returns_none (test_port_detection.PortDetectorTests.test_lidar_moved_to_a_new_port_is_found_and_unplugged_returns_none) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB5
+ok
+test_only_the_data_decides_even_when_the_lidar_is_the_only_port (test_port_detection.PortDetectorTests.test_only_the_data_decides_even_when_the_lidar_is_the_only_port) ... ok
+test_same_path_with_same_identity_keeps_its_role (test_port_detection.PortDetectorTests.test_same_path_with_same_identity_keeps_its_role) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+ok
+test_silent_port_is_retried_only_after_the_quiet_period (test_port_detection.PortDetectorTests.test_silent_port_is_retried_only_after_the_quiet_period) ... 11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB0
+ok
+test_swapping_devices_after_unplugging_is_detected (test_port_detection.PortDetectorTests.test_swapping_devices_after_unplugging_is_detected) ... 11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB0
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB1
+11:09:07 [INFO] combined_app: Detected lidar on /dev/ttyUSB1
+11:09:07 [INFO] combined_app: Detected sensor on /dev/ttyUSB0
+ok
+test_both_orders_through_real_serial_reads (test_port_detection.RealSerialEndToEndTests.test_both_orders_through_real_serial_reads) ... ERROR
+test_sensor_search_leaves_a_silent_port_after_its_window (test_port_detection.RealSerialEndToEndTests.test_sensor_search_leaves_a_silent_port_after_its_window) ... ERROR
+test_headers_that_do_not_chain_are_not_a_lidar (test_port_detection.SignatureTests.test_headers_that_do_not_chain_are_not_a_lidar) ... ok
+test_lidar_stream_with_varying_packet_sizes (test_port_detection.SignatureTests.test_lidar_stream_with_varying_packet_sizes) ... ok
+test_random_data_is_not_a_lidar (test_port_detection.SignatureTests.test_random_data_is_not_a_lidar) ... ok
+test_real_x3_packet_format_is_recognised (test_port_detection.SignatureTests.test_real_x3_packet_format_is_recognised) ... ok
+test_sensor_labels_match_the_runtime_parser (test_port_detection.SignatureTests.test_sensor_labels_match_the_runtime_parser) ... ok
+test_sensor_lines_are_recognised_with_unavailable_values (test_port_detection.SignatureTests.test_sensor_lines_are_recognised_with_unavailable_values) ... ok
+test_sensor_text_is_not_a_lidar_and_lidar_is_not_a_sensor (test_port_detection.SignatureTests.test_sensor_text_is_not_a_lidar_and_lidar_is_not_a_sensor) ... ok
+test_three_byte_sample_lidar_format (test_port_detection.SignatureTests.test_three_byte_sample_lidar_format) ... ok
+test_unfinished_or_other_text_is_not_a_sensor_board (test_port_detection.SignatureTests.test_unfinished_or_other_text_is_not_a_sensor_board) ... ok
+test_wrong_baud_noise_is_rejected_early_but_short_boot_noise_is_not (test_port_detection.SignatureTests.test_wrong_baud_noise_is_rejected_early_but_short_boot_noise_is_not) ... ok
+test_a_second_queued_copy_cannot_repeat_a_start_attempt (test_runtime.BleWriteTests.test_a_second_queued_copy_cannot_repeat_a_start_attempt) ... 11:09:08 [WARNING] asyncio: Executing <Task finished name='Task-211' coro=<BleWriteTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_runtime.py:1208> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.328 seconds
+11:09:08 [INFO] combined_app: Executor state: IDLE
+11:09:08 [INFO] combined_app: Manual start 1794625748024 written to BLE bridge; awaiting executor acknowledgement
+11:09:08 [WARNING] combined_app: Manual start skipped before transmission: Start requested; waiting for acknowledgement
+ok
+test_all_writes_are_serialized_and_return_is_acknowledged (test_runtime.BleWriteTests.test_all_writes_are_serialized_and_return_is_acknowledged) ... 11:09:08 [WARNING] asyncio: Executing <Task finished name='Task-216' coro=<BleWriteTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_runtime.py:1208> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.204 seconds
+11:09:08 [INFO] combined_app: Executor state: IDLE
+11:09:08 [INFO] combined_app: Manual start 1794625748246 written to BLE bridge; awaiting executor acknowledgement
+ok
+test_failed_start_write_is_not_automatically_retried (test_runtime.BleWriteTests.test_failed_start_write_is_not_automatically_retried) ... 11:09:08 [INFO] combined_app: Executor state: IDLE
+11:09:08 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:08 [WARNING] combined_app: BLE write glitch (1/5): TimeoutError: uncertain write [packet=START, connected=True]
+11:09:08 [WARNING] asyncio: Executing <Task pending name='Task-225' coro=<BleWriteTests.test_failed_start_write_is_not_automatically_retried() running at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_runtime.py:1291> wait_for=<Future pending cb=[Task.task_wakeup()] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:448> cb=[_run_until_complete_cb() at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py:181] created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.234 seconds
+11:09:08 [INFO] combined_app: BLE drain loop exiting.
+ok
+test_failed_urgent_write_never_reinserts_old_sequence (test_runtime.BleWriteTests.test_failed_urgent_write_never_reinserts_old_sequence) ... 11:09:09 [WARNING] asyncio: Executing <Task finished name='Task-229' coro=<BleWriteTests.asyncSetUp() done, defined at Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_runtime.py:1208> result=None created at C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.797 seconds
+11:09:09 [ERROR] combined_app: Urgent BLE write error: BLE link is not writable
+ok
+test_lost_start_ack_is_recovered_by_a_query_without_replaying_start (test_runtime.BleWriteTests.test_lost_start_ack_is_recovered_by_a_query_without_replaying_start) ... 11:09:09 [INFO] combined_app: Executor state: IDLE
+11:09:09 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:09 [INFO] combined_app: Manual start 1794625749701 written to BLE bridge; awaiting executor acknowledgement
+11:09:10 [INFO] combined_app: Manual start 1794625749701: accepted by executor
+11:09:10 [INFO] combined_app: Executor state: OUTBOUND
+11:09:10 [INFO] combined_app: BLE drain loop exiting.
+ok
+test_start_expiring_behind_another_write_is_never_delivered (test_runtime.BleWriteTests.test_start_expiring_behind_another_write_is_never_delivered) ... 11:09:10 [WARNING] combined_app: Manual start skipped before transmission: Start cancelled; check connections and try again
+ok
+test_steering_write_respects_negotiated_no_response_limit (test_runtime.BleWriteTests.test_steering_write_respects_negotiated_no_response_limit) ... ok
+test_uncertain_start_write_queries_the_result_instead_of_resending (test_runtime.BleWriteTests.test_uncertain_start_write_queries_the_result_instead_of_resending) ... 11:09:11 [INFO] combined_app: Executor state: IDLE
+11:09:11 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:11 [INFO] combined_app: Executor state: OUTBOUND
+11:09:11 [WARNING] combined_app: BLE write glitch (1/5): TimeoutError: acknowledged write result lost [packet=START, connected=True]
+11:09:12 [INFO] combined_app: Manual start 1794625751004: accepted by executor
+11:09:12 [INFO] combined_app: BLE drain loop exiting.
+ok
+test_bridge_diagnostics_reach_the_pi_log (test_runtime.BridgeDiagnosticTests.test_bridge_diagnostics_reach_the_pi_log) ... ok
+test_cancelled_startup_cleans_up_the_new_child (test_runtime.DriverOwnershipTests.test_cancelled_startup_cleans_up_the_new_child) ... 11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+ok
+test_early_driver_exit_is_reported_and_cleaned_up (test_runtime.DriverOwnershipTests.test_early_driver_exit_is_reported_and_cleaned_up) ... 11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+ok
+test_parent_exit_does_not_leave_an_owned_driver_child (test_runtime.DriverOwnershipTests.test_parent_exit_does_not_leave_an_owned_driver_child) ... ok
+test_publisher_exception_cleans_up_the_new_child (test_runtime.DriverOwnershipTests.test_publisher_exception_cleans_up_the_new_child) ... 11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+ok
+test_startup_owns_only_its_child_and_never_runs_global_cleanup (test_runtime.DriverOwnershipTests.test_startup_owns_only_its_child_and_never_runs_global_cleanup) ... 11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+ok
+test_supervisor_reports_running_then_a_driver_exit (test_runtime.DriverOwnershipTests.test_supervisor_reports_running_then_a_driver_exit) ... ok
+test_supervisor_tells_the_map_why_the_lidar_is_unavailable (test_runtime.DriverOwnershipTests.test_supervisor_tells_the_map_why_the_lidar_is_unavailable) ... ok
+test_x3_driver_keeps_every_measured_point_of_each_revolution (test_runtime.DriverOwnershipTests.test_x3_driver_keeps_every_measured_point_of_each_revolution) ... 11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+11:09:12 [INFO] combined_app: Starting LiDAR driver on /fake-lidar
+ok
+test_cloud_heartbeat_keeps_its_slower_period (test_runtime.PiHealthTests.test_cloud_heartbeat_keeps_its_slower_period) ... 11:09:12 [INFO] combined_app: RasPi heartbeat/health updater started.
+11:09:12 [INFO] combined_app: RasPi heartbeat updater stopped.
+ok
+test_firmware_flags_are_preferred_when_vcio_is_accessible (test_runtime.PiHealthTests.test_firmware_flags_are_preferred_when_vcio_is_accessible) ... ok
+test_healthy_supply_reports_zero_not_unknown (test_runtime.PiHealthTests.test_healthy_supply_reports_zero_not_unknown) ... ok
+test_no_voltage_source_stays_unknown (test_runtime.PiHealthTests.test_no_voltage_source_stays_unknown) ... ok
+test_throttling_is_logged_without_firebase_and_only_on_change (test_runtime.PiHealthTests.test_throttling_is_logged_without_firebase_and_only_on_change) ... ok
+test_undervoltage_is_visible_without_video_group_access (test_runtime.PiHealthTests.test_undervoltage_is_visible_without_video_group_access) ... ok
+test_accepted_start_shows_the_executor_motion_hold_in_the_monitor (test_runtime.RuntimeTests.test_accepted_start_shows_the_executor_motion_hold_in_the_monitor) ... 11:09:13 [INFO] combined_app: Executor state: IDLE
+11:09:13 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:13 [INFO] combined_app: Manual start 1794625753503: accepted by executor
+11:09:13 [INFO] combined_app: Executor state: OUTBOUND
+11:09:13 [INFO] combined_app: Executor motion: MPU not ready
+11:09:13 [INFO] combined_app: Executor motion: clearance confirmed
+ok
+test_acquisition_age_counts_toward_stale_budget_after_receipt (test_runtime.RuntimeTests.test_acquisition_age_counts_toward_stale_budget_after_receipt) ... 11:09:13 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:13 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_an_object_approaching_fast_is_stopped_before_the_static_box (test_runtime.RuntimeTests.test_an_object_approaching_fast_is_stopped_before_the_static_box) ... 11:09:13 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:13 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:14 [INFO] combined_app: Moving-object prediction: STOP (moving object 3.6 m away, closing 1.5 m/s, contact in 1.9 s; robot unknown)
+ok
+test_automatic_lidar_selection_excludes_sensor_serial_device (test_runtime.RuntimeTests.test_automatic_lidar_selection_excludes_sensor_serial_device) ... ok
+test_backward_ros_clock_cannot_authorize_an_advancing_future_stamp (test_runtime.RuntimeTests.test_backward_ros_clock_cannot_authorize_an_advancing_future_stamp) ... 11:09:14 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:14 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_configured_lidar_cannot_share_sensor_serial_device (test_runtime.RuntimeTests.test_configured_lidar_cannot_share_sensor_serial_device) ... ok
+test_controller_reboot_and_ble_loss_cancel_manual_start_requests (test_runtime.RuntimeTests.test_controller_reboot_and_ble_loss_cancel_manual_start_requests) ... 11:09:15 [INFO] combined_app: Executor state: IDLE
+11:09:15 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:15 [INFO] combined_app: Executor state: UNKNOWN
+11:09:15 [INFO] combined_app: Executor state: IDLE
+11:09:15 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:15 [INFO] combined_app: Executor state: UNKNOWN
+11:09:15 [WARNING] combined_app: BLE link lost: session 0.0 s, last write -1.00 s ago, Pi unknown, CPU unknown C
+ok
+test_delayed_scan_cannot_refresh_clearance_or_health (test_runtime.RuntimeTests.test_delayed_scan_cannot_refresh_clearance_or_health) ... 11:09:15 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:15 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_destination_notifies_firebase_readiness (test_runtime.RuntimeTests.test_destination_notifies_firebase_readiness) ... 11:09:15 [INFO] combined_app: Executor state: AT_DESTINATION
+11:09:15 [INFO] combined_app: Executor state: RETURNING
+ok
+test_detected_ports_are_used_when_nothing_is_configured (test_runtime.RuntimeTests.test_detected_ports_are_used_when_nothing_is_configured) ... ok
+test_display_failure_does_not_change_safety_evidence (test_runtime.RuntimeTests.test_display_failure_does_not_change_safety_evidence) ... ok
+test_display_geometry_failure_keeps_acquisition_age_in_frame (test_runtime.RuntimeTests.test_display_geometry_failure_keeps_acquisition_age_in_frame) ... 11:09:16 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:16 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_drive_lines_feed_the_prediction_and_stay_out_of_the_gui_log (test_runtime.RuntimeTests.test_drive_lines_feed_the_prediction_and_stay_out_of_the_gui_log) ... ok
+test_explicit_missing_lidar_port_does_not_fall_back_to_sensor_board (test_runtime.RuntimeTests.test_explicit_missing_lidar_port_does_not_fall_back_to_sensor_board) ... ok
+test_explicit_port_of_one_device_is_kept_out_of_the_other_search (test_runtime.RuntimeTests.test_explicit_port_of_one_device_is_kept_out_of_the_other_search) ... ok
+test_explicit_ports_win_and_are_never_probed (test_runtime.RuntimeTests.test_explicit_ports_win_and_are_never_probed) ... ok
+test_frozen_ros_clock_cannot_refresh_a_repeated_acquisition (test_runtime.RuntimeTests.test_frozen_ros_clock_cannot_refresh_a_repeated_acquisition) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_group_toggles_cannot_clear_missing_or_stale_lidar (test_runtime.RuntimeTests.test_group_toggles_cannot_clear_missing_or_stale_lidar) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_gui_frame_contains_circular_detail_from_current_acquisition (test_runtime.RuntimeTests.test_gui_frame_contains_circular_detail_from_current_acquisition) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: SLOW
+ok
+test_gui_log_retains_only_recent_notification_lines (test_runtime.RuntimeTests.test_gui_log_retains_only_recent_notification_lines) ... ok
+test_headless_and_display_modes_produce_identical_safety_packets (test_runtime.RuntimeTests.test_headless_and_display_modes_produce_identical_safety_packets) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_headless_does_not_build_map_and_display_build_runs_outside_safety_lock (test_runtime.RuntimeTests.test_headless_does_not_build_map_and_display_build_runs_outside_safety_lock) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_headless_scan_skips_display_but_retains_path_decisions (test_runtime.RuntimeTests.test_headless_scan_skips_display_but_retains_path_decisions) ... 11:09:17 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:17 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:17 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_idle_cloud_polling_slows_but_destination_polling_stays_fast (test_runtime.RuntimeTests.test_idle_cloud_polling_slows_but_destination_polling_stays_fast) ... 11:09:18 [INFO] combined_app: Firebase reset command bridge started.
+11:09:18 [INFO] combined_app: Firebase reset command bridge stopped.
+11:09:18 [INFO] combined_app: Firebase reset command bridge started.
+11:09:18 [INFO] combined_app: Firebase reset command bridge stopped.
+ok
+test_idle_without_matching_return_id_is_not_completion (test_runtime.RuntimeTests.test_idle_without_matching_return_id_is_not_completion) ... 11:09:18 [INFO] combined_app: Executor state: IDLE
+ok
+test_invalid_geometry_does_not_kill_ros_callback (test_runtime.RuntimeTests.test_invalid_geometry_does_not_kill_ros_callback) ... 11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_invalid_range_limits_are_not_normalized_into_clearance (test_runtime.RuntimeTests.test_invalid_range_limits_are_not_normalized_into_clearance) ... 11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_invalid_sector_cannot_publish_its_old_steering_clearance (test_runtime.RuntimeTests.test_invalid_sector_cannot_publish_its_old_steering_clearance) ... 11:09:18 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:18 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_invalid_yaw_does_not_crash_before_logger_initialization (test_runtime.RuntimeTests.test_invalid_yaw_does_not_crash_before_logger_initialization) ... 11:09:18 [WARNING] combined_app: Invalid GARBY_LIDAR_YAW_OFFSET_DEG; using 0 degrees
+ok
+test_lost_completion_is_recovered_by_idempotent_outcome_query (test_runtime.RuntimeTests.test_lost_completion_is_recovered_by_idempotent_outcome_query) ... 08:16:40 [INFO] combined_app: Firebase reset command bridge started.
+08:17:10 [INFO] combined_app: Firebase reset command bridge stopped.
+ok
+test_mailbox_handles_sequence_wrap (test_runtime.RuntimeTests.test_mailbox_handles_sequence_wrap) ... ok
+test_manual_start_uses_end_to_end_readiness_without_sensor_values (test_runtime.RuntimeTests.test_manual_start_uses_end_to_end_readiness_without_sensor_values) ... 11:09:18 [INFO] combined_app: Manual start unavailable: Waiting for both controllers
+11:09:18 [INFO] combined_app: Executor state: IDLE
+11:09:18 [INFO] combined_app: Manual start requested; bypassing scale/bin trigger thresholds.
+11:09:18 [INFO] combined_app: Manual start unavailable: Start requested; waiting for acknowledgement
+11:09:18 [INFO] combined_app: Manual start 1794625758983: accepted by executor
+11:09:18 [INFO] combined_app: Executor state: OUTBOUND
+ok
+test_map_keeps_acquisition_age_and_rejected_scans_cannot_refresh_it (test_runtime.RuntimeTests.test_map_keeps_acquisition_age_and_rejected_scans_cannot_refresh_it) ... 11:09:19 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:19 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_map_never_reuses_previous_finite_returns_for_missing_or_invalid_scan (test_runtime.RuntimeTests.test_map_never_reuses_previous_finite_returns_for_missing_or_invalid_scan) ... 11:09:19 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:19 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_missing_sensor_board_is_reported_unavailable_and_retried (test_runtime.RuntimeTests.test_missing_sensor_board_is_reported_unavailable_and_retried) ... ok
+test_missing_side_sector_fails_closed (test_runtime.RuntimeTests.test_missing_side_sector_fails_closed) ... 11:09:19 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:19 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_missing_zero_future_or_malformed_stamp_fails_closed (test_runtime.RuntimeTests.test_missing_zero_future_or_malformed_stamp_fails_closed) ... ok
+test_moving_object_prediction_only_adds_stop_and_slow_and_follows_the_front_bypass (test_runtime.RuntimeTests.test_moving_object_prediction_only_adds_stop_and_slow_and_follows_the_front_bypass) ... 11:09:19 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:19 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_new_front_obstacle_cannot_urgently_clear_an_invalid_rear (test_runtime.RuntimeTests.test_new_front_obstacle_cannot_urgently_clear_an_invalid_rear) ... 11:09:19 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:19 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:19 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_no_detected_lidar_stops_driver_start_with_a_clear_reason (test_runtime.RuntimeTests.test_no_detected_lidar_stops_driver_start_with_a_clear_reason) ... ok
+test_no_first_scan_cannot_produce_clearance (test_runtime.RuntimeTests.test_no_first_scan_cannot_produce_clearance) ... ok
+test_no_scan_yet_is_reported_as_waiting_and_still_holds_stop (test_runtime.RuntimeTests.test_no_scan_yet_is_reported_as_waiting_and_still_holds_stop) ... 11:09:20 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:20 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_obstacle_clears_after_fresh_scans (test_runtime.RuntimeTests.test_obstacle_clears_after_fresh_scans) ... 11:09:20 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:20 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:20 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_old_clear_cannot_replace_new_urgent_stop (test_runtime.RuntimeTests.test_old_clear_cannot_replace_new_urgent_stop) ... ok
+test_old_disconnect_cannot_remove_current_client (test_runtime.RuntimeTests.test_old_disconnect_cannot_remove_current_client) ... ok
+test_old_reset_completion_cannot_overwrite_new_request (test_runtime.RuntimeTests.test_old_reset_completion_cannot_overwrite_new_request) ... ok
+test_old_source_stamps_do_not_rebase_and_current_scan_recovers (test_runtime.RuntimeTests.test_old_source_stamps_do_not_rebase_and_current_scan_recovers) ... 11:09:20 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:20 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_partial_scan_quality_loss_is_urgent_in_each_direction (test_runtime.RuntimeTests.test_partial_scan_quality_loss_is_urgent_in_each_direction) ... 11:09:20 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:20 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_quality_loss_cannot_urgently_clear_an_existing_front_obstacle (test_runtime.RuntimeTests.test_quality_loss_cannot_urgently_clear_an_existing_front_obstacle) ... 11:09:21 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:21 [INFO] combined_app: LiDAR chassis zones: FRONT_BOX, TURN_FRONT
+ok
+test_read_only_controls_bypass_selected_thresholds_without_changing_readings (test_runtime.RuntimeTests.test_read_only_controls_bypass_selected_thresholds_without_changing_readings) ... 11:09:21 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:21 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_recovered_scan_does_not_mix_pre_outage_wall_history (test_runtime.RuntimeTests.test_recovered_scan_does_not_mix_pre_outage_wall_history) ... 11:09:22 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:22 [INFO] combined_app: LiDAR chassis zones: clear
+11:09:22 [INFO] combined_app: LiDAR chassis zones: SLOW
+ok
+test_recovered_side_wall_does_not_mix_pre_dropout_estimates (test_runtime.RuntimeTests.test_recovered_side_wall_does_not_mix_pre_dropout_estimates) ... 11:09:22 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:22 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_return_may_finish_after_acceptance_window (test_runtime.RuntimeTests.test_return_may_finish_after_acceptance_window) ... 08:16:40 [INFO] combined_app: Firebase reset command bridge started.
+08:21:20 [INFO] combined_app: Firebase reset command bridge stopped.
+ok
+test_runtime_fixture_isolates_persistent_operator_state (test_runtime.RuntimeTests.test_runtime_fixture_isolates_persistent_operator_state) ... ok
+test_runtime_gui_wires_buttons_to_real_control_events (test_runtime.RuntimeTests.test_runtime_gui_wires_buttons_to_real_control_events) ... ok
+test_sensor_reader_opens_the_detected_port_and_reads_it (test_runtime.RuntimeTests.test_sensor_reader_opens_the_detected_port_and_reads_it) ... 11:09:24 [INFO] combined_app: Serial sensor bridge started.
+11:09:24 [INFO] combined_app: Opened sensor serial /dev/ttyUSB4 at 9600 baud.
+11:09:24 [INFO] combined_app: Serial sensor bridge stopped.
+ok
+test_side_wall_estimate_requires_current_finite_narrow_returns (test_runtime.RuntimeTests.test_side_wall_estimate_requires_current_finite_narrow_returns) ... 11:09:24 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:24 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_slow_cadence_does_not_extend_permission_into_outage (test_runtime.RuntimeTests.test_slow_cadence_does_not_extend_permission_into_outage) ... 11:09:25 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:25 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_snapshot_keeps_its_deadline_when_evidence_expires_during_construction (test_runtime.RuntimeTests.test_snapshot_keeps_its_deadline_when_evidence_expires_during_construction) ... 11:09:25 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:25 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_status_polls_refresh_control_without_filling_gui_log (test_runtime.RuntimeTests.test_status_polls_refresh_control_without_filling_gui_log) ... 11:09:25 [INFO] combined_app: Executor state: FAULT
+ok
+test_status_request_burst_preserves_path_but_bounds_steering_traffic (test_runtime.RuntimeTests.test_status_request_burst_preserves_path_but_bounds_steering_traffic) ... 11:09:25 [INFO] combined_app: On-demand status responder started.
+11:09:25 [INFO] combined_app: On-demand status responder stopped.
+ok
+test_summary_cannot_refresh_old_distance_when_current_sector_is_missing (test_runtime.RuntimeTests.test_summary_cannot_refresh_old_distance_when_current_sector_is_missing) ... 11:09:25 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:25 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_weight_unavailability_clears_firebase_freshness (test_runtime.RuntimeTests.test_weight_unavailability_clears_firebase_freshness) ... ok
+test_weight_unavailable_notification_does_not_authorize_motion (test_runtime.RuntimeTests.test_weight_unavailable_notification_does_not_authorize_motion) ... ok
+test_zero_range_samples_are_unavailable_even_with_zero_minimum (test_runtime.RuntimeTests.test_zero_range_samples_are_unavailable_even_with_zero_minimum) ... 11:09:26 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:26 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_malformed_metadata_clears_health_and_queues_stop_immediately (test_runtime.ScanCallbackGuardTests.test_malformed_metadata_clears_health_and_queues_stop_immediately) ... 11:09:26 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:26 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_processing_exception_fails_closed_and_keeps_the_executor_alive (test_runtime.ScanCallbackGuardTests.test_processing_exception_fails_closed_and_keeps_the_executor_alive) ... 11:09:26 [INFO] combined_app: First LiDAR scan received with 360 range samples.
+11:09:26 [INFO] combined_app: LiDAR chassis zones: clear
+ok
+test_path_and_steering_queue_the_same_acquisition_deadline (test_runtime.StatusStreamTests.test_path_and_steering_queue_the_same_acquisition_deadline) ... 11:09:26 [INFO] combined_app: On-demand status responder started.
+11:09:27 [INFO] combined_app: On-demand status responder stopped.
+ok
+test_request_flood_cannot_exceed_the_scan_rate_budget (test_runtime.StatusStreamTests.test_request_flood_cannot_exceed_the_scan_rate_budget) ... 11:09:27 [INFO] combined_app: On-demand status responder started.
+11:09:28 [INFO] combined_app: On-demand status responder stopped.
+ok
+test_unexpected_exception_cannot_silently_end_the_status_stream (test_runtime.StatusStreamTests.test_unexpected_exception_cannot_silently_end_the_status_stream) ... ok
+test_unrequested_stream_keeps_the_watchdog_fed (test_runtime.StatusStreamTests.test_unrequested_stream_keeps_the_watchdog_fed) ... 11:09:30 [INFO] combined_app: On-demand status responder started.
+11:09:31 [INFO] combined_app: On-demand status responder stopped.
+ok
+test_exception_releases_the_lease (test_runtime_support.LeaseTests.test_exception_releases_the_lease) ... ok
+test_second_instance_is_rejected_until_owner_exits (test_runtime_support.LeaseTests.test_second_instance_is_rejected_until_owner_exits) ... ok
+test_separate_configured_resources_can_have_separate_locks (test_runtime_support.LeaseTests.test_separate_configured_resources_can_have_separate_locks) ... ok
+
+======================================================================
+ERROR: test_strict_pin_candidates_are_unique_bounded_and_from_one_scan (test_ble_support.DiscoveryEvidenceTests.test_strict_pin_candidates_are_unique_bounded_and_from_one_scan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py", line 686, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py", line 88, in test_strict_pin_candidates_are_unique_bounded_and_from_one_scan
+    self.assertEqual(scans[0]["adapter"], "hci9")
+                     ~~~~~~~~^^^^^^^^^^^
+KeyError: 'adapter'
+
+======================================================================
+ERROR: test_missing_explicit_setup_fails_before_python (test_launcher.LauncherTests.test_missing_explicit_setup_fails_before_python)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_launcher.py", line 27, in test_missing_explicit_setup_fails_before_python
+    result = subprocess.run(['bash', str(Path(__file__).with_name('run_bridge.sh'))],
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 1538, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+======================================================================
+ERROR: test_ros_setup_can_read_unset_variables_and_preflight_is_forwarded (test_launcher.LauncherTests.test_ros_setup_can_read_unset_variables_and_preflight_is_forwarded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_launcher.py", line 19, in test_ros_setup_can_read_unset_variables_and_preflight_is_forwarded
+    result = subprocess.run(['bash', str(Path(__file__).with_name('run_bridge.sh')),
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\subprocess.py", line 1538, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+======================================================================
+ERROR: test_reflection_only_exchanges_lateral_sectors_even_with_yaw (test_lidar_orientation.LidarOrientationTests.test_reflection_only_exchanges_lateral_sectors_even_with_yaw) (yaw=-90)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_lidar_orientation.py", line 139, in test_reflection_only_exchanges_lateral_sectors_even_with_yaw
+    original = self.produce(self.runtime(yaw=yaw, reflect="0"), scan)[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_lidar_orientation.py", line 42, in produce
+    return node, frames.get_nowait(), path, fields
+                 ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\queue.py", line 199, in get_nowait
+    return self.get(block=False)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\queue.py", line 168, in get
+    raise Empty
+_queue.Empty
+
+======================================================================
+ERROR: test_both_orders_through_real_serial_reads (test_port_detection.RealSerialEndToEndTests.test_both_orders_through_real_serial_reads)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_port_detection.py", line 276, in test_both_orders_through_real_serial_reads
+    lidar = self.serve(LIDAR_STREAM, stop)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_port_detection.py", line 258, in serve
+    master, slave = os.openpty()
+                    ^^^^^^^^^^
+AttributeError: module 'os' has no attribute 'openpty'
+
+======================================================================
+ERROR: test_sensor_search_leaves_a_silent_port_after_its_window (test_port_detection.RealSerialEndToEndTests.test_sensor_search_leaves_a_silent_port_after_its_window)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_port_detection.py", line 287, in test_sensor_search_leaves_a_silent_port_after_its_window
+    master, slave = os.openpty()
+                    ^^^^^^^^^^
+AttributeError: module 'os' has no attribute 'openpty'
+
+======================================================================
+FAIL: test_discovery_wrong_pin_reports_observed_rejected_candidate (test_ble_support.ConnectionTests.test_discovery_wrong_pin_reports_observed_rejected_candidate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py", line 686, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_ble_support.py", line 193, in test_discovery_wrong_pin_reports_observed_rejected_candidate
+    self.assertIn("adapter=hci9", message)
+AssertionError: 'adapter=hci9' not found in 'WARNING:combined_app:BLE discovery failed: ConnectionError: GarbyESP32: GARBY-identifying advertisements rejected by pinned address; events=1; adapter=platform default; pinned_address=00:00:00:00:00:00; rejected_candidates=AA:BB:CC:DD:EE:FF; check selection, adapter/rfkill, ESP32 advertising, and other connected clients'
+
+======================================================================
+FAIL: test_wrong_pin_reports_rejected_garby_instead_of_absent_advertising (test_check_ble.DiagnosticTests.test_wrong_pin_reports_rejected_garby_instead_of_absent_advertising)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\napht\AppData\Roaming\uv\python\cpython-3.12.8-windows-x86_64-none\Lib\asyncio\base_events.py", line 686, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_check_ble.py", line 55, in test_wrong_pin_reports_rejected_garby_instead_of_absent_advertising
+    self.assertIn("adapter=hci9", message)
+AssertionError: 'adapter=hci9' not found in 'DISCOVERY FAIL: GARBY-identifying advertisements rejected by pinned address; events=1; adapter=platform default; pinned_address=00:00:00:00:00:00; rejected_candidates=AA:BB:CC:DD:EE:FF; check selection, adapter power/rfkill, ESP32 firmware, and other clients'
+
+======================================================================
+FAIL: test_explicitly_configured_port_of_the_other_role_is_left_alone (test_port_detection.PortDetectorTests.test_explicitly_configured_port_of_the_other_role_is_left_alone)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "Q:\GARBY-CODEBASE\GarbyMostLatest-ForTesting\RasPi\test_port_detection.py", line 154, in test_explicitly_configured_port_of_the_other_role_is_left_alone
+    self.assertNotIn("/dev/ttyUSB0", [port for port, _ in bus.opened])
+AssertionError: '/dev/ttyUSB0' unexpectedly found in ['/dev/ttyUSB0', '/dev/ttyUSB1']
+
+----------------------------------------------------------------------
+Ran 464 tests in 66.516s
+
+FAILED (failures=3, errors=6)
+INFO walker 1.4 m/s head-on: STOP after 1.04 s, 4.80 m apart
+INFO runner 4.5 m/s head-on: STOP after 0.52 s, 4.88 m apart

@@ -1,0 +1,106 @@
+[
+  {
+    "path": "BLE_Receiver-Final/BLE_Receiver-Final.ino",
+    "sha256": "d82e2e7f761f2ce71c588f49cc1ab10db0439372226e6a04a0b401590824641f"
+  },
+  {
+    "path": "BLE_Receiver-Final/MpuHeading.h",
+    "sha256": "17bad8e11c7ff423a3bb93d9a363eb81d3859cea3709fd7dca7e0c076c7b237c"
+  },
+  {
+    "path": "BLE_Receiver-Final/SteeringAssist.h",
+    "sha256": "340d690509142de9b8caecf15717c9f13e0daed2a72774386bb50c7df2b913ae"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/HeadingControl.h",
+    "sha256": "eec621b1ed34a43df772c9140b434d13c81a501ed323df8e850568c8f16ffa62"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp",
+    "sha256": "3e7a5f5744aa2f30c5f78eb33dd908ea162437b15f6a9dd595bcad6f92ece863"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h",
+    "sha256": "0f5b7c1d11285cd0dafb4b45a7649a1867914100cd7a1517a2fae669268c9bbb"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.ino",
+    "sha256": "465a4c7ea4fdad9b046832d4f88580ed15931ce1c30b0a5235d3f36f4941944e"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/pointsRun.ino",
+    "sha256": "031abe24abad2ab7c4fafce213a453f5e65579c595fdb2d5823940e4a38108d7"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/SonarSweep.h",
+    "sha256": "96a96a79dd037a7047b97e0c1987cab28c5681852782f449d08107ac819c52a0"
+  },
+  {
+    "path": "RasPi/final_w_serial.py",
+    "sha256": "55eba123c5a03ce43aaacd5fb935c6c280d2dc31ed0322c26136f190edc23c23"
+  },
+  {
+    "path": "RasPi/bridge_core.py",
+    "sha256": "a347b893898f695ec9c3814ef84e0f79e6e8ecd6773f75687a6074c4dfd3bd90"
+  },
+  {
+    "path": "RasPi/disposal_support.py",
+    "sha256": "d5069250a2718399098aa607ad7efd5f1a31ac09290201794062797815524061"
+  },
+  {
+    "path": "RasPi/test_monitor_ui.py",
+    "sha256": "edeba9e7e081db16f85af886bac12263b0fdd5a4142b5edb6de770637a01bfa3"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/Constants.kt",
+    "sha256": "230bd16fad57f2e069a06bca6b9d9629db25cd929da78393402f828b4da7b872"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/DeviceViewModel.kt",
+    "sha256": "2a2785f75492ed428e09d85724299df1e8ae21760a1f053e80ba6cc7ccc93c71"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/DisposalLogic.kt",
+    "sha256": "e45a4e2cf755aad7116ec3c3f359113f831e51dc3646f62a8983e9c2868a4b6c"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/GarbyRealtimeDb.kt",
+    "sha256": "286f8b7eba6bbed935c7abe39d3bdd30bc7df02f5f9ede851869ce059ad78be7"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/Models.kt",
+    "sha256": "c851ddefe00db4dd5166617ffcf0a270ba669c4a89ae8626e51c5e3231105e41"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/MonitoringFlow.kt",
+    "sha256": "39e00626da1c433ff7755be800130887beb55e59fb6a8d47d578cd1f99665eb8"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/PiHealth.kt",
+    "sha256": "fa71fdfbd7d83d2fb7c23f4305ff3b62705c2fc48a2c3c10fba1840361121dda"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/ReturnLogic.kt",
+    "sha256": "cb86fd07f0c4cefc8dbb5f025533fbd1cc314095155099a368c029a61232e174"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/SensorFreshness.kt",
+    "sha256": "ba8dda5645ab0fc233a9e7c65020e930f64460f7360c313b8ec263cf939f419b"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/realtime/Thresholds.kt",
+    "sha256": "5da03611e2b4be27a743a0341fd1fefc83a361907d3c7dfc01c2a25b34748234"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/test/java/com/thesis/garby/realtime/DisposalLogicTest.kt",
+    "sha256": "b38a9b837cc2c8d7a719a453d65e678a6d79776497fca7c8df36a6ddf2cb3210"
+  },
+  {
+    "path": "Garby_MobileApp/app/src/main/java/com/thesis/garby/MainDashboard.kt",
+    "sha256": "425a5695438b46b474640bd9ac327641183ec3ea3855e8af274fe0e202d0b971"
+  },
+  {
+    "path": "Garby_MobileApp/app/build.gradle.kts",
+    "sha256": "dc097da76d413a5f563f3ba5364d930aaca74aa71c65224acbc469e50f789141"
+  }
+]

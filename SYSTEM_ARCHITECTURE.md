@@ -1,5 +1,13 @@
 # GARBY system architecture
 
+Turn recovery update (2026-11-14, build `RECONNECT-20261114`): BLE-session resets invalidate
+path/steering freshness while retaining the executor's turn scope. After bridge boot, a
+running executor's `[MCU ALIVE]` does not prove straight mode. GO is withheld until an
+authoritative `[TURN:START]` or `[TURN:END]` arrives. The executor replays its complete turn
+scope, including stopped holds, before status readiness; repeated START is idempotent.
+An explicit controller `[MCU READY]` or confirmed operator RELEASE establishes idle mode.
+Occupied, stale or absent `T=` continues to stop an interrupted turn after reconnection.
+
 Release: 2026-10-04. Software builds and behavioral tests are documented in
 `VALIDATION_RESULTS.md`; physical acceptance remains hardware-unverified.
 This file describes the active source. Older audit reports are historical.
@@ -11,10 +19,10 @@ This file describes the active source. Older audit reports are historical.
 | Raspberry Pi | `RasPi/final_w_serial.py`, `bridge_core.py`, `ble_support.py`, `runtime_support.py` | ROS 2 LiDAR safety, wall geometry, BLE central, exclusive runtime ownership, sensor serial input, asynchronous Firebase telemetry and correlated return relay |
 | BLE ESP32-S3 | `BLE_Receiver-Final/BLE_Receiver-Final.ino`, `MpuHeading.h`, `SteeringAssist.h` | BLE GATT server, path validation and STOP latch, MPU/rate feedback, confirmed LiDAR centering, controller UART transport |
 | Main ESP32 | `MAIN_EXECUTOR_CODE.ino/.cpp/.h`, `pointsRun.ino` | Motor targets, local sonar protection, load/gas triggers, route state, modem/SMS worker |
-| Android | `Garby_MobileApp/app/` | Authenticated Firebase dashboard, freshness display, explicit return request and matching completion |
+| Android | `Garby_MobileApp/app/` | Authenticated Firebase dashboard, confirmed manual-disposal intent, explicit return request and matching completion |
 
-The Android-directory Python file is a compatibility launcher into `RasPi/`;
-it no longer contains another implementation. The Pi simulator is a manual
+The Android project contains no Pi code (its old compatibility launcher was
+removed on 2026-11-14; run `RasPi/final_w_serial.py`). The Pi simulator is a manual
 test producer, not production firmware. `Test/Test.ino` is a serial-only sketch.
 
 ```text
@@ -23,6 +31,7 @@ MPU6050 -> BLE ESP32-S3 continuous heading (M, 50 Hz) + wall fits (W) -> main ES
 Sensor board -> Pi telemetry -> bridge -> main ESP32 gas trigger
 Main ESP32 load/state -> bridge notifications -> Pi -> Firebase -> Android
 Android return intent -> Firebase -> Pi -> bridge -> main ESP32
+Android confirmed disposal intent -> Firebase claim -> Pi START -> bridge -> main ESP32
 Main ESP32 matching outcome -> bridge -> Pi -> Firebase -> Android
 ```
 
@@ -266,7 +275,7 @@ P:<uint32-seq>|F=<C|W|O|H|S>|B=<C|O|H|S>|T=<C|O|S>
    (W: clear to the stop, caution zone ahead; T: spin-sweep clearance, gated only in turns)
 S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|CF=..|CL=..|CR=..|A=<uint32>[|WL=..][|WR=..][|H=..]|G=<ms>|T=..
    (WL/WR: wall distances from the centreline, cm; H: heading vs walls, deg, + = left;
-    G: scan age at snapshot, ms; T: legacy tilt, ignored)
+    G: scan age refreshed immediately before the Pi's GATT write, ms; T: legacy tilt, ignored)
 S:<same-seq>|STABLE
 SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..
 [HEALTH:1:UUUUU]
@@ -334,6 +343,15 @@ writes are acknowledged. Steering/telemetry exceeding the characteristic's
 negotiated write-without-response limit also use acknowledged writes; this
 handles a 20-byte limit during MTU negotiation or on older BlueZ. Failed safety
 writes request a fresh snapshot.
+The P and S mailbox entries retain the same acquisition deadline. After waiting
+for the writer lock, an expired P becomes STOP and an expired S becomes STABLE;
+otherwise S.G is recomputed from that deadline. Age-field growth beyond the
+244-byte limit also produces STABLE. The bridge adds its actual mailbox wait and
+the 30 ms transit estimate. Steering permission expires at 500 ms acquisition age,
+with none for absent age; walls retain their separate 900 ms forwarding limit.
+Duplicate acquisitions refresh neither product. BlueZ/GATT delays after the
+write begins are estimated, not measured end to end; P still has no
+controller-checked source acquisition timestamp.
 Bridge BLE callbacks validate framing and copy/post bounded data. A valid
 operator ESTOP also asserts a protected stop latch immediately in the callback;
 UART, notifications, navigation resets and connection-parameter work run in `loop()`.
@@ -416,6 +434,34 @@ handshake retry with motors held fail-closed. The Pi paints the monitor before
 workers start, begins BLE discovery before ROS setup, and reschedules GUI
 refreshes after a snapshot/drawing exception.
 Use the updated Pi and both firmware projects together for manual start.
+
+### Confirmed manual disposal (2026-11-13)
+
+The Pi monitor and Android dashboard label the threshold-bypassing action **Manual disposal**
+and require confirmation. It dispatches the existing outbound route from IDLE, independently
+of bin/gas/load readings. Automatic triggers and all motion gates retain their behavior.
+The executor emits `[DISPOSAL READY:1]` with status only when its connection is ready, it is
+IDLE, motor channels exist, and no stop/fault/reset/destination state prevents a new run.
+The bridge suppresses that eligibility on an unready UART/BLE session or operator stop.
+The Pi additionally requires fresh SYSTEM READY and IDLE (7.5 s) and no local operator stop.
+It publishes `status/manualDisposalReady` and `manualDisposalUpdatedAt` on controller reports.
+These are eligibility hints, never clearance; Android expires them after 15 s with 5 s future
+tolerance and still requires a live Pi, cloud, phone internet, BLE and explicit IDLE.
+
+`commands/dispose` is separate from return `commands/reset`. Android submits one version-1
+pending command with a random 32-hex `requestId`, server `requestedAt`, and operator UID.
+Its compare-and-set transaction refuses concurrent replacements or unresolved commands.
+The Pi polls every 2 s in its own worker, rejects pending requests older than 30 s or over
+5 s in the future, then transactionally records `dispatching`, `controllerRequestId` and
+`claimedAt` **before** enqueueing one `[START:<id>]`. Claim I/O uses the same 2-second queue
+budget; the GATT writer rechecks session, state and emergency stop. A restart or uncertain
+claim can only recover with `[START STATUS:<id>]`, never resend START. After at most 15 s
+without a matching result, the cloud result is `unconfirmed`. A matching START ACK alone
+produces terminal `accepted`; rejection produces `failed`. Accepted means the executor
+accepted the outbound route, not arrival or wheel movement. The ordinary robot state shows
+arrival; return remains a separate explicit request. Identity-matched cloud transactions
+preserve terminal results and newer requests. See `docs/manual-disposal-2026-11-13.md`.
+
 The bench producer uses the same discovery/GATT/framing helpers and sequenced
 mailbox, but its synthetic distances must not
 replace the production LiDAR runtime.
@@ -425,6 +471,9 @@ UART. Its firmware is not provided here. `US=999` and gas `-1` mean UNAVAILABLE,
 not full/danger/clearance. Trash-level ultrasonic telemetry is not path sonar.
 
 ## Pi process and serial ownership
+
+Both Python install profiles require NumPy for chassis zones, walls and moving
+object prediction. Runtime preflight reports its absence as a failed prerequisite.
 
 Production, the bench simulator, and `check_ble.py --connect` share an OS lock
 through `runtime_support.py`. Its default is `/tmp/garby-bridge.lock` on the Pi;
@@ -493,11 +542,18 @@ centred straight the measured axis becomes the route frame.
 
 Permission bits from the bridge only veto steering toward an unsafe side; with
 none, both wheels run at base speed. A repeated acquisition A refreshes nothing.
-Losing the heading stream mid-straight brakes the robot and waits up to 5 minutes
-(10 s until 2026-11-12; low power after 10 s); after a long outage with a new S3
-reference two wall scans must confirm the route direction within 8° of its right-angle
-grid, and only that residual is corrected. Turns never
-fall back to step counting.
+Every motion start/resume requires heading readiness. Missing heading brakes
+straights, plain/reverse moves and turns. An outage during an existing STOP/sonar
+hold enters the same five-minute recovery deadline (low power after 10 s).
+After at least 10 s with a new S3 reference, two independent fresh wall scans
+agreeing within 1.5 degrees must confirm the route direction within 8 degrees of
+its right-angle grid; only that residual is corrected. Missing/disagreeing walls
+keep it stopped (`verify=WAIT_WALLS`) within that same budget, then the segment
+fails. An off-grid measurement fails immediately. A pair spanning another heading
+reference is discarded. Fresh GO and sonar clearance are still needed afterward.
+Ordinary obstacle holds with continuous valid heading remain indefinite;
+ordinary wall gaps do not trigger recovery verification. Turns never fall back
+to step counting.
 
 Pre-run centring (2026-11-12): before each long hallway run (`runLongHallway`) the
 robot stands still; two wall scans agreeing within 3 cm / 1.5° give its offset and the
@@ -668,8 +724,12 @@ exact server-issued request timestamp, including successive requests by the
 same operator. Structured status
 is authoritative; the obsolete APP boolean cannot resurrect terminal commands.
 The app requires a live connection, fresh heartbeat, BLE and LiDAR health, and
-confirmed destination readiness to enable return. Cached sensor/status data
-becomes stale after 90 s, with 30 s future-clock tolerance.
+confirmed destination readiness (`isReadyToReturn`, and `robotState` AT_DESTINATION
+when published) to enable return, and re-reads the server's status and command
+immediately before writing: the Pi relays any fresh request, and one reaching the
+executor mid-outbound latches a route fault. It shows the Pi's ACK, DONE and FAILED
+with the failure reason. Cached sensor/status data becomes stale after 90 s, with
+30 s future-clock tolerance.
 
 Manual `[RESET]` is reserved for local supervised recovery: after a route fault,
 physically reposition the robot to its known base, then issue it to clear state.
@@ -677,7 +737,8 @@ It must not be used to blindly return from an incomplete route. Correlated app
 retries cannot enter this recovery branch. Deploy Pi and both ESP32s together;
 old firmware cannot acknowledge the new correlated return workflow.
 
-FCM receiving exists in the app, but this repository does not include a deployed
+FCM receiving exists in the app (registered by Firebase Installation ID, published
+at `devices/<id>/fcmInstallationId`), but this repository does not include a deployed
 cloud notification sender or production RTDB authorization rules. Live Firebase
 permissions, anonymous-auth configuration, push delivery, and SIM/SMS delivery
 remain external acceptance items, not verified build results.

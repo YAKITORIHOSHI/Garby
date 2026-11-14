@@ -10,7 +10,7 @@ static void path(const char* packet){settleMpu();handlePathPacket(packet);}
 static void ingress(){settleMpu();processBleIngress();}
 static void runLoop(){settleMpu();loop();}
 static void check(bool ok,const char* label){if(!ok){std::fprintf(stderr,"FAIL %s\n",label);std::exit(1);}std::printf("PASS %s\n",label);}
-static void resetFixture(){fakeNow=10000;resetNavigationState();resetIngressQueues();if(emergencyQueue)xQueueReset(emergencyQueue);operatorStopMarker=0;operatorStopLatched=false;operatorExecutorStopped=false;operatorStopGeneration=0;pendingEmergencyId=pendingReleaseId=pendingRebootId="";operatorRebootScheduled=false;lastEmergencySendMs=0;deviceConnected=true;mcuReady=true;piReady=true;bleBridgeSignalSent=true;bleSessionChanged=readyNoticePending=false;mcuBackpressureStopPending=false;mcuUnackedCommands=0;mcuAckPending=mcuAckFault=false;ESP_Serial.tx.clear();}
+static void resetFixture(){fakeNow=10000;resetNavigationState();turnActive=false;turnStateKnown=true;resetIngressQueues();if(emergencyQueue)xQueueReset(emergencyQueue);operatorStopMarker=0;operatorStopLatched=false;operatorExecutorStopped=false;operatorStopGeneration=0;pendingEmergencyId=pendingReleaseId=pendingRebootId="";operatorRebootScheduled=false;lastEmergencySendMs=0;deviceConnected=true;mcuReady=true;piReady=true;bleBridgeSignalSent=true;bleSessionChanged=readyNoticePending=false;mcuBackpressureStopPending=false;mcuUnackedCommands=0;mcuAckPending=mcuAckFault=false;ESP_Serial.tx.clear();}
 static std::string notificationText(){pNotifyChar->flushScheduledNotifications();std::string text;for(const auto& frame:pNotifyChar->notifications)text+=frame.substr(1);return text;}
 static void checkHealthRelay(){
   resetFixture();processAndRelayMessage("[HEALTH:1:UDXUD]");
@@ -154,6 +154,29 @@ static void sides(const std::string& body){
   handleSidesPacket(("S:"+std::to_string(pathSeq)+"|"+body).c_str());
 }
 static const char* hallway="L=95|R=95|F=300|FL=134|FR=134|BL=134|BR=134|CF=300|CL=95|CR=95|WL=95.0|WR=94.0|H=-1.25|G=200";
+
+static void checkSteeringAcquisitionAge(){
+  mpuFixture();pathSeq=0;clearPath();clearPath();
+  sides("L=95|R=95|F=300|CF=300|CL=95|CR=95|G=700|A=1");
+  check(currentSteeringAllow(fakeNow)==0,"700 ms old clearance cannot grant a 500 ms steering permission");
+  sides("L=95|R=95|F=300|CF=300|CL=95|CR=95|G=400|A=2");
+  check(currentSteeringAllow(fakeNow)==3 && currentSteeringAllow(fakeNow+70)==3 &&
+        currentSteeringAllow(fakeNow+71)==0,
+        "permission expires at acquisition age 500 ms including the 30 ms transit estimate");
+  clearPath();currentFrameReceivedAtMs=fakeNow-120;ESP_Serial.tx.clear();
+  handleSidesPacket(("S:"+std::to_string(pathSeq)+"|L=95|R=95|F=300|CF=300|CL=95|CR=95|WL=95|H=0|G=400|A=3").c_str());
+  check(currentSteeringAllow(fakeNow)==0 && uartLines('W').size()==1 &&
+        uartLines('W').back().rfind("W,3,550,",0)==0,
+        "bridge mailbox time ages both clearance permission and the wall measurement");
+  sides("L=95|R=95|F=300|CF=300|CL=95|CR=95|A=4");
+  check(currentSteeringAllow(fakeNow)==0,"clearance without acquisition age grants no steering");
+  // Unsigned subtraction retains the age when the acquisition predates boot's
+  // millis value (or the clock wraps), instead of creating a fresh lifetime.
+  fakeNow=20;currentFrameReceivedAtMs=fakeNow;stopLatched=false;
+  evaluateSteeringFrame("L=95|R=95|F=300|CF=300|CL=95|CR=95|G=400|A=5");
+  check(currentSteeringAllow(fakeNow)==3 && currentSteeringAllow(fakeNow+71)==0,
+        "acquisition age expiry survives unsigned millis wrap");
+}
 
 static void checkSteeringPermission(){
   SteeringFrame f;
@@ -301,6 +324,35 @@ static void checkTurnSweepAndSlow(){
 // and models ongoing BLE traffic unless told otherwise.
 static void advance(uint32_t ms,bool bleTraffic=true){
   for(uint32_t t=0;t<ms;t+=10){fakeNow+=9;if(bleTraffic)lastDataReceived=fakeNow;loop();}
+}
+static void checkTurnSessionRecovery(){
+  ServerCallbacks callbacks;NimBLEConnInfo info;
+  for(const char* sweep:{"F=C|B=C|T=O","F=C|B=C|T=S","F=C|B=C"}){
+    mpuFixture();pathSeq=0;clearPath();clearPath();handleMcuLine("[TURN:START]");
+    static_cast<NimBLEServerCallbacks*>(&callbacks)->onDisconnect(pServer,info,8);advance(10);
+    static_cast<NimBLEServerCallbacks*>(&callbacks)->onConnect(pServer,info);advance(10);
+    handleMcuLine("[MCU ALIVE]");
+    ESP_Serial.tx.clear();clearPath(sweep);clearPath(sweep);
+    check(turnActive && stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
+          "BLE reconnect retains turn clearance for occupied, stale or missing sweep evidence");
+    ESP_Serial.tx.clear();clearPath();clearPath();
+    check(!stopLatched && ESP_Serial.tx.find("GO\n")!=std::string::npos,
+          "an interrupted turn resumes only after fresh clear sweeps");
+  }
+  mpuFixture();pathSeq=0;mcuReady=false;turnActive=false;
+  handleMcuLine("[MCU ALIVE]");
+  ESP_Serial.tx.clear();clearPath();clearPath();
+  check(stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
+        "a rebooted bridge cannot issue GO before learning the live executor's turn mode");
+  handleMcuLine("[TURN:START]");ESP_Serial.tx.clear();
+  clearPath("F=C|B=C|T=O");clearPath("F=C|B=C|T=O");
+  check(turnActive && stopLatched && ESP_Serial.tx.find("GO\n")==std::string::npos,
+        "the executor's replay restores the occupied turn-sweep gate after bridge reboot");
+  clearPath();handleMcuLine("[TURN:START]");clearPath();
+  check(!stopLatched,"repeated turn status does not restart clearance confirmations");
+  handleMcuLine("[TURN:END]");clearPath("F=C|B=C|T=O");
+  check(!turnActive && !stopLatched,"confirmed turn end restores ordinary straight clearance");
+  resetFixture();
 }
 static void pumpWithPath(uint32_t ms){
   for(uint32_t t=0;t<ms;t+=10){
@@ -524,10 +576,12 @@ static void checkStillBiasRefresh(){
 int main(){
   setup();check(NimBLEDevice::getAdvertising()->scanResponse && pServer->autoAdvertise,"scan response and automatic advertising recovery are configured");
   check(NimBLEDevice::getPower()==9,"NimBLE power API receives dBm rather than the numeric ESP-IDF enum");
+  checkSteeringAcquisitionAge();
   checkHealthRelay();
   checkSteeringPermission();
   checkHeadingStreamAndWalls();
   checkTurnSweepAndSlow();
+  checkTurnSessionRecovery();
   checkPortedRegressions();
   checkSteeringFrameGates();
   checkStillBiasRefresh();
@@ -569,6 +623,22 @@ int main(){
   resetFixture();pNotifyChar->notifications.clear();handleMcuLine("[START ACK:1234567890003]");
   check(notificationText()=="[START ACK:1234567890003]\n",
         "executor start acknowledgement returns to Pi through bounded notifications");
+  resetFixture();pNotifyChar->notifications.clear();handleMcuLine("[DISPOSAL READY:1]");
+  check(notificationText()=="[DISPOSAL READY:1]\n" && stopLatched && !pathStreamSeen,
+        "manual disposal capability is relayed without supplying path evidence");
+  for(int unavailable=0;unavailable<4;unavailable++){
+    resetFixture();pNotifyChar->notifications.clear();
+    if(unavailable==0)piReady=false;
+    if(unavailable==1)mcuAckFault=true;
+    if(unavailable==2)operatorStopLatched=true;
+    if(unavailable==3)mcuBackpressureStopPending=true;
+    handleMcuLine("[DISPOSAL READY:1]");
+    check(notificationText().empty(),"unready or emergency-stopped bridge withholds disposal readiness");
+  }
+  resetFixture();
+  for(const char* malformed:{"[START:0]","[START:01]","[START STATUS:01]"})
+    processAndRelayMessage(malformed);
+  check(ESP_Serial.tx.empty(),"bridge rejects noncanonical disposal IDs before UART relay");
   piReady=false;pNotifyChar->notifications.clear();handleMcuLine("[SYSTEM READY]");
   check(notificationText().empty(),"stale controller readiness cannot bypass Pi readiness");
   resetFixture();
