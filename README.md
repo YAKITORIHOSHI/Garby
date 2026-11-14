@@ -38,6 +38,10 @@ by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTO
 
 ## Repository layout
 
+The single **Most Latest** release contains only `GarbyMostLatest-Test1.zip` and
+`GarbyMostLatest-Test2.zip`. Download the Android APK separately from
+[Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App/releases/tag/most-latest).
+
 | Folder | Contents |
 | --- | --- |
 | `RasPi/` | Pi runtime (`final_w_serial.py` is the entry point), monitor, launch scripts, tests |

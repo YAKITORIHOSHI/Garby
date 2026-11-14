@@ -12,7 +12,7 @@
 - **MCU upload requirement: Both**, complete bridge/executor sketches, build
   `RECONNECT-20261114`. No upload was performed here; installed identity remains unknown.
   This follow-up changes only a Pi test; prior manual-disposal Pi deployment remains required.
-- Mobile Test1/Test2 assets preserve the previous app and the new candidate separately.
+- Robot Test1/Test2 ZIPs preserve the previous robot workspace and the new candidate.
   Full review, Windows Pi-suite limitations and exact sibling patch are in
   `docs/robot-review-2026-11-14.md` and its verification directory.
 

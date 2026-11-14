@@ -8,6 +8,10 @@ Gradle project, app evidence or APKs into this repository or its current release
 Use links and an optional external checkout for interoperability checks. Keep preserved
 Test1 archives unchanged; current Test2 must respect the repository boundary.
 
+Publish exactly one release named `Most Latest`, with only `GarbyMostLatest-Test1.zip`
+and `GarbyMostLatest-Test2.zip` as uploaded assets. Do not attach APKs, checksum files or
+extra archives. Preserve both existing ZIP contents during release-list cleanup.
+
 This directory contains a coordinated Raspberry Pi, BLE/MPU bridge, motor
 executor and Android system. Start with `README.md` and the relevant sections of
 `SYSTEM_ARCHITECTURE.md`. Use the project skill at
