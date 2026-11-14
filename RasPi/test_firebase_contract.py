@@ -134,8 +134,10 @@ class FirebaseContractTests(unittest.TestCase):
         self.assertEqual(saved['status'], 'done')
 
     def test_android_and_pi_target_same_database_and_device(self):
-        root = Path(__file__).resolve().parents[1]
-        android = root / 'Garby_MobileApp/app'
+        mobile_root = os.environ.get('GARBY_MOBILE_APP_ROOT')
+        if not mobile_root:
+            self.skipTest('Optional cross-repository check: set GARBY_MOBILE_APP_ROOT to a separate app checkout')
+        android = Path(mobile_root) / 'app'
         config = json.loads((android / 'google-services.json').read_text())
         constants = (android / 'src/main/java/com/thesis/garby/realtime/Constants.kt').read_text()
         url = re.search(r'const val DATABASE_URL = "([^"]+)"', constants).group(1)

@@ -1,2 +1,0 @@
-c817936049685b425f486eddc0d5cab1dc4ab72ecc6fec1fdecc962080c554d8  garby-most-latest-release-unsigned.apk
-8c32790eb9273341c65c84f6a76a21560ae53c3769909cccf149acc224c7da75  garby-most-latest.apk

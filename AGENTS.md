@@ -1,5 +1,13 @@
 # GARBY project maintenance
 
+## Repository ownership
+
+This repository owns robot source, robot tools and robot verification. The Android project
+is maintained at https://github.com/YAKITORIHOSHI/Garby-Mobile-App. Never copy its source,
+Gradle project, app evidence or APKs into this repository or its current release packages.
+Use links and an optional external checkout for interoperability checks. Keep preserved
+Test1 archives unchanged; current Test2 must respect the repository boundary.
+
 This directory contains a coordinated Raspberry Pi, BLE/MPU bridge, motor
 executor and Android system. Start with `README.md` and the relevant sections of
 `SYSTEM_ARCHITECTURE.md`. Use the project skill at

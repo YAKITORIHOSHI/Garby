@@ -20,8 +20,8 @@ python3 -B tools/source_sanity.py .
 ```
 
 `python3 -B tools/verify_project.py --host-only` provides the existing combined
-host workflow, including syntax and Android static checks. Its default full mode
-also builds ESP32 and Android targets: inspect target options and build paths
+robot host workflow, including syntax checks. Its default full mode builds ESP32
+targets; `--mobile-repo <path>` opts in to a separate app checkout without embedding it: inspect target options and build paths
 against the sketch guidance before using it. Prefer the scoped commands when
 only one subsystem changed. For skill-only work, use the skill creator validator
 and a proportionate behavior review; robot tests need not be repeated.

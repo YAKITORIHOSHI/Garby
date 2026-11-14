@@ -1,3 +1,5 @@
+> Historical synchronization report. Its embedded-app packaging was corrected by repository separation; see `repository-separation-2026-11-14.md`.
+
 # Coordinated repository synchronization — 2026-11-14
 
 This publishes the maintained testing workspace to `YAKITORIHOSHI/Garby` and embeds the
@@ -22,7 +24,7 @@ Verification: 64 Android unit tests passed, lint reported no issues, both APK va
 eight firmware host programs passed 596 assertions; actual ESP32-S3 and ESP32 targets compiled
 with one worker. The final source export also passed structural/JSON checks and Python syntax
 checks. Detailed evidence is in
-`Garby_MobileApp/docs/verification/2026-11-14-mobile-integration/`.
+`docs/verification/2026-11-14-robot-review/`.
 
 The full Pi suite on Windows completed 464 tests with 3 failures and 6 errors, including
 Linux adapter/bash/POSIX/path expectations and one unresolved scan fixture. Linux target,

@@ -1,0 +1,49 @@
+{
+  "robotEdits": [
+    {
+      "path": "BLE_Receiver-Final/BLE_Receiver-Final.ino",
+      "afterSha256": "d82e2e7f761f2ce71c588f49cc1ab10db0439372226e6a04a0b401590824641f"
+    },
+    {
+      "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp",
+      "afterSha256": "3e7a5f5744aa2f30c5f78eb33dd908ea162437b15f6a9dd595bcad6f92ece863"
+    },
+    {
+      "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h",
+      "afterSha256": "0f5b7c1d11285cd0dafb4b45a7649a1867914100cd7a1517a2fae669268c9bbb"
+    },
+    {
+      "path": "tools/firmware_tests/test_bridge.cpp",
+      "afterSha256": "24fc25177babf5da93530f561a8f6c26da3c4bb18454921ba2a2cd7cdfd6acd9"
+    },
+    {
+      "path": "tools/firmware_tests/test_controller.cpp",
+      "afterSha256": "32bf9408b5bde41c49e31eadaaaaa2bd4e98a3b95c81a5e31193e93bc3482ebe"
+    },
+    {
+      "path": "tools/firmware_tests/test_motor_direction.cpp",
+      "afterSha256": "2e6f34bddd0dd8bfc37d854a059e09b50ec9dc6b3b9fb854f112cc026c158adb"
+    },
+    {
+      "path": "tools/firmware_tests/test_system.cpp",
+      "afterSha256": "aa2e60f9ee9b6f9560ce7b1c9bb3096b9c625a1d1a9790e5564cf0b1a25dc7d2"
+    },
+    {
+      "path": "RasPi/test_monitor_ui.py",
+      "afterSha256": "edeba9e7e081db16f85af886bac12263b0fdd5a4142b5edb6de770637a01bfa3"
+    },
+    {
+      "path": "SYSTEM_ARCHITECTURE.md",
+      "afterSha256": "3557651e6bdb7dffb1bf2bb7c447782c60d07d3ff04c2218bef3ea2ce0a11db8"
+    },
+    {
+      "path": "RELEASE_NOTES.md",
+      "afterSha256": "467bd720ec20dc99662f084e8832e0c2a2a5b1ba8a2b57ad8514c03f215f5c77"
+    },
+    {
+      "path": "DEPLOYMENT_AND_ACCEPTANCE.md",
+      "afterSha256": "eaa96aa237695412f5da05dd15a4dcd954783dcc1a0044dbf8bf4815bbd2c88e"
+    }
+  ],
+  "evidenceDirectory": "docs/verification/2026-11-14-robot-review"
+}

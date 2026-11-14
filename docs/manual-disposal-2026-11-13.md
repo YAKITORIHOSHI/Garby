@@ -66,7 +66,7 @@ ordinary executor state reports arrival and any subsequent fault/emergency stop.
 
 ## Windows and Firebase preparation
 
-Copy the whole `Garby_MobileApp/` project to Windows. Keep machine-specific SDK paths in its
+Clone https://github.com/YAKITORIHOSHI/Garby-Mobile-App separately on Windows. Keep machine-specific SDK paths in its
 own `local.properties`; do not reuse another computer's SDK path. Use the project's existing
 JDK/SDK/Gradle versions from its README. From `Garby_MobileApp/` in PowerShell:
 
@@ -87,10 +87,10 @@ For a network-share checkout, an example machine-local setting is
 `garby.buildRoot=C:/GarbyBuild/manual-disposal` in `local.properties`.
 
 Merge the disposal-only example at
-[`Garby_MobileApp/firebase/manual-disposal.rules.example.json`](../Garby_MobileApp/firebase/manual-disposal.rules.example.json)
+[`Garby_MobileApp/firebase/manual-disposal.rules.example.json`](https://github.com/YAKITORIHOSHI/Garby-Mobile-App/blob/main/firebase/manual-disposal.rules.example.json)
 into the actual rules, preserving existing status/sensor/return access. Test it first in the
 Firebase Emulator or Rules Playground as described in
-[`FIREBASE_CONFIGURATION.md`](../Garby_MobileApp/FIREBASE_CONFIGURATION.md).
+[`FIREBASE_CONFIGURATION.md`](https://github.com/YAKITORIHOSHI/Garby-Mobile-App/blob/main/FIREBASE_CONFIGURATION.md).
 The example is JSON-checked; live rule semantics/permissions have not been tested or deployed.
 No live database command or rules update was sent during development.
 

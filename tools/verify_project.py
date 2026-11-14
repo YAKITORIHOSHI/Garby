@@ -1,4 +1,4 @@
-"""One repeatable software validation command; never flashes hardware."""
+"""Verify the robot repository; optionally check a separately cloned Android app."""
 import argparse
 import os
 from pathlib import Path
@@ -25,11 +25,18 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host-only", action="store_true", help="Skip ESP32 target and Android builds; report those as unverified")
+    parser.add_argument("--host-only", action="store_true", help="Skip target builds; report them as unverified")
+    parser.add_argument("--mobile-repo", type=Path, help="Opt in to checks of a separate Garby-Mobile-App checkout")
     args = parser.parse_args()
+    mobile = args.mobile_repo.resolve() if args.mobile_repo else None
+    if mobile is not None:
+        if not (mobile / "app/build.gradle.kts").is_file():
+            parser.error("--mobile-repo must point to a separate Android project")
+        os.environ["GARBY_MOBILE_APP_ROOT"] = str(mobile)
     with tempfile.TemporaryDirectory(prefix="garby-syntax-") as directory:
-        sources = (list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py"))
-                   + list((ROOT / "Garby_MobileApp/tools").glob("*.py")))
+        sources = list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py"))
+        if mobile is not None:
+            sources += list((mobile / "tools").glob("*.py"))
         for index, source in enumerate(sources):
             py_compile.compile(str(source), cfile=str(Path(directory) / f"{index}.pyc"), doraise=True)
     run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "RasPi", "-p", "test_*.py"])
@@ -40,7 +47,8 @@ def main():
         run([sys.executable, "-B", str(legacy_audit), "."])
     else:
         print("SKIP legacy audit: script is not supplied in this workspace; audit coverage is unverified.", flush=True)
-    run([sys.executable, "-B", "Garby_MobileApp/tools/static_quality_check.py"])
+    if mobile is not None:
+        run([sys.executable, "-B", str(mobile / "tools/static_quality_check.py")], cwd=mobile)
     if args.host_only:
         print("HOST CHECKS PASS; ESP32 target builds and Android checks SKIPPED.")
         return
@@ -50,8 +58,9 @@ def main():
     for sketch in ("BLE_Receiver-Final", "MAIN_EXECUTOR_CODE"):
         fqbn = "esp32:esp32:esp32s3" if sketch == "BLE_Receiver-Final" else "esp32:esp32:esp32"
         run([cli, "compile", "--fqbn", fqbn, "--output-dir", str(ROOT / "artifacts/firmware" / sketch), sketch])
-    wrapper = ROOT / "Garby_MobileApp" / ("gradlew.bat" if sys.platform == "win32" else "gradlew")
-    run([str(wrapper), "testDebugUnitTest", "assembleDebug", "assembleRelease", "lintDebug", "--console=plain"], cwd=wrapper.parent)
+    if mobile is not None:
+        wrapper = mobile / ("gradlew.bat" if sys.platform == "win32" else "gradlew")
+        run([str(wrapper), "testDebugUnitTest", "assembleDebug", "assembleRelease", "lintDebug", "--console=plain"], cwd=mobile)
     print("ALL SOFTWARE CHECKS PASS. Hardware and live Firebase acceptance remain required.")
 
 if __name__ == "__main__":

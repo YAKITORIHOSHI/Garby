@@ -14,7 +14,7 @@
   This follow-up changes only a Pi test; prior manual-disposal Pi deployment remains required.
 - Mobile Test1/Test2 assets preserve the previous app and the new candidate separately.
   Full review, Windows Pi-suite limitations and exact sibling patch are in
-  `Garby_MobileApp/docs/2026-11-14-integration-review.md` and its verification directory.
+  `docs/robot-review-2026-11-14.md` and its verification directory.
 
 ## Confirmed manual disposal — 2026-11-13
 

@@ -31,7 +31,7 @@ stops for people and obstacles, and resumes on its own when the path is clear.
 | Supervisor | Raspberry Pi 5, YDLIDAR X3, ROS 2 | `RasPi/` | Reads the LiDAR, decides whether the path is clear, fits the hallway walls, predicts moving objects, runs the monitor, talks to the bridge over Bluetooth LE, publishes to Firebase |
 | Bridge | ESP32-S3 with an MPU6050 | `BLE_Receiver-Final/` | Receives path decisions over BLE, streams the robot's heading, forwards wall measurements, relays commands to the executor over UART |
 | Executor | ESP32, two stepper drivers, sonar on a servo, buzzer, HX711 load cell, Air780E modem | `MAIN_EXECUTOR_CODE/` | Drives the routes and turns, steers, enforces every stop, starts runs, sends SMS |
-| App | Android phone | `Garby_MobileApp/app/` | Dashboard, confirmed manual disposal and return-to-base requests |
+| App | Android phone | [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) | Dashboard, confirmed manual disposal and return-to-base requests |
 
 A separate sensor board (bin fill ultrasonic, MQ4/MQ135/MQ137 gas sensors) connects to the Pi
 by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTOR_CODE/PINOUTS.txt).
@@ -43,7 +43,7 @@ by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTO
 | `RasPi/` | Pi runtime (`final_w_serial.py` is the entry point), monitor, launch scripts, tests |
 | `BLE_Receiver-Final/` | ESP32-S3 bridge sketch |
 | `MAIN_EXECUTOR_CODE/` | ESP32 executor sketch; route steps are in `pointsRun.ino`, tunables at the top of the headers |
-| `Garby_MobileApp/` | Android app |
+| External [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) repository | Android app, built and released separately |
 | `tools/` | Project verification and host tests of the real firmware source |
 | `docs/` | Design and investigation reports |
 | `Test/`, `MPU_and_Motor-Latest/` | Bench test sketches, not used on the robot |
@@ -55,7 +55,7 @@ by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTO
   `RasPi/requirements.txt` without cloud features); `python3-tk` for the monitor window.
 - **Firmware:** Arduino IDE or `arduino-cli` with the ESP32 core 3.3, and the libraries
   ESP32Servo, FastAccelStepper, HX711 and NimBLE-Arduino.
-- **App:** Android Studio with a JDK (see `Garby_MobileApp/`).
+- **App:** Android Studio with a JDK (see the separate [app repository](https://github.com/YAKITORIHOSHI/Garby-Mobile-App)).
 - **Firebase:** a project with a Realtime Database. The Pi needs a Firebase Admin service-account
   key; never commit it.
 
@@ -147,8 +147,8 @@ python3 -B -m unittest discover -s RasPi -p 'test_*.py'    # Pi tests
 python3 -B tools/run_firmware_tests.py                     # firmware logic tests
 ```
 
-`python3 -B tools/verify_project.py` without `--host-only` also builds both ESP32 sketches and
-the Android app when their toolchains are installed. No verification command uploads firmware.
+`python3 -B tools/verify_project.py` without `--host-only` also builds both ESP32 sketches. To include a separately cloned app, pass
+`--mobile-repo <absolute-path-to-Garby-Mobile-App>`; this never copies the app into this repository. No verification command uploads firmware.
 
 ## Safety notes
 

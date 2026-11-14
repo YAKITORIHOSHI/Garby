@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Window background behind the first Compose frame; matches GarbyColors.Night. -->
-    <color name="garby_night">#FF0B0305</color>
-    <!-- Logo crimson (sampled from the artwork), used as the notification accent. -->
-    <color name="garby_crimson">#FF7B0A0A</color>
-    <!-- Same crimson as the logo disc, so the adaptive icon reads as one shape. -->
-    <color name="ic_launcher_background">#FF7B0A0A</color>
-</resources>

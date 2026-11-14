@@ -1,0 +1,10 @@
+[
+  {
+    "path": "BLE_Receiver-Final/BLE_Receiver-Final.ino",
+    "sha256": "63843E74B464EC3895E93BA5B1CEBF1B713E73B0DBD73F679E413A06ED7ACC81"
+  },
+  {
+    "path": "tools/firmware_tests/test_bridge.cpp",
+    "sha256": "B231E51085CB1A7DBC7A2A108449B190DA158E890C3F4B1EACECDD86FC44B80F"
+  }
+]

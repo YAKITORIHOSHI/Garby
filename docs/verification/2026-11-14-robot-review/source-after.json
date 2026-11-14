@@ -1,0 +1,54 @@
+[
+  {
+    "path": "BLE_Receiver-Final/BLE_Receiver-Final.ino",
+    "sha256": "d82e2e7f761f2ce71c588f49cc1ab10db0439372226e6a04a0b401590824641f"
+  },
+  {
+    "path": "BLE_Receiver-Final/MpuHeading.h",
+    "sha256": "17bad8e11c7ff423a3bb93d9a363eb81d3859cea3709fd7dca7e0c076c7b237c"
+  },
+  {
+    "path": "BLE_Receiver-Final/SteeringAssist.h",
+    "sha256": "340d690509142de9b8caecf15717c9f13e0daed2a72774386bb50c7df2b913ae"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/HeadingControl.h",
+    "sha256": "eec621b1ed34a43df772c9140b434d13c81a501ed323df8e850568c8f16ffa62"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp",
+    "sha256": "3e7a5f5744aa2f30c5f78eb33dd908ea162437b15f6a9dd595bcad6f92ece863"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h",
+    "sha256": "0f5b7c1d11285cd0dafb4b45a7649a1867914100cd7a1517a2fae669268c9bbb"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.ino",
+    "sha256": "465a4c7ea4fdad9b046832d4f88580ed15931ce1c30b0a5235d3f36f4941944e"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/pointsRun.ino",
+    "sha256": "031abe24abad2ab7c4fafce213a453f5e65579c595fdb2d5823940e4a38108d7"
+  },
+  {
+    "path": "MAIN_EXECUTOR_CODE/SonarSweep.h",
+    "sha256": "96a96a79dd037a7047b97e0c1987cab28c5681852782f449d08107ac819c52a0"
+  },
+  {
+    "path": "RasPi/final_w_serial.py",
+    "sha256": "55eba123c5a03ce43aaacd5fb935c6c280d2dc31ed0322c26136f190edc23c23"
+  },
+  {
+    "path": "RasPi/bridge_core.py",
+    "sha256": "a347b893898f695ec9c3814ef84e0f79e6e8ecd6773f75687a6074c4dfd3bd90"
+  },
+  {
+    "path": "RasPi/disposal_support.py",
+    "sha256": "d5069250a2718399098aa607ad7efd5f1a31ac09290201794062797815524061"
+  },
+  {
+    "path": "RasPi/test_monitor_ui.py",
+    "sha256": "edeba9e7e081db16f85af886bac12263b0fdd5a4142b5edb6de770637a01bfa3"
+  }
+]

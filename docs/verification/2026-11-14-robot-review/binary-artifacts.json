@@ -1,0 +1,52 @@
+[
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\BLE_Receiver-Final\\BLE_Receiver-Final.ino.bin",
+    "sha256": "eb735edd3f36347082dcaa3aa9135db55682383e86dcbb6c35dd4029d6cacbed",
+    "bytes": 590320
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\BLE_Receiver-Final\\BLE_Receiver-Final.ino.bootloader.bin",
+    "sha256": "73bd425e380c709f6abd83aa987cb51c042a9aa8de44a37a9edb22d53bca08dd",
+    "bytes": 19968
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\BLE_Receiver-Final\\BLE_Receiver-Final.ino.elf",
+    "sha256": "88216917c23c5eb961a0757456fb1757e3958326e17b147203ca2b9b5fe72d00",
+    "bytes": 11600432
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\BLE_Receiver-Final\\BLE_Receiver-Final.ino.merged.bin",
+    "sha256": "cfe509aaccee7037ce0e85ba9bda00b75ae5865ed94e33c56a9e1938486937fc",
+    "bytes": 8388608
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\BLE_Receiver-Final\\BLE_Receiver-Final.ino.partitions.bin",
+    "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1",
+    "bytes": 3072
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\MAIN_EXECUTOR_CODE\\MAIN_EXECUTOR_CODE.ino.bin",
+    "sha256": "8f03fd9af7db995badeabc81590bbf70d79e0506f3ddb1f90bc57baedc044bb0",
+    "bytes": 416416
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\MAIN_EXECUTOR_CODE\\MAIN_EXECUTOR_CODE.ino.bootloader.bin",
+    "sha256": "427f96e10c620c4f062dab15da54fc45494d897e8397ae6f3aecc98c42d7e379",
+    "bytes": 24992
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\MAIN_EXECUTOR_CODE\\MAIN_EXECUTOR_CODE.ino.elf",
+    "sha256": "1c14b9af15b21cf7bb4d9486ec9d5682d640f48da112733cdd67b83adc053d31",
+    "bytes": 7678832
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\MAIN_EXECUTOR_CODE\\MAIN_EXECUTOR_CODE.ino.merged.bin",
+    "sha256": "f6114a1a20cd4f0a5956db8b90523c7163a6b30a98989b8957abbc67a6e3e629",
+    "bytes": 4194304
+  },
+  {
+    "path": "C:\\Users\\napht\\AppData\\Local\\Temp\\garby-native-review-20261114\\firmware\\MAIN_EXECUTOR_CODE\\MAIN_EXECUTOR_CODE.ino.partitions.bin",
+    "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1",
+    "bytes": 3072
+  }
+]

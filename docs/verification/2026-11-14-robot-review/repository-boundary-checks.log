@@ -1,0 +1,25 @@
+Verifier command-planning smoke tests below replace subprocess execution; full build/test suites were not rerun. The two selected Firebase contract tests execute normally.
+
+ALL SOFTWARE CHECKS PASS. Hardware and live Firebase acceptance remain required.
+PASS verifier scope: ['robot-only full']
+HOST CHECKS PASS; ESP32 target builds and Android checks SKIPPED.
+PASS verifier scope: ['--host-only']
+HOST CHECKS PASS; ESP32 target builds and Android checks SKIPPED.
+PASS verifier scope: ['--host-only', '--mobile-repo', '\\\\garby-desktop\\SharedGarby\\GARBY-CODEBASE\\GarbyMostLatest-ForTesting\\Garby_MobileApp']
+ALL SOFTWARE CHECKS PASS. Hardware and live Firebase acceptance remain required.
+PASS verifier scope: ['--mobile-repo', '\\\\garby-desktop\\SharedGarby\\GARBY-CODEBASE\\GarbyMostLatest-ForTesting\\Garby_MobileApp']
+test_android_and_pi_target_same_database_and_device (test_firebase_contract.FirebaseContractTests.test_android_and_pi_target_same_database_and_device) ... skipped 'Optional cross-repository check: set GARBY_MOBILE_APP_ROOT to a separate app checkout'
+
+----------------------------------------------------------------------
+Ran 1 test in 1.512s
+
+OK (skipped=1)
+PASS external Firebase contract: explicit optional skip
+test_android_and_pi_target_same_database_and_device (test_firebase_contract.FirebaseContractTests.test_android_and_pi_target_same_database_and_device) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.131s
+
+OK
+PASS external Firebase contract: external app supplied
+PASS production runtime source hashes unchanged: 74

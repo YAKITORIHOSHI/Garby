@@ -56,3 +56,7 @@ firebase.json
 
 # Firebase Admin credentials read by the Pi bridge (RasPi/firebase_support.py): never published
 RasPi/Firebase/
+
+# Android app is maintained and released from its own repository.
+/Garby_MobileApp/
+/Garby-Mobile-App/

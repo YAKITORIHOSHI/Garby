@@ -19,9 +19,9 @@ This file describes the active source. Older audit reports are historical.
 | Raspberry Pi | `RasPi/final_w_serial.py`, `bridge_core.py`, `ble_support.py`, `runtime_support.py` | ROS 2 LiDAR safety, wall geometry, BLE central, exclusive runtime ownership, sensor serial input, asynchronous Firebase telemetry and correlated return relay |
 | BLE ESP32-S3 | `BLE_Receiver-Final/BLE_Receiver-Final.ino`, `MpuHeading.h`, `SteeringAssist.h` | BLE GATT server, path validation and STOP latch, MPU/rate feedback, confirmed LiDAR centering, controller UART transport |
 | Main ESP32 | `MAIN_EXECUTOR_CODE.ino/.cpp/.h`, `pointsRun.ino` | Motor targets, local sonar protection, load/gas triggers, route state, modem/SMS worker |
-| Android | `Garby_MobileApp/app/` | Authenticated Firebase dashboard, confirmed manual-disposal intent, explicit return request and matching completion |
+| Android | [separate Android repository](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) | Authenticated Firebase dashboard, confirmed manual-disposal intent, explicit return request and matching completion |
 
-The Android project contains no Pi code (its old compatibility launcher was
+The separately maintained Android project contains no Pi code (its old compatibility launcher was
 removed on 2026-11-14; run `RasPi/final_w_serial.py`). The Pi simulator is a manual
 test producer, not production firmware. `Test/Test.ino` is a serial-only sketch.
 
