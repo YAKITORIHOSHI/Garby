@@ -31,7 +31,7 @@ stops for people and obstacles, and resumes on its own when the path is clear.
 | Supervisor | Raspberry Pi 5, YDLIDAR X3, ROS 2 | `RasPi/` | Reads the LiDAR, decides whether the path is clear, fits the hallway walls, predicts moving objects, runs the monitor, talks to the bridge over Bluetooth LE, publishes to Firebase |
 | Bridge | ESP32-S3 with an MPU6050 | `BLE_Receiver-Final/` | Receives path decisions over BLE, streams the robot's heading, forwards wall measurements, relays commands to the executor over UART |
 | Executor | ESP32, two stepper drivers, sonar on a servo, buzzer, HX711 load cell, Air780E modem | `MAIN_EXECUTOR_CODE/` | Drives the routes and turns, steers, enforces every stop, starts runs, sends SMS |
-| App | Android phone | [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) | Dashboard, confirmed manual disposal and return-to-base requests |
+| App | Android phone | [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) | Dashboard, operator controls and the LiDAR map, confirmed manual disposal and return-to-base requests |
 
 A separate sensor board (bin fill ultrasonic, MQ4/MQ135/MQ137 gas sensors) connects to the Pi
 by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTOR_CODE/PINOUTS.txt).
