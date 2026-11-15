@@ -772,4 +772,61 @@ int main(){
   check(!operatorRebootScheduled,"expired reboot ACK cannot restart the bridge");
   processAndRelayMessage("[OP:702:RELEASE]");
   check(pendingReleaseId=="702","expired reboot permits a new deliberate recovery action");
+
+  // Continue run (2026-11-14): the same confirmed-stop gate and correlated ACK as
+  // RELEASE; the executor then runs the interrupted route behind a fresh STOP.
+  resetFixture();pNotifyChar->notifications.clear();processAndRelayMessage("[OP:800:CONTINUE]");
+  check(ESP_Serial.tx.find("[OP:800:CONTINUE]")==std::string::npos &&
+        notificationText().find("[OP FAILED:800:STOP_NOT_CONFIRMED]")!=std::string::npos,
+        "continue is rejected without an acknowledged executor emergency stop");
+  processAndRelayMessage("[OP:801:ESTOP]");handleMcuLine("[OP ACK:801:ESTOP]");
+  mcuUnackedCommands=0;mcuAckPending=mcuAckFault=mcuBackpressureStopPending=false;
+  ESP_Serial.tx.clear();processAndRelayMessage("[OP:802:CONTINUE]");
+  check(ESP_Serial.tx.find("[OP:802:CONTINUE]")!=std::string::npos && pendingReleaseId=="802" &&
+        operatorStopLatched,"sending CONTINUE relays it to the executor but never clears the bridge latch");
+  handleMcuLine("[OP ACK:802:RELEASE]");
+  check(operatorStopLatched,"an acknowledgement for a different action cannot complete a pending continue");
+  handleMcuLine("[OP ACK:802:CONTINUE]");
+  check(!operatorStopLatched && stopLatched && clearConfirmCount==0 && pendingReleaseId.length()==0,
+        "matching continue clears the operator latch but keeps STOP until fresh path confirmations");
+  resetFixture();processAndRelayMessage("[OP:900:ESTOP]");handleMcuLine("[OP ACK:900:ESTOP]");
+  mcuUnackedCommands=0;mcuAckPending=mcuAckFault=mcuBackpressureStopPending=false;
+  processAndRelayMessage("[OP:901:CONTINUE]");
+  enqueueBleWrite("[OP:902:ESTOP]",14);handleMcuLine("[OP ACK:901:CONTINUE]");
+  check(operatorStopLatched,"a newer emergency stop invalidates an in-flight continue acknowledgement");
+  handleMcuLine("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1]");
+  check(operatorStopLatched,"the extended executor status still restores/confirms stop evidence");
+
+  // Reverse to start (2026-11-14): the same confirmed-stop gate and correlated ACK
+  // as RELEASE and CONTINUE; the executor then drives back behind a fresh STOP.
+  resetFixture();pNotifyChar->notifications.clear();processAndRelayMessage("[OP:950:REVERSE]");
+  check(ESP_Serial.tx.find("[OP:950:REVERSE]")==std::string::npos &&
+        notificationText().find("[OP FAILED:950:STOP_NOT_CONFIRMED]")!=std::string::npos,
+        "reverse is rejected without an acknowledged executor emergency stop");
+  processAndRelayMessage("[OP:951:ESTOP]");handleMcuLine("[OP ACK:951:ESTOP]");
+  mcuUnackedCommands=0;mcuAckPending=mcuAckFault=mcuBackpressureStopPending=false;
+  ESP_Serial.tx.clear();processAndRelayMessage("[OP:952:REVERSE]");
+  check(ESP_Serial.tx.find("[OP:952:REVERSE]")!=std::string::npos && pendingReleaseId=="952" &&
+        operatorStopLatched,"sending REVERSE relays it to the executor but never clears the bridge latch");
+  handleMcuLine("[OP ACK:952:CONTINUE]");
+  check(operatorStopLatched,"an acknowledgement for a different action cannot complete a pending reverse");
+  handleMcuLine("[OP FAILED:952:NO_ROUTE]");
+  check(operatorStopLatched && pendingReleaseId.length()==0,
+        "a refused reverse leaves the operator stop latched");
+  processAndRelayMessage("[OP:953:REVERSE]");handleMcuLine("[OP ACK:953:REVERSE]");
+  check(!operatorStopLatched && stopLatched && clearConfirmCount==0 && pendingReleaseId.length()==0,
+        "matching reverse clears the operator latch but keeps STOP until fresh path confirmations");
+  executorParked=true;handleMcuLine("[REVERSING]");
+  check(!executorParked,"the executor's REVERSING state ends the parked gyro-bias window like any route");
+  resetFixture();processAndRelayMessage("[OP:960:ESTOP]");handleMcuLine("[OP ACK:960:ESTOP]");
+  mcuUnackedCommands=0;mcuAckPending=mcuAckFault=mcuBackpressureStopPending=false;
+  processAndRelayMessage("[OP:961:REVERSE]");
+  enqueueBleWrite("[OP:962:ESTOP]",14);handleMcuLine("[OP ACK:961:REVERSE]");
+  check(operatorStopLatched,"a newer emergency stop invalidates an in-flight reverse acknowledgement");
+  handleMcuLine("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1:REV=1]");
+  check(operatorStopLatched,"the status with the reverse field still restores/confirms stop evidence");
+  pNotifyChar->notifications.clear();handleMcuLine("[LEG:OF:1/15:S:5]");handleMcuLine("[LEG:0]");
+  check(notificationText().find("[LEG:OF:1/15:S:5]")!=std::string::npos &&
+        notificationText().find("[LEG:0]")!=std::string::npos,
+        "route leg notices are relayed to the Pi unchanged");
 }

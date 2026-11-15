@@ -29,6 +29,8 @@ try:  # Required by requirements.txt and runtime preflight; fail closed if absen
 except ImportError:  # pragma: no cover - exercised only on a stripped install
     np = None
 
+from scan_frame import build_scan_frame
+
 
 # ---------------------------------------------------------------------------
 # Chassis geometry
@@ -120,6 +122,20 @@ WALL_MAX_RMS_CM = 2.5
 # sits several cm off its ends. Noise on a real wall moves this by a few mm.
 WALL_MAX_BOW_CM = 1.5
 WALLS_AGREE_DEG = 3.0            # left and right must be parallel to give one heading
+# Far fit (2026-11-14, owner: "use the data for front and rear reading to help the
+# system to walk straight"). The heading error of a line fit falls with the
+# length of wall it is fitted to, and the near window is only 2.4 m long. A
+# second fit over the wall points far ahead and far behind gives the same
+# direction with a fraction of the noise. It replaces only the HEADING, and only
+# when it is a long clean wall that agrees with the near fit: a door, an
+# opening, a corner or clutter fails that and the near fit stands alone. Wall
+# DISTANCES always come from the near window, where the robot is.
+FAR_WINDOW_BEHIND_CM = 300.0
+FAR_WINDOW_AHEAD_CM = 500.0
+FAR_MIN_SPAN_CM = 350.0          # of wall actually seen; less is no better than the near fit
+FAR_MIN_INLIERS = 30
+FAR_AGREE_DEG = 1.5              # far and near headings must agree this closely
+FAR_DISTANCE_AGREE_CM = 4.0      # and be the same wall
 
 
 @dataclass(frozen=True)
@@ -143,29 +159,14 @@ class HallwayAnalysis:
     left: WallFit | None
     right: WallFit | None
     heading_deg: float | None         # robot heading relative to the walls, + = rotated left
+    heading_source: str = "near"      # "far" when the long-baseline fit supplied heading_deg
+    near_heading_deg: float | None = None   # the near window's own heading, for comparison
 
 
 def _robot_points(ranges, angle_min, angle_increment, range_min, range_max, lidar_y_cm):
-    count = len(ranges)
-    if count == 0 or np is None:
-        return None
-    try:
-        distance = np.asarray(ranges, dtype=float)
-    except (TypeError, ValueError):
-        distance = np.array([_number(value) for value in ranges], dtype=float)
-    angle = angle_min + np.arange(count, dtype=float) * angle_increment
-    valid = (np.isfinite(distance) & (distance > 0.0)
-             & (distance >= range_min) & (distance <= range_max) & np.isfinite(angle))
-    distance_cm = distance[valid] * 100.0
-    angle = angle[valid]
-    return distance_cm * np.cos(angle), distance_cm * np.sin(angle) + lidar_y_cm
-
-
-def _number(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError, OverflowError):
-        return math.nan
+    frame = build_scan_frame(ranges, angle_min=angle_min, angle_increment=angle_increment,
+                             range_min=range_min, range_max=range_max, lidar_y_cm=lidar_y_cm)
+    return None if frame is None else (frame.xs, frame.ys)
 
 
 def _densest_offset(xs, ys, theta):
@@ -178,7 +179,9 @@ def _densest_offset(xs, ys, theta):
     return int(counts[best]), centre
 
 
-def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM):
+def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM, *,
+             behind_cm=WALL_WINDOW_BEHIND_CM, ahead_cm=WALL_WINDOW_AHEAD_CM,
+             min_span_cm=WALL_MIN_SPAN_CM, min_inliers=WALL_MIN_INLIERS):
     """One straight wall on ``side`` ('left' or 'right'), or None."""
     if np is None:
         return None
@@ -188,9 +191,9 @@ def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM):
     # inside it is fitted whole (and then rejected) instead of by its noise tail.
     window = ((lateral >= min_lateral_cm - 2.0 * WALL_INLIER_TOLERANCE_CM)
               & (lateral <= WALL_MAX_LATERAL_CM)
-              & (xs >= -WALL_WINDOW_BEHIND_CM) & (xs <= WALL_WINDOW_AHEAD_CM))
+              & (xs >= -behind_cm) & (xs <= ahead_cm))
     px, py = xs[window], ys[window]
-    if px.size < WALL_MIN_INLIERS:
+    if px.size < min_inliers:
         return None
 
     # Coarse then fine angle search. Deterministic, so a test scan and a robot
@@ -207,17 +210,17 @@ def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM):
         count, offset = _densest_offset(px, py, math.radians(degrees))
         if count > best_count:
             best_count, best_theta, best_offset = count, math.radians(degrees), offset
-    if best_count < WALL_MIN_INLIERS:
+    if best_count < min_inliers:
         return None
 
     # Least-squares refinement (y = a + b x), then once more on its own inliers.
     residual = py * math.cos(best_theta) - px * math.sin(best_theta) - best_offset
     inlier = np.abs(residual) <= WALL_INLIER_TOLERANCE_CM
     for _ in range(2):
-        if int(inlier.sum()) < WALL_MIN_INLIERS:
+        if int(inlier.sum()) < min_inliers:
             return None
         ix, iy = px[inlier], py[inlier]
-        if float(ix.max() - ix.min()) < WALL_MIN_SPAN_CM:
+        if float(ix.max() - ix.min()) < min_span_cm:
             return None
         mean_x, mean_y = float(ix.mean()), float(iy.mean())
         spread_x = float(np.sum((ix - mean_x) ** 2))
@@ -227,7 +230,7 @@ def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM):
         residual = (py - (intercept + slope * px)) * cosine
         inlier = np.abs(residual) <= WALL_INLIER_TOLERANCE_CM
     count = int(inlier.sum())
-    if count < WALL_MIN_INLIERS:
+    if count < min_inliers:
         return None
     ix = px[inlier]
     span = float(ix.max() - ix.min())
@@ -241,7 +244,7 @@ def fit_wall(xs, ys, side, min_lateral_cm=WALL_MIN_LATERAL_CM):
         return None
     angle = math.degrees(math.atan(slope))
     distance = sign * intercept * cosine
-    if (span < WALL_MIN_SPAN_CM or rms > WALL_MAX_RMS_CM or abs(angle) > WALL_MAX_ANGLE_DEG
+    if (span < min_span_cm or rms > WALL_MAX_RMS_CM or abs(angle) > WALL_MAX_ANGLE_DEG
             or not min_lateral_cm <= distance <= WALL_MAX_LATERAL_CM):
         return None
     return WallFit(round(distance, 1), round(angle, 2), count, round(span, 1), round(rms, 2))
@@ -267,12 +270,38 @@ def combine_walls(left, right):
     return left, right, round(-direction, 2)
 
 
+def far_heading(xs, ys, near_left, near_right, near_heading, min_lateral_cm):
+    """Heading from the long-baseline fit, or None when it should not be used."""
+    if near_heading is None:
+        return None
+    walls = []
+    for side, near in (("left", near_left), ("right", near_right)):
+        if near is None:
+            continue
+        far = fit_wall(xs, ys, side, min_lateral_cm, behind_cm=FAR_WINDOW_BEHIND_CM,
+                       ahead_cm=FAR_WINDOW_AHEAD_CM, min_span_cm=FAR_MIN_SPAN_CM,
+                       min_inliers=FAR_MIN_INLIERS)
+        if far is not None and abs(far.distance_cm - near.distance_cm) <= FAR_DISTANCE_AGREE_CM:
+            walls.append(far)
+    if not walls:
+        return None
+    if len(walls) == 2 and abs(walls[0].angle_deg - walls[1].angle_deg) > FAR_AGREE_DEG:
+        return None
+    weight = sum(wall.inliers * wall.span_cm for wall in walls)
+    heading = -sum(wall.angle_deg * wall.inliers * wall.span_cm for wall in walls) / weight
+    if abs(heading - near_heading) > FAR_AGREE_DEG:
+        return None
+    return round(heading, 2)
+
+
 def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
-                    geometry=ChassisGeometry()):
+                    geometry=ChassisGeometry(), frame=None, far_fit=True):
     """Zones and walls for one robot-frame scan; None if numpy is unavailable.
 
     Invalid numeric metadata yields None; the caller's sector validator
-    already turns that acquisition into STOP.
+    already turns that acquisition into STOP. ``frame`` is this same scan
+    already converted (scan_frame.build_scan_frame with this geometry's
+    lidar_y_cm); it only saves converting it again.
     """
     try:
         angle_min, angle_increment, range_min, range_max = (
@@ -283,8 +312,11 @@ def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
                               (angle_min, angle_increment, range_min, range_max))
             or range_min < 0.0 or range_max <= range_min):
         return None
-    points = _robot_points(ranges, angle_min, angle_increment, range_min, range_max,
-                           geometry.lidar_y_cm)
+    if frame is not None:
+        points = (frame.xs, frame.ys)
+    else:
+        points = _robot_points(ranges, angle_min, angle_increment, range_min, range_max,
+                               geometry.lidar_y_cm)
     if points is None:
         return None
     xs, ys = points
@@ -298,7 +330,13 @@ def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
                              & (xs <= geometry.front_stop_cm)))
     front_slow = bool(np.any(corridor & (xs > geometry.front_stop_cm)
                              & (xs <= geometry.front_slow_cm)))
-    alongside = (xs >= -geometry.rear_cm) & (xs <= geometry.front_cm)
+    # Side band: from the spin centre to the front edge. Route segments only drive
+    # forward, so what lies beside the rear half is left behind (owner, 2026-11-14:
+    # the wall at the base spot held every start); a turn's own sweep still covers
+    # it. Heading corrections (at most 5 degrees) swing the rear edge sideways by
+    # up to about rear_cm * sin(5 deg), 2.6 cm for the default outline.
+    alongside = ((xs >= max(geometry.rotation_x_cm, -geometry.rear_cm))
+                 & (xs <= geometry.front_cm))
     side_left = bool(np.any(alongside & (ys > half) & (ys <= half + geometry.side_margin_cm)))
     side_right = bool(np.any(alongside & (ys < -half) & (ys >= -half - geometry.side_margin_cm)))
     sweep = outside & (np.hypot(xs - geometry.rotation_x_cm, ys) <= geometry.turn_radius_cm)
@@ -308,7 +346,12 @@ def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
     front_gap = (round(float(xs[ahead].min() - geometry.front_cm), 1)
                  if bool(np.any(ahead)) else None)
     nearest_wall = max(WALL_MIN_LATERAL_CM, half + geometry.side_margin_cm)
-    left, right, heading = combine_walls(fit_wall(xs, ys, "left", nearest_wall),
-                                         fit_wall(xs, ys, "right", nearest_wall))
+    left, right, near_heading = combine_walls(fit_wall(xs, ys, "left", nearest_wall),
+                                              fit_wall(xs, ys, "right", nearest_wall))
+    heading, source = near_heading, "near"
+    if far_fit:
+        far = far_heading(xs, ys, left, right, near_heading, nearest_wall)
+        if far is not None:
+            heading, source = far, "far"
     return HallwayAnalysis(front_stop, front_slow, side_left, side_right, turn_front,
-                           turn_back, front_gap, left, right, heading)
+                           turn_back, front_gap, left, right, heading, source, near_heading)

@@ -1,5 +1,14 @@
 # GARBY system architecture
 
+Continue run update (2026-11-14, build `CONTINUE-20261114`,
+`docs/continue-run-sonar-range-2026-11-14.md`): after a confirmed emergency stop the operator
+may Release (route ends at IDLE, as before) or Continue: the same confirmed release, into the
+interrupted route from the executor's RAM checkpoint (`RouteResume.h`; routes are step lists in
+`pointsRun.ino`). The continued route passes every motion gate again; a new S3 heading
+reference since the stop needs two agreeing wall scans on the route's right-angle grid. The
+obstacle sonar reads only to 110 cm, and a forward stop beyond 25 cm needs two consecutive
+echoes inside 60 cm.
+
 Turn recovery update (2026-11-14, build `RECONNECT-20261114`): BLE-session resets invalidate
 path/steering freshness while retaining the executor's turn scope. After bridge boot, a
 running executor's `[MCU ALIVE]` does not prove straight mode. GO is withheld until an
@@ -183,7 +192,7 @@ unavailable interval. A new valid acquisition restores normal processing.
 | --- | ---: |
 | Front sector | 95 cm |
 | Front-left and front-right sectors | 60 cm |
-| Rear sectors | 35 cm |
+| Rear sectors | 35 cm, shown only: forward-only routes never hold on them (2026-11-14) |
 | Side hard envelope | 22 cm, blocks both travel directions |
 
 Chassis zones (`RasPi/hallway_geometry.py`, 2026-11-11) are evaluated on the same
@@ -195,7 +204,7 @@ unmeasured). Returns inside the outline are treated as the robot itself.
 | --- | --- | --- |
 | Front box | ahead of the front edge to 95 cm, body width + 10 cm each side | `F=O` (front-group bypass applies) |
 | Slow zone | same corridor, 95-160 cm | `F=W` -> `GO:SLOW` (caution speed) |
-| Side band | beside the body, within 2 cm of its sides | both directions blocked, never bypassed |
+| Side band | beside the body from the spin centre to the front edge, within 2 cm of its sides | both directions blocked, never bypassed; the rear half is left behind by a forward move (2026-11-14) |
 | Spin sweep | within half diagonal + 8 cm of the spin centre | `T=O`; halves follow the front/back bypass |
 
 Wall line fits (`WL`, `WR`, `H` in the S frame) use returns 32-300 cm to each side
@@ -236,9 +245,47 @@ significant speed and ≥20 cm of real travel. Time to contact with the footprin
 
 It only adds evidence, held 0.6 s (STOP) / 1.0 s (slow) after the last positive scan; a fault
 in it resets it and leaves the sectors and zones in charge. Things catching up from behind and
-things already abeam or moving off are not contacts. It reports moving objects, not people:
-the LiDAR on top of the bin sees torsos, nothing below its plane. Logged as
+things already abeam or moving off are not contacts. The LiDAR on top of the bin sees
+torsos, nothing below its plane. Logged as
 `Moving-object prediction: ...`; zones `MOVING_STOP`, `MOVING_SLOW`, `MOVING_TURN` in the footer.
+
+Since 2026-11-14 (`docs/objects-station-reverse-2026-11-14.md`):
+
+- The scan is converted to robot-frame points once (`RasPi/scan_frame.py`) for the zones and
+  walls, the tracker and the hallway scene. The eight safety sectors keep their own pass.
+- The robot's own **rotation** is removed: the wall heading `H` of each scan turns the tracks
+  back about the spin centre, trail positions are kept in a ground frame, and sideways motion
+  that a rotation rate of 1.5 deg/s (walls in view) or 8 deg/s (no walls, or `H` jumped more
+  than 3 degrees between scans) could explain is not counted as movement. Radial motion is
+  never explained by rotation.
+- A track is a **likely person** when it is moving, 15-75 cm across, not flat (a panel 35 cm
+  or wider within 4 m lying within 1.2 cm of a line in 60 % of its sightings is flat), at
+  0.25-4.5 m/s, with 40 cm of net ground travel over at least 0.9 s and five sightings. The
+  label is latched for the track's life and is display/report only.
+
+### Hallway objects (2026-11-14)
+
+`RasPi/scene_objects.py` classes every return of a scan against that scan's own wall fits:
+wall (within 6 cm of a wall line), beyond the wall, or interior. Interior returns are grouped
+in ray order into objects with distance ahead, lateral offset, width and free width to each
+wall; a group within 25 cm of a wall reaching in at most 45 cm is a fixture, one spanning 70 %
+of the hallway width its end wall. Objects are reported only in a real hallway (both walls
+fitted, 120-450 cm apart). `SceneMonitor` asks for `F=W` (zone `OBJECT_AHEAD`) when an object
+overlaps the swept corridor between the slow zone (160 cm) and 400 cm for three consecutive
+scans, held 1 s; the read-only front bypass removes it. `scene_markers()` joins objects and
+tracks into the map markers (`person`, `moving`, `object`) carried on the `LidarMapSnapshot`.
+
+### Station steps (2026-11-14)
+
+`RasPi/station_mode.py` holds the executor's latest `[LEG:..]` notice. While it names a step
+flagged `STEP_STATION`, is under 3.5 s old, the link is up and the robot state is a route, the
+scan callback takes the station's wall returns out before any consumer runs: those rays read
+`+inf` (a valid clear ray for the sectors) and leave the converted frame. A wall return is a
+point of a straight piece at least 60 cm long (split at corners over 5 cm, line RMS at most
+2.5 cm), of a straight piece at least 10 cm long joined to such a wall within 150 cm (no
+return more than 0.8 cm off its line, up to three rounded-corner returns at each end), or of
+a leftover of at most 8 cm between two wall pieces. The map still draws every return.
+`GARBY_STATION_WALL_MIN_GAP_CM` (default 0) keeps a wall that close ahead of the front edge.
 
 ## BLE and UART protocol
 
@@ -283,7 +330,7 @@ SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..
 [RESET:<requestedAt-ms>]
 [START:<request-id-ms>]
 [START STATUS:<request-id-ms>]
-[OP:<id>:ESTOP|RELEASE|SONAR_OFF|SONAR_ON|REBOOT]
+[OP:<id>:ESTOP|RELEASE|CONTINUE|REVERSE|SONAR_OFF|SONAR_ON|REBOOT]
 [OP STATUS]
 
 Bridge -> main, newline-delimited UART at 115200 baud:
@@ -299,7 +346,7 @@ SENSOR:...
 [RESET:<requestedAt-ms>]
 [START:<request-id-ms>]
 [START STATUS:<request-id-ms>]
-[OP:<id>:ESTOP|RELEASE|SONAR_OFF|SONAR_ON|REBOOT]
+[OP:<id>:ESTOP|RELEASE|CONTINUE|REVERSE|SONAR_OFF|SONAR_ON|REBOOT]
 [OP STATUS]
 
 Main -> bridge only (local UART, not relayed to the Pi):
@@ -316,10 +363,17 @@ Main -> Pi through bridge notifications:
 [SYSTEM READY]
 [START ACK:<id>], [START FAILED:<id>:<reason>]
 [OP ACK:<id>:<action>], [OP FAILED:<id>:<reason>]
-[OP STATUS:1:ESTOP=<0|1>:SONAR=<0|1>]
+[OP STATUS:1:ESTOP=<0|1>:SONAR=<0|1>:RESUME=<0|1>:REV=<0|1>]   (RESUME and REV since 2026-11-14; the Pi also accepts them absent)
+[ROUTE CONTINUE:<step>/<steps>]   (a continued route's first step)
+[ROUTE REVERSE:<step>/<steps>]    (Reverse to start: the step the way back begins in)
+[REVERSING] / [REVERSE COMPLETE]  (executor state while driving back; its end)
+[LEG:<O|R><F|B>:<step>/<steps>:<B|S|H|L|R>:<flags>] / [LEG:0]
+                                  (route step in progress, every 2 s; flags bit0 = station step,
+                                   bit1/bit2 = station wall ahead forward / on the way back)
 [MOTION:<CLEAR|WAITING_FOR_PATH|CONFIRMING_CLEARANCE|LOCAL_OBSTACLE|MOTORS_UNAVAILABLE|ROUTE_FAULT|STOP[:reason]>]
 [BRIDGE MPU VALID|INVALID bias=.. tilt=.. refresh=.. epoch=.. walls=..]
-[HEADING TURN ...], [HEADING STRAIGHT ...], [HEADING FUSE ...], [HEADING LOST ...], [HEADING ROUTE:...]
+[HEADING TURN ...], [HEADING STRAIGHT ...], [HEADING FUSE ...], [HEADING LOST ...], [HEADING ROUTE:...],
+[HEADING CONTINUE verify=...]
 LOAD_CELL:<kg>
 [REQUEST-STATUS]
 
@@ -581,18 +635,18 @@ interrupt; a trigger waits while ECHO is still high; safety loops never call blo
 
 | Parameter | Value |
 | --- | ---: |
-| Echo listening window | 18000 µs, roughly 3.1 m at the nominal sound speed |
+| Sonar range / echo listening window | 110 cm / 6613 µs (range + 200 µs; was 18000 µs, roughly 3.1 m); a further echo is clear |
 | Ping period (forward only) | 40 ms |
 | Fresh forward sample age | 600 ms (was 180 ms, forward only) |
 | Slowdown / full-speed resume | 90 / 105 cm (forward, or ±25 bearing inside the corridor) |
-| Immediate close echo STOP | ≤60 cm forward, raw echo |
+| Forward close echo STOP | 2 consecutive ≤60 cm forward echoes (one raw echo until 2026-11-14) |
 | Persistent obstacle confirmation | 2 blocked echoes (forward, or per side bearing) |
 | Immediate emergency latch | ≤25 cm |
 | Clear threshold / confirmation | ≥72 cm / 3 forward samples; 2 per side bearing |
 | Spin circle (inside a turn) | 50 cm radius from the spin centre, surveyed before each spin |
 
 An echo is placed at the beam edge nearest the path (±12°); side bearings count only if they
-can be inside the 60 cm body + 8 cm corridor. A timeout/no echo means nothing within ~3 m and
+can be inside the 60 cm body + 8 cm corridor. A timeout/no echo means nothing within 110 cm (~3 m until 2026-11-14) and
 is a **far clear reading** (until 2026-11-12 it was UNKNOWN, which could never release a hold
 in an open hallway). Three complete surveys without an echo at any bearing report
 `[SONAR:SILENT]` once (driving time never counts); a
@@ -651,6 +705,28 @@ Sensor values publish roughly every 5 s; steady weight refreshes every 30 s;
 the Pi heartbeat is every 30 s. The modem initializes and submits SMS from one
 persistent background owner. Parser, motion and GUI paths only enqueue bounded
 notices. No modem UART debug passthrough competes with its transactions.
+
+### Phone control and the map (2026-11-15)
+
+`RasPi/cloud_control.py` and `firebase_control_loop` (one thread, `firebase-phone-control`).
+Once a second it reads `devices/<id>/commands` and hands `commands/operator` to
+`OperatorRelay`: validate (version 1, 32-hex request ID, uid, server timestamp, a known
+action), apply an emergency stop at once, claim by transaction, check the age again with the
+time the claim took (a monotonic clock, so a slow transaction cannot act on an expired
+request), then call `cloud_request_operator_action`, which is `operator_control.request` with
+the monitor's own gates. The executor's `[OP ACK]`/`[OP FAILED]` for that request ID
+(`OperatorControl.outcome`) finishes the cloud request as `accepted` or `failed`; 8 s without
+one is `unconfirmed`, and so is a request found `claimed` by a process that no longer runs.
+Front/back read-only requests set the same events as the monitor's toggles, only when
+`ALLOW_RUNTIME_SAFETY_DISABLE` is true.
+
+`build_operator_mirror()` writes `devices/<id>/operator` on change and every 10 s, and the
+same document to the status file `run_headless.sh status` reads. While
+`commands/map.leaseAt` is under 45 s old, `LidarDistanceReader.cloud_map_frame()` encodes the
+current scan (before any station wall is taken out) and its markers to
+`devices/<id>/map/frame`, at most every 0.5 s (1 s on a hot Pi), never from a scan older than
+0.8 s. `RasPi/map_frame_golden.json` is also the Android decoder's test input. Details, rules
+and first-use steps: `docs/phone-control-headless-2026-11-15.md`.
 
 ### Health notices and cellular SMS
 

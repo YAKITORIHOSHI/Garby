@@ -13,7 +13,9 @@ WorkingDirectory=/home/garby/GARBY/RasPi
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/default/garby-bridge
 ExecStartPre=/bin/bash /home/garby/GARBY/RasPi/run_bridge.sh --check-runtime
-ExecStart=/bin/bash /home/garby/GARBY/RasPi/run_bridge.sh --headless
+# Headless with a saved daily log (~/garby-logs) and the status file the
+# launcher's `status` reads. The phone app is the monitor and the controls.
+ExecStart=/bin/bash /home/garby/GARBY/RasPi/run_headless.sh run
 Restart=always
 RestartSec=10
 TimeoutStopSec=10

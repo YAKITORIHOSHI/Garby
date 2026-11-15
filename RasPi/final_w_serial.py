@@ -4,6 +4,7 @@ Combined application – Fast LiDAR + BLE with immediate obstacle push.
 """
 
 import os, sys, time, queue, threading, asyncio, random, math, logging, signal, subprocess, glob
+import json
 from collections import deque
 from datetime import datetime
 from statistics import median
@@ -15,6 +16,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("combined_app")
+# Pi software revision, shown by the phone app next to the controller build IDs.
+PI_SOFTWARE_ID = "PHONE-20261114"
 
 from bridge_core import (
     CoalescingUpdateWorker,
@@ -45,7 +48,12 @@ from disposal_support import DisposalRelay, READY_MAX_AGE_S
 from lidar_map import build_lidar_map_snapshot
 from lidar_geometry import robot_scan_angles
 from hallway_geometry import analyze_hallway, geometry_from_environment
-from motion_tracker import EgoMotionState, MotionAssessment, MotionTracker
+from motion_tracker import EgoMotionState, MotionAssessment, MotionTracker, build_segments
+from scan_frame import build_scan_frame
+from scene_objects import SceneMonitor, analyze_scene, scene_markers
+from wall_heading_offset import WallHeadingOffset
+from station_mode import StationMode, without_station_walls
+import cloud_control
 
 import serial
 # pyrefly: ignore [missing-import]
@@ -214,6 +222,41 @@ class FirebaseManager:
             device_id, command, ("pending", "dispatching"), status,
             reason=reason, resultAt=int(time.time() * 1000))
 
+    # ---- phone control and map (cloud_control.py, 2026-11-14) ----
+    def get_commands(self, device_id):
+        """The whole commands node: one read serves the operator request and the map lease."""
+        return self._cloud_call(db.reference(f"/devices/{device_id}/commands").get) or {}
+
+    def _transition_operator(self, device_id, command, expected, status, **fields):
+        ref = db.reference(f"/devices/{device_id}/commands/operator")
+        identity = ("requestId", "requestedAt", "requestedBy", "action")
+        def transition(current):
+            if (not isinstance(current, dict)
+                    or any(current.get(key) != command.get(key) for key in identity)
+                    or current.get("status") not in expected):
+                return current
+            return {**current, "status": status, **fields}
+        result = self._cloud_call(ref.transaction, transition)
+        return (isinstance(result, dict) and result.get("status") == status
+                and all(result.get(key) == command.get(key) for key in identity)
+                and all(result.get(key) == value for key, value in fields.items()))
+
+    def claim_operator(self, device_id, command):
+        return self._transition_operator(device_id, command, ("pending",), "claimed",
+                                         claimedAt=int(time.time() * 1000))
+
+    def finish_operator(self, device_id, command, status, reason=""):
+        if status not in ("accepted", "failed", "unconfirmed"):
+            raise ValueError("Invalid operator outcome")
+        return self._transition_operator(device_id, command, ("pending", "claimed"), status,
+                                         reason=str(reason)[:120], resultAt=int(time.time() * 1000))
+
+    def update_operator_mirror(self, device_id, mirror):
+        self._update({f"devices/{device_id}/operator": mirror})
+
+    def update_map_frame(self, device_id, frame):
+        self._update({f"devices/{device_id}/map/frame": frame})
+
     def update_disposal_availability(self, enabled):
         self._update({
             f"devices/{RESET_DEVICE_ID}/status/manualDisposalReady": bool(enabled),
@@ -337,7 +380,13 @@ DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32").strip()
 BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", "").strip() or None
 
 THRESHOLD_CM      = 95.0                  # straight-ahead (FRONT sector) stop distance
-BACK_THRESHOLD_CM = 35.0                  # back stop distance
+BACK_THRESHOLD_CM = 35.0                  # back distance shown on the monitor
+# Every route segment drives forward and every turn spins in place under its own
+# sweep (T=), so a return behind the body never holds a forward move (owner,
+# 2026-11-14: the base spot has a wall 22.5 cm behind the LiDAR). The back group
+# still reports unavailable data, and side clearance still holds both directions.
+# Set this True only for a route with a reverse segment.
+BACK_DISTANCE_HOLDS_MOTION = False
 # FRONT_LEFT/FRONT_RIGHT also see hallway walls: a wall W cm to the side reads
 # about 1.08 W, so 95 cm stopped the robot at any post narrower than 88 cm each
 # side. At 60 cm it passes an 82/82 cm post up to about 26 cm off center. Do not
@@ -388,10 +437,33 @@ LIDAR_REFLECT_LEFT_RIGHT = _lidar_reflection in ("1", "true", "yes", "on")
 # WL/WR/H centering fields. Width 60 cm is the owner's figure; the LiDAR-to-edge
 # distances, LiDAR lateral offset and spin centre are unmeasured defaults.
 CHASSIS = geometry_from_environment(warn=logger.warning)
+# Long-baseline wall heading (hallway_geometry far fit, 2026-11-14). "0" keeps the
+# near window's heading only, for a before/after floor comparison.
+WALL_FAR_FIT = os.environ.get("GARBY_WALL_FAR_FIT", "1").strip() != "0"
 
 # What the executor's wheels are doing ([DRIVE:...] lines, 2026-11-12), so the
 # moving-object prediction can tell the robot's own motion from a person's.
 ego_motion = EgoMotionState()
+# The LiDAR's mounting angle, learned from sideways drift while driving
+# (wall_heading_offset.py, 2026-11-14) and taken out of the H sent for centring.
+# GARBY_WALL_HEADING_LEARN=0 turns it off for a before/after floor comparison.
+# The route step in progress, from the executor's [LEG:..] notices, and the
+# station steps on which the station's own walls do not hold the robot
+# (station_mode.py, 2026-11-14). GARBY_STATION_WALL_MIN_GAP_CM (default 0 = off)
+# keeps a wall this close ahead of the front edge as an obstacle; it needs a
+# measured chassis outline.
+station_mode = StationMode()
+ROUTE_STATES = ("OUTBOUND", "RETURNING", "REVERSING")
+try:
+    STATION_WALL_MIN_GAP_CM = max(0.0, float(os.environ.get("GARBY_STATION_WALL_MIN_GAP_CM", "0")))
+    if not math.isfinite(STATION_WALL_MIN_GAP_CM):
+        raise ValueError
+except ValueError:
+    STATION_WALL_MIN_GAP_CM = 0.0
+_route_leg_logged = ""
+wall_heading_offset = WallHeadingOffset(
+    mounting=(LIDAR_YAW_OFFSET_DEG, LIDAR_REFLECT_LEFT_RIGHT),
+    enabled=os.environ.get("GARBY_WALL_HEADING_LEARN", "1").strip() != "0")
 
 SIDES_TOLERANCE   = 5.0
 BLE_CMD_PERIOD    = 0.25
@@ -1016,6 +1088,7 @@ def publish_robot_state(state: str):
     if state == "UNKNOWN":
         _disposal_ready_at = None
         operator_control.disconnect()
+        station_mode.invalidate()  # no controller state: back on the ordinary rules
     else:
         operator_control.note_state(state)
     if state == "UNKNOWN":
@@ -1057,17 +1130,132 @@ def safety_checks_changed():
     _status_requested.set()
 
 
-def request_operator_action(action):
+def _request_operator_packet(action, source="monitor"):
     packet = operator_control.request(action, ble_connected.is_set())
     if action == "ESTOP":
         manual_start.reset()
         for kind in ("START", "START_STATUS", "RESET"):
             ble_send_queue.discard_kind(kind)
     if packet:
-        logger.warning("Operator action requested: %s", action)
+        logger.warning("Operator action requested: %s%s", action,
+                       "" if source == "monitor" else f" (from the {source})")
         _status_requested.set()
     publish_disposal_availability()
+    return packet
+
+
+def request_operator_action(action):
+    _request_operator_packet(action)
     return operator_control.status(ble_connected.is_set())
+
+
+def cloud_request_operator_action(action):
+    """The phone's request through the monitor's own gate: (request ID or None, message)."""
+    packet = _request_operator_packet(action, "phone")
+    if packet is None:
+        return None, operator_control.status(ble_connected.is_set())["message"]
+    return packet[4:-1].split(":", 1)[0], ""
+
+
+def cloud_set_read_only(group, enabled):
+    """Front/back LiDAR read-only from the phone, under the Pi's own permission."""
+    if not ALLOW_RUNTIME_SAFETY_DISABLE:
+        return False, "not_permitted"
+    event = front_disabled if group == "front" else back_disabled
+    if enabled:
+        event.set()
+    else:
+        event.clear()
+    logger.warning("%s LiDAR distance checks %s (from the phone)", group.capitalize(),
+                   "set to read-only" if enabled else "re-enabled")
+    safety_checks_changed()
+    return True, ""
+
+
+_launcher_info = {"mode": "monitor", "startedAt": int(time.time() * 1000),
+                  "software": PI_SOFTWARE_ID}
+_lidar_node_ref = None
+
+
+def build_operator_mirror():
+    node = _lidar_node_ref
+    people = objects = 0
+    zones = ()
+    if node is not None:
+        people, objects, zones = node.cloud_view()
+    return cloud_control.operator_mirror(
+        operator_control.status(ble_connected.is_set()), robot_state=_robot_state,
+        front_read_only=front_disabled.is_set(), back_read_only=back_disabled.is_set(),
+        read_only_allowed=ALLOW_RUNTIME_SAFETY_DISABLE,
+        motion_hold=_motion_hold if _robot_state in ROUTE_STATES else "",
+        zones=zones, route_leg=station_mode.leg().describe() if _robot_state in ROUTE_STATES else "",
+        people=people, objects=objects, launcher=dict(_launcher_info))
+
+
+# Read once at start: a later environment change must not move it.
+STATUS_FILE = os.environ.get("GARBY_STATUS_FILE") or os.path.join(
+    os.path.expanduser("~"), ".local", "state", "garby", "bridge-status.json")
+
+
+def _write_status_file(mirror):
+    """The same status for `run_headless.sh status`, with or without a cloud link."""
+    path = STATUS_FILE
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = f"{path}.{os.getpid()}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({**mirror, "pid": os.getpid(), "bleConnected": ble_connected.is_set(),
+                       "lidarHealthy": lidar_healthy.is_set(),
+                       "cloud": (firebase.cloud_health()["state"] if firebase else "Unavailable")},
+                      handle)
+        os.replace(temporary, path)
+    except OSError:
+        pass  # a status file is a convenience; nothing depends on it
+
+
+def firebase_control_loop(stop_event):
+    """Phone control: operator requests, the status mirror and leased map frames."""
+    relay = cloud_control.OperatorRelay(cloud_request_operator_action, operator_control.outcome,
+                                        cloud_set_read_only)
+    publisher = cloud_control.MapPublisher()
+    last_poll = last_mirror_at = last_file_at = last_error_log = float("-inf")
+    last_mirror = None
+    lease = None
+    logger.info("Phone control bridge started.")
+    while not stop_event.is_set():
+        now = time.monotonic()
+        try:
+            mirror = build_operator_mirror()
+            if now - last_file_at >= 5.0:
+                last_file_at = now
+                _write_status_file(mirror)
+            manager = firebase
+            if manager is not None and hasattr(manager, "get_commands"):
+                if now - last_poll >= cloud_control.COMMAND_POLL_S:
+                    last_poll = now
+                    commands = manager.get_commands(RESET_DEVICE_ID)
+                    commands = commands if isinstance(commands, dict) else {}
+                    relay.poll(manager, RESET_DEVICE_ID, commands.get("operator"))
+                    lease = commands.get("map")
+                    mirror = build_operator_mirror()
+                if (cloud_control.mirror_changed(last_mirror, mirror)
+                        or now - last_mirror_at >= cloud_control.STATUS_REFRESH_S):
+                    last_mirror, last_mirror_at = mirror, now
+                    manager.update_operator_mirror(RESET_DEVICE_ID, mirror)
+                node = _lidar_node_ref
+                hot = bool(latest_pi_health.get("thermalWarning")) or (
+                    (latest_pi_health.get("cpuTemperatureC") or 0) >= 75.0)
+                if (node is not None and cloud_control.lease_fresh(lease, int(time.time() * 1000))
+                        and publisher.due(hot, now)):
+                    frame = node.cloud_map_frame(publisher.seq)
+                    if frame is not None:
+                        manager.update_map_frame(RESET_DEVICE_ID, frame)
+        except Exception:
+            if now - last_error_log >= 30.0:
+                last_error_log = now
+                logger.exception("Phone control bridge unavailable; retrying")
+        stop_event.wait(0.25)
+    logger.info("Phone control bridge stopped.")
 
 
 def _reboot_after_controller_ack():
@@ -1086,11 +1274,20 @@ def _reboot_after_controller_ack():
 
 def ble_notify_handler(msg: str):
     global _last_load_cell_value, _last_load_cell_publish, _motion_hold, _disposal_ready_at
+    global _route_leg_logged
     stripped = msg.strip()
     if stripped.startswith("[DRIVE:"):
         # Wheel motion for the moving-object prediction: on every change and every
         # 2 s, so it stays out of the GUI log. Telemetry only; it grants nothing.
         ego_motion.update_from_line(stripped)
+        return
+    if station_mode.update_from_line(stripped):
+        # The route step in progress, repeated every 2 s (kept out of the GUI
+        # log). Logged once per step: a floor run then shows where it was.
+        described = station_mode.leg().describe()
+        if described != _route_leg_logged:
+            _route_leg_logged = described
+            logger.info("Route step: %s", described or "none (route ended)")
         return
     # Status polls drive control but carry no useful GUI log information.
     # Excluding them also leaves room for fault and route notifications.
@@ -1099,7 +1296,8 @@ def ble_notify_handler(msg: str):
             ble_recv_queue.put_nowait(msg)
         except queue.Full:
             pass
-    if stripped.startswith(("[BRIDGE ", "[HEADING ", "[HEADING:START")):
+    if stripped.startswith(("[BRIDGE ", "[HEADING ", "[HEADING:START", "[ROUTE ",
+                            "[REVERSE COMPLETE")):
         # Firmware ID, reset cause and link timing separate a supply problem from
         # a radio drop. Headless mode would otherwise discard them with the GUI queue.
         # [HEADING ...] lines are the executor's turn, straight and wall-fusion
@@ -1174,10 +1372,12 @@ def ble_notify_handler(msg: str):
     states = {
         "[MCU READY]": "UNKNOWN", "[RUNNING]": "OUTBOUND",
         "[OUTBOUND COMPLETE]": "AT_DESTINATION", "[RETURNING]": "RETURNING",
+        "[REVERSING]": "REVERSING",
         "[IDLE]": "IDLE", "[ROUTE FAULT]": "FAULT", "[RETURN REJECTED]": "FAULT",
     }
     if stripped == "[MCU READY]":
         ego_motion.invalidate()  # a restarted controller: wheel state unknown
+        station_mode.invalidate()
     if stripped in states:
         publish_robot_state(states[stripped])
     if stripped in (REQUEST_TOKEN, "CONNECTED...", "[BLE CONNECTION ESTABLISHED]"):
@@ -1678,7 +1878,7 @@ def init_gui():
         if operator_control.blocks_motion():
             start_status = {"enabled": False, "pending": False,
                             "message": "Emergency stop latched; explicit release required"}
-        if (not start_status["pending"] and _robot_state in ("OUTBOUND", "RETURNING")
+        if (not start_status["pending"] and _robot_state in ROUTE_STATES
                 and _motion_hold):
             start_status["message"] = f"Motors held: {_motion_hold}"
         return {
@@ -1689,6 +1889,7 @@ def init_gui():
             "firebase": cloud["online"],
             "firebase_status": cloud["state"],
             "robot_state": _robot_state,
+            "route_leg": station_mode.leg().describe() if _robot_state in ROUTE_STATES else "",
             "manual_start": start_status,
             "operator_controls": operator_control.status(ble_connected.is_set()),
         }
@@ -1704,6 +1905,8 @@ def init_gui():
                 request_start=request_manual_start,
                 request_emergency_stop=lambda: request_operator_action("ESTOP"),
                 request_release_stop=lambda: request_operator_action("RELEASE"),
+                request_continue_run=lambda: request_operator_action("CONTINUE"),
+                request_reverse_run=lambda: request_operator_action("REVERSE"),
                 request_ultrasonic=lambda enabled: request_operator_action("SONAR_ON" if enabled else "SONAR_OFF"),
                 request_system_reset=lambda: request_operator_action("REBOOT"),
                 front_threshold_cm=THRESHOLD_CM,
@@ -2079,6 +2282,18 @@ class LidarDistanceReader(Node):
         self._motion_logged = (False, False, False)
         self._last_motion_log = 0.0
         self._last_tracker_error_log = 0.0
+        # Objects standing between the fitted walls (scene_objects.py). Like the
+        # prediction it only adds caution speed; its failure changes nothing else.
+        self._scene = SceneMonitor(CHASSIS)
+        self._scene_caution = False
+        self._markers = ()
+        self._view_logged = (0, 0)
+        self._last_view_log = 0.0
+        self._last_scene_error_log = 0.0
+        self._station_walls = False     # this scan had station wall returns taken out
+        self._station_logged = False
+        self._cloud_frame = None        # this scan, before any station wall is taken out
+        self._last_path_codes = ""
         self._prev_turn_blocked = False
         self._zone_log = ZoneLogLimiter()
         self._first_scan_received = False
@@ -2196,6 +2411,12 @@ class LidarDistanceReader(Node):
         blocked = self._collect_blocked_sides(group, threshold_cm)
         return self._format_blocked_status(blocked, group)
 
+    def _back_status(self):
+        """Back-group distance limit; see BACK_DISTANCE_HOLDS_MOTION."""
+        if not BACK_DISTANCE_HOLDS_MOTION:
+            return False, "CLEAR"
+        return self._get_blocked_status(self.BACK_GROUP, BACK_THRESHOLD_CM)
+
     def _get_side_obstacle_status(self):
         distances = {
             side: self._quick_min(side)
@@ -2219,6 +2440,10 @@ class LidarDistanceReader(Node):
     def _active_zones(self):
         """Chassis zones holding a return in the current scan, for the log and GUI."""
         zones = [name for name, zone in self.ZONE_NAMES if self._zone(zone)]
+        if self._scene_caution:
+            zones.append("OBJECT_AHEAD")
+        if self._station_walls:
+            zones.append("STATION_WALLS_IGNORED")
         if self._motion.stop:
             zones.append("MOVING_STOP")
         elif self._motion.slow:
@@ -2261,13 +2486,20 @@ class LidarDistanceReader(Node):
         moving_hit = self._motion.turn_stop and not self._front_bypassed()
         return bool(side_blocked or front_hit or back_hit or moving_hit)
 
-    def _update_motion_prediction(self, ranges, angle_min, angle_inc, range_min, range_max):
+    def _update_motion_prediction(self, ranges, angle_min, angle_inc, range_min, range_max,
+                                  frame=None):
         """Track moving objects in this acquisition (acquired at _last_scan_time)."""
         try:
+            # The wall fit of this same scan gives the robot's heading in the
+            # hallway; its change between scans is the robot's own rotation.
+            heading = self._hallway.heading_deg if self._hallway is not None else None
+            segments = build_segments(
+                frame, (CHASSIS.front_cm, CHASSIS.rear_cm, CHASSIS.half_width_cm))
             self._motion = self._tracker.update(
                 ranges, angle_min=angle_min, angle_increment=angle_inc,
                 range_min=range_min, range_max=range_max,
-                scan_time=self._last_scan_time, ego=ego_motion.snapshot())
+                scan_time=self._last_scan_time, ego=ego_motion.snapshot(),
+                heading_deg=heading, segments=segments)
         except Exception:
             # Prediction only ever adds STOP/SLOW. A fault here must not hold the
             # robot through the sector limits' scan; it starts again next scan.
@@ -2293,6 +2525,96 @@ class LidarDistanceReader(Node):
                 else:
                     logger.info("Moving-object prediction: clear")
 
+    def cloud_view(self):
+        """(likely people, objects between the walls, active zones) for the phone."""
+        with self._history_lock:
+            if self._lidar_is_stale():
+                return 0, 0, ()
+            return (self._motion.person_count, len(self._scene.scene.standing()),
+                    tuple(self._active_zones()))
+
+    def cloud_map_frame(self, seq):
+        """One frame for the phone map, or None when the scan is not current."""
+        with self._history_lock:
+            return cloud_control.encode_map_frame(
+                self._cloud_frame, seq=seq, scan_age_s=time.monotonic() - self._last_scan_time,
+                hallway=self._hallway, markers=self._markers, zones=self._active_zones(),
+                path=self._last_path_codes, hold=_motion_hold)
+
+    def _apply_station_mode(self, ranges, frame):
+        """On a station step, take the station's own wall returns out of the scan.
+
+        Every later consumer (sector limits, chassis zones, prediction, scene)
+        sees those rays as "nothing within range". The map keeps drawing them.
+        """
+        active = (station_mode.active() and ble_connected.is_set()
+                  and _robot_state in ROUTE_STATES)
+        taken = 0
+        if active:
+            try:
+                ranges, frame, taken = without_station_walls(ranges, frame, CHASSIS,
+                                                             STATION_WALL_MIN_GAP_CM)
+            except Exception:
+                # A fault here leaves the ordinary, stricter rules in charge.
+                active = False
+                now = time.monotonic()
+                if now - self._last_scene_error_log >= 30.0:
+                    self._last_scene_error_log = now
+                    logger.exception("Station wall detection failed; ordinary LiDAR limits apply")
+        self._station_walls = taken > 0
+        if active != self._station_logged:
+            self._station_logged = active
+            logger.info("Station step: %s", "the station's walls are left out of the LiDAR holds"
+                        if active else "ended; ordinary LiDAR limits apply")
+        return ranges, frame
+
+    def _learn_wall_heading_offset(self):
+        """Feed the mounting-angle learner; a fault there only stops the learning."""
+        hallway = self._hallway
+        try:
+            wall_heading_offset.observe(
+                self._last_scan_time,
+                hallway.left.distance_cm if hallway and hallway.left else None,
+                hallway.right.distance_cm if hallway and hallway.right else None,
+                hallway.heading_deg if hallway else None, ego_motion.snapshot())
+        except Exception:
+            wall_heading_offset.enabled = False
+            logger.exception("Wall heading offset learning stopped; H is sent uncorrected")
+
+    def _update_scene(self, frame):
+        """Objects standing between the walls of this acquisition, and map markers."""
+        try:
+            scene = analyze_scene(frame, self._hallway, CHASSIS)
+            self._scene_caution = self._scene.update(scene, self._last_scan_time)
+            self._markers = scene_markers(scene, self._motion)
+        except Exception:
+            self._scene.reset()
+            self._scene_caution = False
+            self._markers = ()
+            now = time.monotonic()
+            if now - self._last_scene_error_log >= 30.0:
+                self._last_scene_error_log = now
+                logger.exception("Hallway object detection failed; sector and zone limits remain")
+            return
+        people = self._motion.person_count
+        objects = len(scene.standing())
+        view = (people, objects)
+        now = time.monotonic()
+        if view != self._view_logged and (people > self._view_logged[0]
+                                          or now - self._last_view_log >= 2.0):
+            self._view_logged = view
+            self._last_view_log = now
+            if people or objects:
+                nearest = scene.standing()[0] if objects else None
+                logger.info(
+                    "Hallway view: %d likely person(s), %d object(s) between the walls%s%s",
+                    people, objects,
+                    f"; nearest object {nearest.along_cm / 100.0:.1f} m ahead, "
+                    f"{nearest.width_cm:.0f} cm wide" if nearest is not None else "",
+                    f"; caution speed ({self._scene.reason})" if self._scene_caution else "")
+            else:
+                logger.info("Hallway view: clear")
+
     @staticmethod
     def _status_code(status):
         return lidar_status_code(status)
@@ -2311,6 +2633,10 @@ class LidarDistanceReader(Node):
         self._hallway = None
         self._tracker.reset()
         self._motion = MotionAssessment()
+        self._scene.reset()
+        self._scene_caution = False
+        self._markers = ()
+        self._cloud_frame = None
         for side in self.SIDES:
             self.history[side].clear()
             self.steering_history[side].clear()
@@ -2344,7 +2670,7 @@ class LidarDistanceReader(Node):
                     angle_increment=msg.angle_increment,
                     range_min=msg.range_min, range_max=msg.range_max,
                     acquired_at=acquired_at, yaw_offset_deg=LIDAR_YAW_OFFSET_DEG,
-                    reflect_left_right=LIDAR_REFLECT_LEFT_RIGHT,
+                    reflect_left_right=LIDAR_REFLECT_LEFT_RIGHT, markers=self._markers,
                 )
             except Exception:
                 now = time.monotonic()
@@ -2432,6 +2758,15 @@ class LidarDistanceReader(Node):
         # previously turned NaN, zero, and infinity into valid-looking limits.
         minimum_range = float(msg.range_min)
         maximum_range = float(msg.range_max)
+        # The scan is converted to robot-frame points once for the zones and
+        # walls, the moving-object tracker and the hallway-object scene.
+        frame = build_scan_frame(
+            ranges, angle_min=angle_min, angle_increment=angle_inc,
+            range_min=minimum_range, range_max=maximum_range, lidar_y_cm=CHASSIS.lidar_y_cm)
+        self._cloud_frame = frame   # the phone map draws every return, like the monitor's
+        # On a station step the station's own walls are taken out first, so
+        # every consumer below sees the same scan.
+        ranges, frame = self._apply_station_mode(ranges, frame)
         safety_dists, steering_dists, valid_points = partition_lidar_samples(
             ranges,
             angle_min=angle_min,
@@ -2446,10 +2781,13 @@ class LidarDistanceReader(Node):
         }
         self._hallway = analyze_hallway(
             ranges, angle_min=angle_min, angle_increment=angle_inc,
-            range_min=minimum_range, range_max=maximum_range, geometry=CHASSIS,
+            range_min=minimum_range, range_max=maximum_range, geometry=CHASSIS, frame=frame,
+            far_fit=WALL_FAR_FIT,
         )
         self._update_motion_prediction(ranges, angle_min, angle_inc, minimum_range,
-                                       maximum_range)
+                                       maximum_range, frame)
+        self._update_scene(frame)
+        self._learn_wall_heading_offset()
         # Missing coverage is a directional safety constraint, not a lost
         # connection. Show partial measurements without restarting the driver.
         if valid_points >= self.MIN_VALID_POINTS:
@@ -2571,9 +2909,7 @@ class LidarDistanceReader(Node):
                         data_out[side] = None
 
             front_blocked, _ = self._front_status()
-            back_blocked, _ = self._get_blocked_status(
-                self.BACK_GROUP, BACK_THRESHOLD_CM
-            )
+            back_blocked, _ = self._back_status()
             side_blocked, _ = self._side_status()
             turn_blocked = bool(self._turn_blocked(side_blocked))
             # Side obstacles are direction-independent: the robot must not
@@ -2613,7 +2949,8 @@ class LidarDistanceReader(Node):
             zones = self._active_zones()
             # Moving-object zones show in the GUI footer; the prediction logs its
             # own line with the reason, so the zone log keeps to the chassis zones.
-            chassis_zones = [zone for zone in zones if not zone.startswith("MOVING_")]
+            chassis_zones = [zone for zone in zones
+                             if not zone.startswith(("MOVING_", "STATION_"))]
             if self._zone_log.update(chassis_zones, now):
                 logger.info("LiDAR chassis zones: %s",
                             ", ".join(chassis_zones) if chassis_zones else "clear")
@@ -2648,9 +2985,7 @@ class LidarDistanceReader(Node):
 
         with self._history_lock:
             front_blocked, front_status = self._front_status()
-            back_blocked, back_status = self._get_blocked_status(
-                self.BACK_GROUP, BACK_THRESHOLD_CM
-            )
+            back_blocked, back_status = self._back_status()
             side_blocked, side_status = self._side_status()
 
             # Fresh-but-incomplete scans are unknown, never clear. Manual GUI
@@ -2677,9 +3012,11 @@ class LidarDistanceReader(Node):
             turn_code = "S" if turn_blocked is None else ("O" if turn_blocked else "C")
             front_code = self._status_code(front_status)
             # W = clear to the 95 cm stop but something in the swept corridor
-            # within front_slow_cm: drive at caution speed. A bypassed front
-            # group bypasses its slow zone as well.
-            if (front_code == "C" and (self._zone("front_slow") or self._motion.slow)
+            # within front_slow_cm, a closing mover, or (2026-11-14) an object
+            # standing in the path between the walls within 4 m: drive at caution
+            # speed. A bypassed front group bypasses all of these as well.
+            if (front_code == "C" and (self._zone("front_slow") or self._motion.slow
+                                       or self._scene_caution)
                     and not (bypass_allowed and front_disabled.is_set())):
                 front_code = "W"
 
@@ -2696,6 +3033,7 @@ class LidarDistanceReader(Node):
 
         path_msg = (f"P:{seq}|F={front_code}"
                     f"|B={self._status_code(back_status)}|T={turn_code}")
+        self._last_path_codes = path_msg.split("|", 1)[1]
 
         key_map = {
             "LEFT": "L", "RIGHT": "R", "FRONT": "F", "BACK": "B",
@@ -2721,7 +3059,8 @@ class LidarDistanceReader(Node):
             if hallway.right is not None:
                 sides_parts.append(f"WR={hallway.right.distance_cm:.1f}")
             if hallway.heading_deg is not None:
-                sides_parts.append(f"H={hallway.heading_deg:.2f}")
+                # Less the LiDAR mounting error learned from drift (zero until learned).
+                sides_parts.append(f"H={wall_heading_offset.correct(hallway.heading_deg):.2f}")
         sides_parts.append(f"G={scan_age_ms}")
 
         fl, fr = med.get("FRONT_LEFT"), med.get("FRONT_RIGHT")
@@ -2760,20 +3099,43 @@ class LidarDistanceReader(Node):
 
 
 # ═══ Main ═══
+def enable_file_log(directory):
+    """A floor run used to leave no log unless the console was captured."""
+    from logging.handlers import TimedRotatingFileHandler
+    try:
+        directory = os.path.expanduser(directory)
+        os.makedirs(directory, exist_ok=True)
+        handler = TimedRotatingFileHandler(os.path.join(directory, "bridge.log"),
+                                           when="midnight", backupCount=14, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        logging.getLogger().addHandler(handler)
+        logger.info("Logging to %s (daily files, 14 days kept)", handler.baseFilename)
+    except OSError as exc:
+        logger.warning("File log unavailable (%s); console only", exc)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Combined Sensor + LiDAR App")
     parser.add_argument("--headless", action="store_true", help="Run without GUI")
+    parser.add_argument("--log-dir", default=os.environ.get("GARBY_LOG_DIR", ""),
+                        help="Also write the log to a daily file here (kept 14 days)")
     args = parser.parse_args()
+    if args.log_dir:
+        enable_file_log(args.log_dir)
     # Acquire before starting workers or touching ROS/serial resources.
     with SingleInstanceGuard():
         _run_application(args)
 
 
 def _run_application(args):
-    global firebase, ser, ble_service
+    global firebase, ser, ble_service, _lidar_node_ref
     gui_root = create_gui_root(args.headless)
     headless = gui_root is None
+    _launcher_info.update(mode="headless" if headless else "monitor",
+                          startedAt=int(time.time() * 1000))
+    logger.info("GARBY Pi software %s starting (%s)", PI_SOFTWARE_ID, _launcher_info["mode"])
     serial_stop.clear()
     data_queue = None if headless else queue.Queue(maxsize=5)
     gui = None
@@ -2831,6 +3193,9 @@ def _run_application(args):
 
     rclpy.init()
     node = LidarDistanceReader(None, data_queue, ble_service)
+    _lidar_node_ref = node
+    threading.Thread(target=lambda: firebase_control_loop(serial_stop),
+                     daemon=True, name="firebase-phone-control").start()
     ros_executor = SingleThreadedExecutor()
     ros_executor.add_node(node)
     ros_thread = threading.Thread(
@@ -2875,6 +3240,7 @@ def _run_application(args):
 
         serial_stop.set()
         lidar_supervisor.stop()
+        wall_heading_offset.save(force=True)
 
         try:
             if ble: ble.disconnect_client()

@@ -273,8 +273,17 @@ int main() {
   check(shouldStop && linkFaultActive,"embedded carriage return cannot be stripped into valid GO");
   resetFixture(); clearPath(); rightWheel.rejectNext=true;
   check(!startTargetMove(1000,1000) && !leftWheel.isRunning() && !rightWheel.isRunning(),"one rejected motor command stops both wheels");
+  // 2026-11-14: one stray forward echo inside the stop distance no longer brakes
+  // the robot (a short stop-and-go); two consecutive ones do, as at the sides.
+  // Within VERY_CLOSE_DISTANCE_CM a single echo still latches at once.
   resetFixture(); clearPath(); recordFrontSample(150); recordFrontSample(150); recordFrontSample(45);
-  check(frontObstacleDetected(),"single close echo stops despite clear median history");
+  check(!frontObstacleDetected(),"a single 45 cm echo after a clear history does not stop on its own");
+  recordFrontSample(150);
+  check(!frontObstacleDetected(),"a stray echo the next ping does not repeat never latches");
+  recordFrontSample(45); recordFrontSample(45);
+  check(frontObstacleDetected(),"two consecutive forward echoes inside the stop distance stop");
+  resetFixture(); clearPath(); recordFrontSample(150); recordFrontSample(150); recordFrontSample(22);
+  check(frontObstacleDetected(),"a single echo within the very-close distance stops at once");
   recordFrontSample(20); recordFrontSample(999,false);
   check(frontObstacleDetected(),"a single ping with no echo does not clear a latched obstacle");
   for(int i=0;i<3;i++){fakeNow+=40;recordFrontSample(120);}
@@ -289,6 +298,22 @@ int main() {
         "three pings with no echo in range (open hallway) release it as a far, fresh reading");
   recordFrontSample(0.5f);
   check(!frontObstacleDetected(),"an echo under 1.5 cm is a glitch, not an obstacle or a clear reading");
+  // 2026-11-14: the sonar reads only to 1.1 m. A ping gives up after that echo
+  // time, and an echo from further away is "nothing in range" (a clear reading).
+  check(ULTRASONIC_TIMEOUT_US < 7000UL && ULTRASONIC_TIMEOUT_US > 6000UL,
+        "a ping waits only for the echo time of the sonar's 1.1 m range (was 18 ms, about 3 m)");
+  resetFixture(); clearPath(); commandServoTracked(DEFAULT_VIEW); fakeNow+=500;
+  ultrasonicPingInFlight=true; ultrasonicPingCommand=DEFAULT_VIEW; ultrasonicPingStartedUs=micros();
+  ultrasonicEchoReady=true; ultrasonicEchoWidthUs=7000;  // 120 cm
+  serviceUltrasonic();
+  check(frontDistanceFresh() && latestFrontRawCm>=999.0f && !frontObstacleDetected(),
+        "an echo from 120 cm, beyond the sonar's range, counts as nothing in range");
+  ultrasonicPingInFlight=false; fakeNow+=500;
+  ultrasonicPingInFlight=true; ultrasonicPingCommand=DEFAULT_VIEW; ultrasonicPingStartedUs=micros();
+  ultrasonicEchoReady=true; ultrasonicEchoWidthUs=5831;  // 100 cm
+  serviceUltrasonic();
+  check(std::fabs(latestFrontRawCm-100.0f)<0.5f,"an echo inside the range is read as its distance");
+  ultrasonicPingInFlight=false;
   resetFixture(); clearPath(); recordFrontSample(20);
   const auto haltStarted=fakeNow;
   tickHook=[&](){if(fakeNow-haltStarted>200){if(ultrasonicPingInFlight){ultrasonicEchoReady=true;ultrasonicEchoWidthUs=7000;}processESPMessage("GO");}if(fakeNow-haltStarted>2000){std::fprintf(stderr,"HALT never recovered\n");std::exit(1);}};

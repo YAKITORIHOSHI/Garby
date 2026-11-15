@@ -35,6 +35,9 @@ RADAR = {
     "text": "#d4f7e2", "muted": "#8aa597", "point": "#3df58a", "nearest": "#ffd166",
     "sweep": "#3dff8f", "robot": "#e8fff1", "ok": "#62e89f", "warning": "#ffc24d",
     "danger": "#ff6f61", "threshold": "#8a3a34",
+    # Hallway markers (scene_objects.scene_markers): likely person, moving object,
+    # object standing between the walls.
+    "person": "#ff2d2d", "moving": "#ffb020", "object": "#ff8a3d", "marker_edge": "#ffffff",
 }
 # Robot frame, degrees counter-clockwise from FRONT (bridge_core sectors).
 # Canvas anchors keep each label outside the scope on its own side.
@@ -50,6 +53,12 @@ SWEEP_WEDGES = 18
 SWEEP_WEDGE_DEG = 5.0
 SWEEP_PERIOD_S = 2.4
 SWEEP_FRAME_MS = 50
+MAX_MAP_MARKERS = 16
+MARKER_KINDS = ("person", "moving", "object")
+MARKER_LABELS = {"person": ("likely person", "likely people"),
+                 "moving": ("moving object", "moving objects"),
+                 "object": ("object", "objects")}
+MARKER_VELOCITY_S = 1.0          # the direction line shows this much travel
 LIDAR_UNAVAILABLE_AFTER_S = 45.0
 _NO_SOURCE_TIME = object()
 
@@ -169,6 +178,36 @@ def scan_display_points(snapshot, now, stale_after_s):
         return ()
 
 
+def scan_display_markers(snapshot, now, stale_after_s):
+    """Valid markers of a current acquisition: (forward, left, kind, vx, vy)."""
+    if snapshot is None:
+        return ()
+    try:
+        age = now - snapshot.acquired_at
+        if not math.isfinite(age) or not 0 <= age <= stale_after_s:
+            return ()
+        markers = []
+        for marker in islice(getattr(snapshot, "markers", ()) or (), MAX_MAP_MARKERS):
+            forward, left, kind, vx, vy = marker
+            if kind in MARKER_KINDS and all(
+                    isinstance(value, (int, float)) and math.isfinite(value)
+                    for value in (forward, left, vx, vy)):
+                markers.append((float(forward), float(left), kind, float(vx), float(vy)))
+        return tuple(markers)
+    except (AttributeError, TypeError, ValueError):
+        return ()
+
+
+def marker_summary(markers):
+    """"1 likely person · 2 objects" for the map's info line ("" when none)."""
+    parts = []
+    for kind in MARKER_KINDS:
+        count = sum(1 for marker in markers if marker[2] == kind)
+        if count:
+            parts.append(f"{count} {MARKER_LABELS[kind][count > 1]}")
+    return " · ".join(parts)
+
+
 def scan_canvas_point(forward_m, left_m, center_x, center_y, pixels_per_m):
     """Robot frame: +forward goes up and +left goes left on the display."""
     return (center_x - left_m * pixels_per_m, center_y - forward_m * pixels_per_m)
@@ -267,7 +306,8 @@ class LidarGUI:
                  back_threshold_cm=35.0, side_threshold_cm=22.0,
                  stale_after_s=0.8, on_checks_changed=None, request_start=None,
                  request_emergency_stop=None, request_release_stop=None,
-                 request_ultrasonic=None, request_system_reset=None):
+                 request_ultrasonic=None, request_system_reset=None,
+                 request_continue_run=None, request_reverse_run=None):
         self.root, self.data_queue, self.recv_queue = root, data_queue, recv_queue
         self.read_sensors = read_sensors or (lambda: {})
         self.read_health = read_health or (lambda: {})
@@ -278,6 +318,8 @@ class LidarGUI:
         self.request_start = request_start
         self.request_emergency_stop = request_emergency_stop
         self.request_release_stop = request_release_stop
+        self.request_continue_run = request_continue_run
+        self.request_reverse_run = request_reverse_run
         self.request_ultrasonic = request_ultrasonic
         self.request_system_reset = request_system_reset
         self.front_threshold_cm, self.back_threshold_cm = front_threshold_cm, back_threshold_cm
@@ -535,23 +577,32 @@ class LidarGUI:
         self.start_btn = ttk.Button(motion, text="Manual disposal",
                                     style="Monitor.TButton", command=self._request_start,
                                     state="disabled")
-        self.start_btn.pack(side="left", padx=(0, 6))
+        # Two rows: four buttons do not fit side by side on an 800 px display.
+        self.start_btn.grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.release_btn = ttk.Button(motion, text="Release stop", style="Monitor.TButton",
                                       command=self._request_release_stop, state="disabled")
-        self.release_btn.pack(side="left")
+        self.release_btn.grid(row=0, column=1, sticky="w")
+        self.continue_btn = ttk.Button(motion, text="Continue run", style="Monitor.TButton",
+                                       command=self._request_continue_run, state="disabled")
+        self.continue_btn.grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(4, 0))
+        self.reverse_btn = ttk.Button(motion, text="Reverse to start", style="Monitor.TButton",
+                                      command=self._request_reverse_run, state="disabled")
+        self.reverse_btn.grid(row=1, column=1, sticky="w", pady=(4, 0))
         self.start_status_lbl = self._label(right, "Waiting for both controllers", tone="muted",
                                             font=self.small_font, wraplength=330, justify="left", height=2)
-        self.start_status_lbl.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 0))
+        self.start_status_lbl.grid(row=2, column=0, sticky="ew", padx=12, pady=(2, 0))
         self.stop_status_lbl = self._label(right, "Emergency stop: unknown", font=self.small_font,
                                            tone="muted", wraplength=330, justify="left")
-        self.stop_status_lbl.grid(row=3, column=0, sticky="w", padx=12, pady=(2, 4))
-        self._label(right, "Release aborts the route to idle. Start a new route explicitly.",
+        self.stop_status_lbl.grid(row=3, column=0, sticky="w", padx=12, pady=(1, 2))
+        # Kept to two lines: the second button row took the space of the third.
+        self._label(right, "Continue finishes the stopped route. Reverse drives back to "
+                    "its start. Release ends it at idle.",
                     font=self.small_font, tone="muted", wraplength=330, justify="left").grid(
-                        row=4, column=0, sticky="w", padx=12, pady=(0, 8))
+                        row=4, column=0, sticky="w", padx=12, pady=(0, 3))
         ttk.Separator(right).grid(row=5, column=0, sticky="ew", padx=12)
         self.reset_btn = ttk.Button(right, text="Restart Pi + bridge + executor…", style="Monitor.TButton",
                                     command=self._request_system_reset, state="disabled")
-        self.reset_btn.grid(row=6, column=0, sticky="w", padx=12, pady=(8, 4))
+        self.reset_btn.grid(row=6, column=0, sticky="w", padx=12, pady=(4, 2))
         self._label(right, "Apply emergency stop before restarting. Restarts both motion MCUs and reboots the Pi. "
                     "The separate bin/gas sensor board has no reset command.", font=self.small_font,
                     tone="muted", wraplength=330, justify="left").grid(
@@ -563,6 +614,8 @@ class LidarGUI:
         for button, callback, key in (
                 (self.ultrasonic_btn, self.request_ultrasonic, "can_configure"),
                 (self.release_btn, self.request_release_stop, "can_release"),
+                (self.continue_btn, self.request_continue_run, "can_continue"),
+                (self.reverse_btn, self.request_reverse_run, "can_reverse"),
                 (self.reset_btn, self.request_system_reset, "can_reset")):
             self._set(button, state="normal" if ready and callback and status.get(key) else "disabled")
         ultrasonic = status.get("ultrasonic_enabled")
@@ -610,6 +663,44 @@ class LidarGUI:
 
     def _request_release_stop(self):
         self._operator_action(self.request_release_stop, "can_release")
+
+    def _request_continue_run(self):
+        # The robot moves again after this, so confirm, then recheck at click time.
+        self._current_health = dict(self.read_health())
+        if not (self.request_continue_run and
+                self._current_health.get("operator_controls", {}).get("can_continue")):
+            self._refresh_operator_controls()
+            return
+        confirmed = messagebox.askyesno(
+            "Continue run?",
+            "Release the emergency stop and let GARBY finish the stopped route from where it "
+            "stopped?\n\nOnly continue if GARBY has not been moved by hand. Obstacle "
+            "detection, the heading check and emergency stop remain active.",
+            parent=self.root, default=messagebox.NO)
+        if confirmed:
+            self._operator_action(self.request_continue_run, "can_continue")
+        else:
+            self._refresh_operator_controls()
+
+    def _request_reverse_run(self):
+        # The robot moves again after this, so confirm, then recheck at click time.
+        self._current_health = dict(self.read_health())
+        if not (self.request_reverse_run and
+                self._current_health.get("operator_controls", {}).get("can_reverse")):
+            self._refresh_operator_controls()
+            return
+        confirmed = messagebox.askyesno(
+            "Reverse to start?",
+            "Release the emergency stop and let GARBY drive back to where this route started?\n\n"
+            "GARBY turns around, drives forward along the way it came and faces its starting "
+            "direction again. Only do this if GARBY has not been moved by hand. It returns only "
+            "as exactly as its wheels repeat their steps. Obstacle detection, the heading check "
+            "and emergency stop remain active.",
+            parent=self.root, default=messagebox.NO)
+        if confirmed:
+            self._operator_action(self.request_reverse_run, "can_reverse")
+        else:
+            self._refresh_operator_controls()
 
     def _request_ultrasonic(self):
         self._current_health = dict(self.read_health())
@@ -682,6 +773,7 @@ class LidarGUI:
         self._map_range_m = 4
         self._map_item_state = {}
         self._map_points_shown = 0
+        self._map_markers_shown = 0
         self._availability = LidarAvailability()
         self._lidar_view = ("loading", "Waiting for first scan", "")
         self._sweep_after_id = None
@@ -714,6 +806,19 @@ class LidarGUI:
                                 for side, *_ in DIRECTIONS}
         self._map_points = [canvas.create_oval(0, 0, 0, 0, fill=RADAR["point"], outline="",
                                                state="hidden") for _ in range(MAX_SCAN_POINTS)]
+        # Hallway markers, above the scan points: a direction line, then a dot
+        # (person, moving object) or a square (object standing in the hallway).
+        self._map_marker_lines = [canvas.create_line(0, 0, 0, 0, fill=RADAR["person"], width=2,
+                                                     state="hidden")
+                                  for _ in range(MAX_MAP_MARKERS)]
+        self._map_marker_dots = [canvas.create_oval(0, 0, 0, 0, fill=RADAR["person"],
+                                                    outline=RADAR["marker_edge"], state="hidden")
+                                 for _ in range(MAX_MAP_MARKERS)]
+        self._map_marker_squares = [canvas.create_polygon(0, 0, 0, 0, 0, 0, 0, 0,
+                                                          fill=RADAR["object"],
+                                                          outline=RADAR["marker_edge"],
+                                                          state="hidden")
+                                    for _ in range(MAX_MAP_MARKERS)]
         self._map_robot = canvas.create_polygon(0, 0, 0, 0, 0, 0, fill=RADAR["robot"], outline="")
         self._map_labels = {}
         for side, _, _, anchor in DIRECTIONS:
@@ -874,6 +979,33 @@ class LidarGUI:
         for item in self._map_points[len(visible):max(len(visible), self._map_points_shown)]:
             self._canvas_set(item, state="hidden")
         self._map_points_shown = len(visible)
+        markers = (scan_display_markers(self._scan_snapshot, now, self.stale_after_s)
+                   if snapshot_current else ())
+        shown = [marker for marker in markers if math.hypot(marker[0], marker[1]) <= range_m]
+        scale = radius / range_m
+        for index, (forward, left, kind, vx, vy) in enumerate(shown):
+            x, y = scan_canvas_point(forward, left, cx, cy, scale)
+            line, dot, square = (self._map_marker_lines[index], self._map_marker_dots[index],
+                                 self._map_marker_squares[index])
+            if kind == "object":
+                r = 6
+                canvas.coords(square, x - r, y - r, x + r, y - r, x + r, y + r, x - r, y + r)
+                self._canvas_set(square, state="normal")
+                self._canvas_set(dot, state="hidden")
+                self._canvas_set(line, state="hidden")
+                continue
+            r = 8 if kind == "person" else 6
+            canvas.coords(dot, x - r, y - r, x + r, y + r)
+            self._canvas_set(dot, state="normal", fill=RADAR[kind])
+            self._canvas_set(square, state="hidden")
+            tip_x, tip_y = scan_canvas_point(forward + vx * MARKER_VELOCITY_S,
+                                             left + vy * MARKER_VELOCITY_S, cx, cy, scale)
+            canvas.coords(line, x, y, tip_x, tip_y)
+            self._canvas_set(line, state="normal", fill=RADAR[kind])
+        for index in range(len(shown), max(len(shown), self._map_markers_shown)):
+            for pool in (self._map_marker_lines, self._map_marker_dots, self._map_marker_squares):
+                self._canvas_set(pool[index], state="hidden")
+        self._map_markers_shown = len(shown)
         self._render_message(mode, title, detail, (points, visible))
         # Kept short: caption and info share one row on an 800 px screen.
         if not snapshot_current:
@@ -882,6 +1014,9 @@ class LidarGUI:
             distance = f" · nearest {math.hypot(*nearest):.2f} m" if nearest else ""
             yaw = self._scan_snapshot.yaw_offset_deg
             info = f"{len(visible)}/{len(points)} hits{distance} · mount yaw {yaw:+g}°"
+            seen = marker_summary(markers)
+            if seen:
+                info = f"{seen} · {info}"
         self._set(self.map_info_lbl, text=info)
 
     def _render_message(self, mode, title, detail, drawn):
@@ -1115,7 +1250,9 @@ class LidarGUI:
         state = self._current_health.get("robot_state", "UNKNOWN")
         state_title = state.replace("_", " ").capitalize()
         stopped = self._current_health.get("operator_controls", {}).get("emergency_stopped")
-        self._set(self.subtitle_lbl, text=f"State: {state_title}" + ("\nStop latched" if stopped is True else ""),
+        leg = self._current_health.get("route_leg") or ""
+        self._set(self.subtitle_lbl, text=f"State: {state_title}" + ("\nStop latched" if stopped is True else
+                                                                     f"\n{leg}" if leg else ""),
                   fg=COLORS["danger" if stopped is True else "muted"])
         self._refresh_safety()
         self._refresh_start()

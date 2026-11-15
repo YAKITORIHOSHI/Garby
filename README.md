@@ -38,8 +38,8 @@ by serial. Wiring for every pin: [`MAIN_EXECUTOR_CODE/PINOUTS.txt`](MAIN_EXECUTO
 
 ## Repository layout
 
-The single **Most Latest** release contains only `GarbyMostLatest-Test1.zip` and
-`GarbyMostLatest-Test2.zip`. Download the Android APK separately from
+The single **Most Latest** release contains one package, `GarbyMostLatest.zip`. Download the
+Android APK separately from
 [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App/releases/tag/most-latest).
 
 | Folder | Contents |
@@ -112,10 +112,19 @@ To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`
 
 - **Monitor.** The *LiDAR readings* tab shows a radar map around the robot, front at the top:
   the distance in each direction, each direction's stop distance, the hallway walls and any
-  zone or moving object that is holding the robot. The *BLE/messages* tab shows the link and the
+  zone or moving object that is holding the robot. A **red dot** is a likely person (person-sized
+  and seen moving), an amber dot another moving object, an orange square an object standing
+  between the hallway walls. The *BLE/messages* tab shows the link and the
   robot's reports. The *Controls* tab has **Manual disposal** (with confirmation), **Release stop**,
+  **Continue run**, **Reverse to start**,
   front/rear LiDAR read-only, obstacle sonar on/off and **Restart Pi + bridge + executor**.
   **EMERGENCY STOP** is always visible.
+- **Without a screen.** `bash RasPi/run_headless.sh start` runs GARBY in the background with a
+  saved log; `status`, `logs`, `stop` and `doctor` do what they say. The Android app is then the
+  monitor and the controls: its **Controls** tab has the same actions as the monitor's, its
+  **Map** tab shows the LiDAR map, and an **EMERGENCY STOP** button sits under every screen.
+  The phone's stop travels over the internet: keep a way to stop the robot at the robot.
+  Setup: [`docs/phone-control-headless-2026-11-15.md`](docs/phone-control-headless-2026-11-15.md).
 - **Manual disposal after school.** With GARBY idle at base, press **Manual disposal** on
   the monitor or app, then confirm **Start manual disposal?**. Bin level, gas and weight
   thresholds may be below their automatic trigger values or unavailable. GARBY uses the
@@ -128,7 +137,12 @@ To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`
   long wait switches to low power. At the destination it stays put until a return is requested
   from the Android app.
 - **Emergency stop** stops both controllers and stays latched through reconnects and restarts.
-  **Release stop** returns GARBY to idle; it then needs a new Start.
+  **Release stop** returns GARBY to idle; it then needs a new Start. **Continue run** (with
+  confirmation) instead lets GARBY finish the stopped route from where it stopped, once the
+  path is clear. **Reverse to start** (with confirmation) sends GARBY back along the route to
+  where it began, for another calibration attempt: it turns around, drives forward and faces
+  its starting direction again. Use either only if GARBY has not been moved by hand; after a
+  controller restart they are not available.
 - **Route fault.** If a route cannot be completed (for example a turn that cannot finish), GARBY
   stops where it is and sends an SMS. Move it back to its base by hand, then clear the fault with
   the supervised reset described in [`DEPLOYMENT_AND_ACCEPTANCE.md`](DEPLOYMENT_AND_ACCEPTANCE.md).

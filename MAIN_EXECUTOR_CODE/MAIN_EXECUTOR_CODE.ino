@@ -294,5 +294,28 @@ void loop() {
       vTaskDelay(pdMS_TO_TICKS(20));
     }
 
+  // ── REVERSING (2026-11-14) ────────────────────────────────
+  // "Reverse to start": back along the interrupted route to where it began.
+  } else if (garbyState == GarbyState::REVERSING) {
+    if (!routeFaultLatched) {
+      Serial.println("[REVERSE] Starting the way back");
+      uint8_t reversedRoute = RouteResume::NONE;
+      if (runReverse(&reversedRoute)) {
+        finishReverseRun(reversedRoute);
+      } else if (!resetQueued) {
+        // As for a failed route: never replayed from an unknown position.
+        routeFaultLatched = true;
+        shouldStop = true;
+        emergencyStopMotors();
+        Serial.println("[REVERSE] Way back incomplete; route fault latched");
+        reportRouteFault();
+        vTaskDelay(pdMS_TO_TICKS(20));
+      }
+    } else {
+      resetQueued = false;
+      requestParkedStatus();
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
   }
 }

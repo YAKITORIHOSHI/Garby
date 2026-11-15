@@ -105,6 +105,72 @@ class WallFitTests(unittest.TestCase):
         self.assertEqual(heading, 0.0)
 
 
+class FarFitTests(unittest.TestCase):
+    """The long-baseline heading (2026-11-14): quieter, and never worse than the near fit."""
+
+    @staticmethod
+    def headings(segments, far_fit, seeds=30, **pose):
+        results = [hg.analyze_hallway(**world_scan(segments, seed=seed, **pose), far_fit=far_fit)
+                   for seed in range(seeds)]
+        return results
+
+    def test_a_long_clean_hallway_uses_the_far_fit_with_less_noise(self):
+        import statistics
+        pose = dict(heading_deg=2.0, y0=-8.0, noise_cm=2.0)
+        near = self.headings(HALLWAY, False, **pose)
+        far = self.headings(HALLWAY, True, **pose)
+        self.assertTrue(all(result.heading_source == "near" for result in near))
+        self.assertTrue(all(result.heading_source == "far" for result in far))
+        near_std = statistics.pstdev(result.heading_deg for result in near)
+        far_std = statistics.pstdev(result.heading_deg for result in far)
+        self.assertLess(far_std, 0.5 * near_std)
+        for result in far:
+            self.assertAlmostEqual(result.heading_deg, 2.0, delta=0.15)
+            # Distances are the near window's, whatever supplied the heading.
+            self.assertAlmostEqual((result.right.distance_cm - result.left.distance_cm) / 2.0,
+                                   -8.0, delta=1.5)
+            self.assertIsNotNone(result.near_heading_deg)
+
+    def test_a_short_piece_of_wall_keeps_the_near_fit(self):
+        short = [wall(95.0, -100, 200), wall(-95.0, -100, 200)]   # 3 m of wall
+        for result in self.headings(short, True, seeds=5, heading_deg=-3.0):
+            self.assertEqual(result.heading_source, "near")
+            self.assertAlmostEqual(result.heading_deg, -3.0, delta=0.4)
+
+    def test_a_hallway_that_bends_ahead_never_pulls_the_heading_off_the_near_walls(self):
+        # Straight for 2 m ahead, then both walls run 6 degrees to the left.
+        rise = math.tan(math.radians(6.0)) * 800.0
+        bent = [wall(95.0, -2000, 200), wall(-95.0, -2000, 200),
+                (200, 95, 1000, 95 + rise), (200, -95, 1000, -95 + rise)]
+        for result in self.headings(bent, True, seeds=10):
+            self.assertAlmostEqual(result.heading_deg, 0.0, delta=0.5)
+
+    def test_doors_posts_and_a_person_by_the_wall_do_not_bias_it(self):
+        door = [wall(95.0), wall(-95.0, -2000, 220), wall(-95.0, 310, 2000),
+                (220, -95, 220, -350), (310, -95, 310, -350), wall(-350.0, 220, 310)]
+        posts = HALLWAY + [(x, sign * 82, x + 40, sign * 82) for x in (-250, 150, 420)
+                           for sign in (1, -1)]
+        person = HALLWAY + [(300, 60, 300, 95), (300, 60, 340, 60), (340, 60, 340, 95)]
+        for name, segments in (("door", door), ("posts", posts), ("person", person)):
+            with self.subTest(scene=name):
+                for result in self.headings(segments, True, seeds=10, heading_deg=1.5):
+                    self.assertAlmostEqual(result.heading_deg, 1.5, delta=0.3)
+
+    def test_far_and_near_walls_that_are_not_the_same_wall_are_not_mixed(self):
+        # The near 2.4 m is an alcove 20 cm deeper than the wall ahead of and behind it.
+        alcove = [wall(95.0), wall(-115.0, -90, 170), wall(-95.0, -2000, -90),
+                  wall(-95.0, 170, 2000), (-90, -95, -90, -115), (170, -95, 170, -115)]
+        for result in self.headings(alcove, True, seeds=5):
+            self.assertAlmostEqual(result.right.distance_cm, 115.0, delta=1.5)
+            self.assertAlmostEqual(result.heading_deg, 0.0, delta=0.3)
+
+    def test_no_near_wall_means_no_heading_from_far_walls_either(self):
+        gap = [wall(95.0, 300, 2000), wall(-95.0, 300, 2000)]   # walls only far ahead
+        result = hg.analyze_hallway(**world_scan(gap))
+        self.assertIsNone(result.heading_deg)
+        self.assertIsNone(result.left)
+
+
 class ZoneTests(unittest.TestCase):
     @staticmethod
     def points(*points_cm, rays=720):

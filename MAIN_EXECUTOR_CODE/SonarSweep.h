@@ -22,8 +22,9 @@
 // take the beam edge nearest the robot's path (conservative), the spin check
 // the edge nearest the spin centre.
 //
-// A ping that returns no echo inside the timeout (about 3 m) means nothing is in
-// range. In an open hallway that is the normal reading, so it counts as clear.
+// A ping that returns no echo inside the timeout (ULTRASONIC_MAX_RANGE_CM, 1.1 m
+// since 2026-11-14; about 3 m before), or an echo from further away, means nothing
+// is in range. In an open hallway that is the normal reading, so it counts as clear.
 // Until 2026-11-12 it was "unknown", which could never release a hold once an
 // obstacle had gone: the robot stayed stopped forever.
 #include <Arduino.h>
@@ -45,6 +46,15 @@ class SonarSweep {
   static constexpr float CORRIDOR_MARGIN_CM = 8.0f;
   static constexpr float BEAM_EDGE_DEG = 12.0f;              // echo bearing uncertainty
   static constexpr float SPIN_RADIUS_CM = 50.0f;             // half diagonal 42.4 + 8, as the Pi's turn sweep
+  // ---- station (2026-11-14) ----
+  // Distance from the sonar to the station wall when the robot stands at the end
+  // of the last straight of the return route, before its final turn. NOT
+  // MEASURED: negative means unknown, and then a station step that faces the
+  // wall is not held by the forward sonar at all. Measure it with a tape and set
+  // it: an echo more than STATION_SONAR_MARGIN_CM nearer than the wall should
+  // be then holds the robot.
+  static constexpr float STATION_PARK_GAP_CM = -1.0f;
+  static constexpr float STATION_SONAR_MARGIN_CM = 15.0f;
   // ---- evidence ----
   static constexpr float STOP_AHEAD_CM = ULTRASONIC_STOP_DISTANCE_CM;
   static constexpr float SLOW_AHEAD_CM = ULTRASONIC_SLOW_DISTANCE_CM;

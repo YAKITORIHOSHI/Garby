@@ -80,7 +80,10 @@ class OperatorControl:
     FRESH_S = 7.5
     ACK_S = 5.0
     QUEUE_S = 2.0
-    ACTIONS = {"ESTOP", "RELEASE", "SONAR_OFF", "SONAR_ON", "REBOOT"}
+    # CONTINUE (2026-11-14) releases the stop into the route it interrupted.
+    # REVERSE (2026-11-14) releases it into the way back to that route's start.
+    ACTIONS = {"ESTOP", "RELEASE", "CONTINUE", "REVERSE", "SONAR_OFF", "SONAR_ON", "REBOOT"}
+    RELEASING = ("RELEASE", "CONTINUE", "REVERSE")
 
     def __init__(self, store=None):
         self._lock = threading.RLock()
@@ -98,6 +101,14 @@ class OperatorControl:
         self._state_at = None
         self._state = "UNKNOWN"
         self._estop = self._sonar = None
+        # True only while the executor reports an interrupted route to continue.
+        # Older firmware sends no RESUME field: Continue then stays unavailable.
+        self._resume = None
+        # The same for "Reverse to start" (REV field, firmware REVERSE-20261114 on).
+        self._reverse = None
+        # The controller's answer per request ID, for the phone's command relay
+        # (cloud_control.py). Bounded; unknown IDs read as "no answer yet".
+        self._outcomes = {}
         self._last_poll = self._last_stop_send = float("-inf")
         self._message = ""
         self._rebooting = False
@@ -125,7 +136,7 @@ class OperatorControl:
         with self._lock:
             self._pending = None
             self._status_at = self._state_at = None
-            self._estop = self._sonar = None
+            self._estop = self._sonar = self._resume = self._reverse = None
             self._last_poll = self._last_stop_send = float("-inf")
             # The local latch and reboot transaction survive BLE loss.
 
@@ -168,6 +179,12 @@ class OperatorControl:
                 "ultrasonic_enabled": self._sonar if supported else None,
                 "can_configure": bool(free and idle),
                 "can_release": bool(free and idle and stopped and self._persistence_ok),
+                "can_continue": bool(free and idle and stopped and self._persistence_ok
+                                     and self._resume is True),
+                "route_to_continue": self._resume if supported else None,
+                "can_reverse": bool(free and idle and stopped and self._persistence_ok
+                                    and self._reverse is True),
+                "route_to_reverse": self._reverse if supported else None,
                 "can_reset": bool(free and stopped and self.local_stop and self._persistence_ok),
                 "message": message or "Controller settings confirmed",
             }
@@ -185,6 +202,8 @@ class OperatorControl:
             else:
                 status = self.status(connected, now)
                 gate = ("can_release" if action == "RELEASE" else
+                        "can_continue" if action == "CONTINUE" else
+                        "can_reverse" if action == "REVERSE" else
                         "can_reset" if action == "REBOOT" else "can_configure")
                 if not status[gate]:
                     return None
@@ -239,10 +258,14 @@ class OperatorControl:
             if pending["sent"] is not None:
                 return False  # Uncertain action writes are never replayed.
             valid = self._fresh(self._status_at, now) and now - pending["at"] <= self.QUEUE_S
-            if pending["action"] in ("SONAR_ON", "SONAR_OFF", "RELEASE"):
+            if pending["action"] in ("SONAR_ON", "SONAR_OFF") + self.RELEASING:
                 valid = valid and self._state == "IDLE" and self._fresh(self._state_at, now)
-            if pending["action"] in ("RELEASE", "REBOOT"):
+            if pending["action"] in self.RELEASING + ("REBOOT",):
                 valid = valid and self._estop is True and self._persistence_ok
+            if pending["action"] == "CONTINUE":
+                valid = valid and self._resume is True
+            if pending["action"] == "REVERSE":
+                valid = valid and self._reverse is True
             if not valid:
                 self._pending = None
                 self._message = "Action cancelled; check controller state and try again"
@@ -260,9 +283,13 @@ class OperatorControl:
         now = self._now(now)
         with self._lock:
             self.status(True, now)  # Late callbacks cannot revive an expired action.
-            match = re.fullmatch(r"\[OP STATUS:1:ESTOP=([01]):SONAR=([01])\]", packet)
+            match = re.fullmatch(r"\[OP STATUS:1:ESTOP=([01]):SONAR=([01])"
+                                 r"(?::RESUME=([01]))?(?::REV=([01]))?\]", packet)
             if match:
-                self._estop, self._sonar = (value == "1" for value in match.groups())
+                estop, sonar, resume, reverse = match.groups()
+                self._estop, self._sonar = estop == "1", sonar == "1"
+                self._resume = None if resume is None else resume == "1"
+                self._reverse = None if reverse is None else reverse == "1"
                 self._status_at = now
                 if self._estop and not self.local_stop:
                     self.local_stop = True
@@ -279,14 +306,21 @@ class OperatorControl:
             if outcome == "ACK" and detail != action:
                 return None
             self._pending = None
+            self._outcomes[request_id] = (outcome == "ACK", detail)
+            while len(self._outcomes) > 16:
+                del self._outcomes[next(iter(self._outcomes))]
             if outcome == "FAILED":
                 self._message = f"Action rejected: {detail}"
                 return None
             self._message = f"{action}: confirmed by executor"
             if action == "ESTOP":
                 self._estop = True
-            elif action == "RELEASE":
+            elif action in self.RELEASING:
+                # CONTINUE and REVERSE are the same release; the executor then
+                # runs the route on, or back to its start.
                 self._estop = False
+                self._resume = False
+                self._reverse = False
                 if self._persist(False):
                     self.local_stop = False
                 # If persistence fails, next_packet reapplies the stop.
@@ -300,6 +334,11 @@ class OperatorControl:
             self._status_at = None
             self._last_poll = float("-inf")
             return None
+
+    def outcome(self, request_id):
+        """(accepted, detail) once the controller answered that request, else None."""
+        with self._lock:
+            return self._outcomes.get(str(request_id))
 
     def reboot_result(self, error=None):
         with self._lock:

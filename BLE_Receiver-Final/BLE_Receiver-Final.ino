@@ -95,7 +95,7 @@ static uint32_t executorStateAtMs = 0;
 #define TRANSPORT_STATS_INTERVAL_MS   10000UL
 #define BRIDGE_CPU_FREQUENCY_MHZ         160
 #define BRIDGE_TX_POWER_DBM                9
-#define BRIDGE_FIRMWARE_ID       "RECONNECT-20261114"
+#define BRIDGE_FIRMWARE_ID       "REVERSE-20261114"
 
 // Steering is continuous in the executor (HeadingControl.h). Bridge steering
 // tunables, the permission rules and the W line format are in SteeringAssist.h.
@@ -194,7 +194,9 @@ static StaticSemaphore_t mcuTxMutexState;
 static SemaphoreHandle_t mcuTxMutex = nullptr;
 
 // Operator STOP survives a software restart; normal path/session recovery is
-// deliberately unable to clear it. Only a correlated executor RELEASE does so.
+// deliberately unable to clear it. Only a correlated executor RELEASE (or, since
+// 2026-11-14, CONTINUE: the same release, into the interrupted route; or REVERSE:
+// the same release, back along that route to its start) does so.
 // RTC_DATA_ATTR is initialized on ordinary restart. NOINIT retains a marker;
 // validate it before restoring RAM state. An accidental cold-boot match is
 // conservative: it can only request STOP, never permission to move.
@@ -212,6 +214,7 @@ static uint32_t pendingEmergencyGeneration = 0;
 static unsigned long lastEmergencySendMs = 0;
 static String pendingReleaseId;
 static uint32_t pendingReleaseGeneration = 0;
+static char pendingReleaseAction[12] = "RELEASE";  // RELEASE, CONTINUE or REVERSE
 static String pendingRebootId;
 static uint32_t pendingRebootGeneration = 0;
 static bool operatorRebootScheduled = false;
@@ -907,6 +910,7 @@ static bool parseOperatorCommand(const char* raw, char* id, char* action) {
   if (length == 0 || raw[at] != ']' || raw[at + 1] != '\0') return false;
   action[length] = '\0';
   return strcmp(action, "ESTOP") == 0 || strcmp(action, "RELEASE") == 0 ||
+         strcmp(action, "CONTINUE") == 0 || strcmp(action, "REVERSE") == 0 ||
          strcmp(action, "SONAR_OFF") == 0 || strcmp(action, "SONAR_ON") == 0 ||
          strcmp(action, "REBOOT") == 0;
 }
@@ -957,14 +961,17 @@ static bool processOperatorCommand(const String& raw) {
     operatorFailure(id, "REBOOT_PENDING");
     return true;
   }
-  if (strcmp(action, "RELEASE") == 0 || strcmp(action, "REBOOT") == 0) {
+  const bool releasing = strcmp(action, "RELEASE") == 0 || strcmp(action, "CONTINUE") == 0 ||
+                         strcmp(action, "REVERSE") == 0;
+  if (releasing || strcmp(action, "REBOOT") == 0) {
     if (!operatorStopLatched || !operatorExecutorStopped) {
       operatorFailure(id, "STOP_NOT_CONFIRMED");
       return true;
     }
-    if (strcmp(action, "RELEASE") == 0) {
+    if (releasing) {
       pendingReleaseId = id;
       pendingReleaseGeneration = operatorStopGeneration;
+      snprintf(pendingReleaseAction, sizeof(pendingReleaseAction), "%s", action);
     } else {
       pendingRebootId = id;
       pendingRebootGeneration = operatorStopGeneration;
@@ -1476,7 +1483,10 @@ static void handleMcuLine(const char* mcuMsg) {
         portENTER_CRITICAL(&operatorMux);
         if (operatorStopGeneration == pendingEmergencyGeneration) operatorExecutorStopped = true;
         portEXIT_CRITICAL(&operatorMux);
-      } else if (action == "RELEASE" && id == pendingReleaseId) {
+      } else if (id == pendingReleaseId && action == pendingReleaseAction) {
+        // CONTINUE and REVERSE release the latch exactly like RELEASE; the executor
+        // then runs the interrupted route on, or back to its start, which still
+        // needs fresh GO after this STOP.
         bool released = false;
         portENTER_CRITICAL(&operatorMux);
         if (operatorStopGeneration == pendingReleaseGeneration && !operatorRebootScheduled) {
@@ -1490,7 +1500,7 @@ static void handleMcuLine(const char* mcuMsg) {
         if (released) {
           pendingEmergencyId = "";
           turnActive = false;
-          turnStateKnown = true; // RELEASE is acknowledged only after route unwind to IDLE.
+          turnStateKnown = true; // RELEASE/CONTINUE/REVERSE is acknowledged only after route unwind to IDLE.
           resetNavigationState();
           relayStop("STOP:WAITING_DATA");
         }
@@ -1626,7 +1636,8 @@ static void handleMcuLine(const char* mcuMsg) {
     if (!executorParked) executorParkedSinceMs = (uint32_t)millis();
     executorParked = true;
     executorStateAtMs = (uint32_t)millis();
-  } else if (strcmp(mcuMsg, "[RUNNING]") == 0 || strcmp(mcuMsg, "[RETURNING]") == 0) {
+  } else if (strcmp(mcuMsg, "[RUNNING]") == 0 || strcmp(mcuMsg, "[RETURNING]") == 0 ||
+             strcmp(mcuMsg, "[REVERSING]") == 0) {
     // Sent before the route's first step; the bias window ends here.
     executorParked = false;
     executorStateAtMs = (uint32_t)millis();

@@ -14,9 +14,10 @@ import unittest
 
 import numpy as np
 
-from hallway_geometry import ChassisGeometry
+from hallway_geometry import ChassisGeometry, analyze_hallway
 from motion_tracker import (EgoMotion, EgoMotionState, MotionTracker, STOP_TTC_S,
-                            detect_objects)
+                            build_segments, detect_objects)
+from scan_frame import build_scan_frame
 
 SCAN_HZ = 5.75
 STEP = math.radians(0.53)
@@ -110,9 +111,20 @@ def _ray_circle(ox, oy, c, s, px, py, radius):
 GEOMETRY = ChassisGeometry()
 
 
+def wall_heading(scan):
+    """H as the Pi computes it for this scan (None without walls)."""
+    hallway = analyze_hallway(scan, angle_min=ANGLE_MIN, angle_increment=STEP,
+                              range_min=0.10, range_max=RANGE_MAX_M, geometry=GEOMETRY)
+    return None if hallway is None else hallway.heading_deg
+
+
 def run(world, *, seconds, robot_speed, ego_mode="F", report=True, start_x=0.0,
-        stop_on_stop=False):
-    """Drive the robot through the world; returns per-scan (t, robot_x, assessment)."""
+        stop_on_stop=False, heading=None, walls=True):
+    """Drive the robot through the world; returns per-scan (t, robot_x, assessment).
+
+    heading: function of elapsed seconds giving the robot's heading (deg, + left).
+    walls: feed the tracker the wall heading of each scan, as final_w_serial does.
+    """
     tracker = MotionTracker(GEOMETRY)
     dt = 1.0 / SCAN_HZ
     robot_x = start_x
@@ -126,14 +138,33 @@ def run(world, *, seconds, robot_speed, ego_mode="F", report=True, start_x=0.0,
             ego = EgoMotion("F" if speed else "S", speed, 0.0, t)
         else:
             ego = EgoMotion(ego_mode, 0.0, 55.0 if ego_mode == "T" else 0.0, t)
-        result = tracker.update(world.scan(robot_x), angle_min=ANGLE_MIN, angle_increment=STEP,
-                                range_min=0.10, range_max=RANGE_MAX_M, scan_time=t, ego=ego)
+        scan = world.scan(robot_x, 0.0, heading(k * dt) if heading else 0.0)
+        result = tracker.update(scan, angle_min=ANGLE_MIN, angle_increment=STEP,
+                                range_min=0.10, range_max=RANGE_MAX_M, scan_time=t, ego=ego,
+                                heading_deg=wall_heading(scan) if walls else None)
         history.append((t, robot_x, result))
         if stop_on_stop and result.stop:
             speed = 0.0
         robot_x += speed * dt
         world.step_people(dt)
     return history
+
+
+def swing(amplitude_deg=5.0, rate_dps=4.0):
+    """A heading that sweeps +-amplitude at a constant rate, as centring does."""
+    period = 4.0 * amplitude_deg / rate_dps
+
+    def heading(elapsed):
+        phase = (elapsed % period) / period
+        return amplitude_deg * (4.0 * phase - 1.0 if phase < 0.5 else 3.0 - 4.0 * phase)
+    return heading
+
+
+def still_cylinders(world):
+    """Eight still posts and bins beside and inside the hallway."""
+    for i, (x, y) in enumerate(((300, 60), (450, -55), (700, 50), (900, -60), (1200, 55),
+                                (1500, -50), (1800, 60), (2200, -55))):
+        world.add_person(x, y, 0.0, 0.0, radius=12 + (i % 3) * 4)
 
 
 def first_stop(history, world_person_x0, person_vx):
@@ -347,6 +378,147 @@ class PeopleTest(unittest.TestCase):
         world.add_person(400.0, 0.0, -140.0, 0.0)
         history = run(world, seconds=2.0, robot_speed=0.0, ego_mode="T")
         self.assertTrue(all(not r.tracks for _, _, r in history))
+
+
+class RobotRotationTest(unittest.TestCase):
+    """The robot's own rotation must not turn still things into movers (2026-11-14).
+
+    Before the tracks were turned back by the wall heading, a 4 deg/s heading
+    correction made still cylinders read as movers (3 mover sightings in 30 s of
+    this model; artifacts/work-2026-11-14/proof_rotation.txt).
+    """
+
+    def test_heading_corrections_past_still_objects_never_make_a_mover(self):
+        for rate in (4.0, 8.0):
+            with self.subTest(rate_dps=rate):
+                world = Hallway(seed=3)
+                still_cylinders(world)
+                history = run(world, seconds=60, robot_speed=71.0, heading=swing(5.0, rate))
+                self.assertEqual(sum(r.moving_count for _, _, r in history), 0)
+                self.assertEqual(sum(r.person_count for _, _, r in history), 0)
+                self.assertFalse(any(r.stop or r.slow or r.turn_stop for _, _, r in history))
+
+    def test_the_same_without_walls_or_drive_reports_never_makes_a_person(self):
+        for report, walls in ((True, False), (False, True), (False, False)):
+            with self.subTest(drive_reports=report, walls=walls):
+                world = Hallway(seed=5)
+                still_cylinders(world)
+                history = run(world, seconds=40, robot_speed=71.0, heading=swing(5.0, 4.0),
+                              report=report, walls=walls)
+                self.assertEqual(sum(r.person_count for _, _, r in history), 0)
+                self.assertFalse(any(r.stop for _, _, r in history))
+
+    def test_a_walker_is_still_found_while_the_robot_corrects_its_heading(self):
+        world = Hallway(seed=11)
+        world.add_person(900.0, 10.0, -140.0, 0.0)
+        history = run(world, seconds=5, robot_speed=71.0, heading=swing(5.0, 4.0),
+                      stop_on_stop=True)
+        stop = first_stop(history, 900.0, -140.0)
+        self.assertIsNotNone(stop)
+        self.assertGreater(stop[1], 300.0)
+
+    def test_a_wall_fit_that_jumps_is_not_taken_for_a_rotation(self):
+        tracker = MotionTracker(GEOMETRY)
+        world = Hallway(seed=2)
+        still_cylinders(world)
+        dt = 1.0 / SCAN_HZ
+        movers = 0
+        for k in range(60):
+            t = 100.0 + k * dt
+            # The reported heading flips between two fits 5 degrees apart.
+            result = tracker.update(world.scan(k * 71.0 * dt), angle_min=ANGLE_MIN,
+                                    angle_increment=STEP, range_min=0.10, range_max=RANGE_MAX_M,
+                                    scan_time=t, ego=EgoMotion("F", 71.0, 0.0, t),
+                                    heading_deg=0.0 if k % 2 else 5.0)
+            movers += result.moving_count
+        self.assertEqual(movers, 0)
+
+
+class LikelyPersonTest(unittest.TestCase):
+    """"Likely person": person-sized, proven to move over the ground, not a panel."""
+
+    @staticmethod
+    def kinds(history):
+        return [track.kind for _, _, result in history for track in result.tracks]
+
+    def test_a_walker_is_labelled_a_person_within_about_a_second(self):
+        for speed, robot in ((-140.0, 71.0), (-140.0, 0.0), (120.0, 71.0)):
+            with self.subTest(person_cm_s=speed, robot_cm_s=robot):
+                world = Hallway(seed=4)
+                world.add_person(600.0 if speed < 0 else 250.0, 20.0, speed, 0.0)
+                history = run(world, seconds=3, robot_speed=robot)
+                first = next((t - history[0][0] for t, _, r in history if r.person_count), None)
+                self.assertIsNotNone(first)
+                self.assertLessEqual(first, 1.6)
+
+    def test_a_person_crossing_the_hallway_is_labelled(self):
+        world = Hallway(seed=4)
+        world.add_person(350.0, -80.0, 0.0, 110.0)
+        history = run(world, seconds=1.4, robot_speed=0.0)
+        self.assertGreater(sum(r.person_count for _, _, r in history), 0)
+
+    def test_a_person_who_stops_walking_stays_labelled(self):
+        world = Hallway(seed=6)
+        world.add_person(600.0, 15.0, -120.0, 0.0)
+        tracker = MotionTracker(GEOMETRY)
+        dt = 1.0 / SCAN_HZ
+        labelled = []
+        for k in range(int(8 * SCAN_HZ)):
+            t = 100.0 + k * dt
+            if k * dt >= 2.0:
+                world.people[0][2] = 0.0   # stands still from 2 s on
+            scan = world.scan(0.0)
+            result = tracker.update(scan, angle_min=ANGLE_MIN, angle_increment=STEP,
+                                    range_min=0.10, range_max=RANGE_MAX_M, scan_time=t,
+                                    ego=EgoMotion("S", 0.0, 0.0, t),
+                                    heading_deg=wall_heading(scan))
+            labelled.append(result.person_count)
+            world.step_people(dt)
+        self.assertEqual(labelled[-1], 1)
+        self.assertTrue(all(labelled[int(2.0 * SCAN_HZ):]))
+
+    def test_a_still_person_sized_object_is_never_labelled(self):
+        world = Hallway(seed=8)
+        world.add_person(350.0, 0.0, 0.0, 0.0)
+        for speed in (0.0, 71.0):
+            with self.subTest(robot_cm_s=speed):
+                history = run(world, seconds=20, robot_speed=speed, start_x=-1500.0)
+                self.assertNotIn("person", self.kinds(history))
+                self.assertNotIn("moving", self.kinds(history))
+
+    def test_a_moving_flat_panel_is_a_moving_object_not_a_person(self):
+        """A 60 cm board carried broadside (a cart side, a door being moved)."""
+        class Board(Hallway):
+            def scan(self, robot_x, robot_y=0.0, heading_deg=0.0):
+                self.leaf = ((self.board_x, -30.0), (self.board_x, 30.0))
+                return super().scan(robot_x, robot_y, heading_deg)
+        world = Board(seed=9)
+        tracker = MotionTracker(GEOMETRY)
+        dt = 1.0 / SCAN_HZ
+        kinds = set()
+        for k in range(int(3 * SCAN_HZ)):
+            t = 100.0 + k * dt
+            world.board_x = 380.0 - 100.0 * k * dt
+            scan = world.scan(0.0)
+            result = tracker.update(scan, angle_min=ANGLE_MIN, angle_increment=STEP,
+                                    range_min=0.10, range_max=RANGE_MAX_M, scan_time=t,
+                                    ego=EgoMotion("S", 0.0, 0.0, t),
+                                    heading_deg=wall_heading(scan))
+            kinds.update(track.kind for track in result.tracks)
+        self.assertIn("moving", kinds)
+        self.assertNotIn("person", kinds)
+
+    def test_a_reused_segmentation_gives_the_same_detections(self):
+        world = Hallway(seed=4)
+        world.add_person(400.0, 20.0, 0.0, 0.0)
+        scan = world.scan(0.0)
+        body = (GEOMETRY.front_cm, GEOMETRY.rear_cm, GEOMETRY.half_width_cm)
+        direct = detect_objects(scan, angle_min=ANGLE_MIN, angle_increment=STEP, range_min=0.10,
+                                range_max=RANGE_MAX_M, lidar_y_cm=GEOMETRY.lidar_y_cm, body=body)
+        frame = build_scan_frame(scan, angle_min=ANGLE_MIN, angle_increment=STEP, range_min=0.10,
+                                 range_max=RANGE_MAX_M, lidar_y_cm=GEOMETRY.lidar_y_cm)
+        self.assertEqual(direct, detect_objects(segments=build_segments(frame, body)))
+        self.assertTrue(direct)
 
 
 class GeometryTest(unittest.TestCase):

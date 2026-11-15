@@ -51,6 +51,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 import math
 import threading
 import time
@@ -59,6 +60,8 @@ try:  # numpy ships with ROS 2 on the Pi.
     import numpy as np
 except ImportError:  # pragma: no cover - stripped install: prediction disabled
     np = None
+
+from scan_frame import build_scan_frame
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +129,36 @@ CLOSING_MIN_CM_S = 10.0
 UNKNOWN_EGO_CLOSING_MIN_CM_S = ROBOT_MAX_SPEED_CM_S + 25.0
 STOP_HOLD_S = 0.6
 SLOW_HOLD_S = 1.0
+# --- The robot's own rotation (2026-11-14) ---
+# A heading correction turns the whole scan: a still object 5 m away slides
+# sideways at 35 cm/s while the robot yaws at 4 deg/s. The wall fit gives the
+# robot's heading relative to the hallway for every scan (H), so its change from
+# one scan to the next is the rotation, and the tracks are turned back by it.
+# What is left unexplained is allowed for as a rotation rate: sideways motion
+# (about the robot) up to range x rate is not evidence of a mover. Motion along
+# the line of sight is never explained by rotation, so someone walking toward the
+# robot is unaffected.
+YAW_STEP_MAX_DEG = 3.0            # a bigger change between scans is a different wall fit, not a rotation
+YAW_STEP_SIGMA_DEG = 0.25         # noise of one scan-to-scan heading difference
+YAW_KNOWN_ALLOW_DPS = 1.5         # rotation rate left unexplained with walls in view
+YAW_UNKNOWN_ALLOW_DPS = 8.0       # no walls: heading hold and centring may turn this fast
+# --- Likely person (2026-11-14, owner: "mark them RED if you think they were humans") ---
+# A 2D scan at chest height cannot recognise a person. "Likely person" is a
+# person-sized cluster that has proven to move over the ground at a walking or
+# running speed, and is not a flat panel. It is a display/report label: every
+# stop and slow rule above treats all moving objects alike.
+PERSON_MIN_EXTENT_CM = 15.0
+PERSON_MAX_EXTENT_CM = 75.0
+PERSON_MIN_SPEED_CM_S = 25.0
+PERSON_MAX_SPEED_CM_S = 450.0
+PERSON_MIN_TRAVEL_CM = 40.0       # net ground travel ...
+PERSON_MIN_TRAVEL_S = 0.9         # ... over at least this long
+PERSON_MIN_HITS = 5
+PERSON_WINDOW_MAX_S = 2.2          # the trail holds about 2 s of positions
+FLAT_MIN_EXTENT_CM = 35.0         # a panel this wide ...
+FLAT_MAX_RMS_CM = 1.2             # ... lying this close to one straight line is not a torso
+FLAT_MAX_RANGE_CM = 400.0         # beyond this the range noise hides a torso's curve
+FLAT_VETO_FRACTION = 0.6          # of the track's sightings
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +233,8 @@ class TrackView:
     vy_cm_s: float
     moving: bool
     ttc_s: float | None          # time to contact with the footprint, if on course
+    kind: str = "still"          # "person" (likely), "moving" or "still"
+    extent_cm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -215,6 +250,10 @@ class MotionAssessment:
     def moving_count(self):
         return sum(1 for track in self.tracks if track.moving)
 
+    @property
+    def person_count(self):
+        return sum(1 for track in self.tracks if track.kind == "person")
+
 
 # ---------------------------------------------------------------------------
 # Segmentation
@@ -226,25 +265,25 @@ class Detection:
     extent: float
     points: int
     near: float                  # nearest point's range
+    flat: bool = False           # a wide, straight panel (door leaf, cart side, board)
+
+
+@dataclass(frozen=True)
+class ScanSegments:
+    """One scan cut into segments, shared by the tracker and the hallway scene."""
+    xs: Any
+    ys: Any
+    rs: Any
+    groups: tuple                # index arrays into xs/ys/rs, small neighbours merged
 
 
 def scan_points(ranges, angle_min, angle_increment, range_min, range_max, lidar_y_cm=0.0):
     """Valid returns in ray order: (ray index, x cm, y cm, range cm) arrays."""
-    if np is None:
+    frame = build_scan_frame(ranges, angle_min=angle_min, angle_increment=angle_increment,
+                             range_min=range_min, range_max=range_max, lidar_y_cm=lidar_y_cm)
+    if frame is None or len(frame) == 0:
         return None
-    try:
-        distance = np.asarray(ranges, dtype=float)
-    except (TypeError, ValueError):
-        distance = np.array([_number(value) for value in ranges], dtype=float)
-    if distance.size == 0:
-        return None
-    angle = float(angle_min) + np.arange(distance.size, dtype=float) * float(angle_increment)
-    valid = (np.isfinite(distance) & (distance > 0.0) & (distance >= float(range_min))
-             & (distance <= float(range_max)))
-    index = np.nonzero(valid)[0]
-    r_cm = distance[index] * 100.0
-    a = angle[index]
-    return index, r_cm * np.cos(a), r_cm * np.sin(a) + float(lidar_y_cm), r_cm
+    return frame.index, frame.xs, frame.ys, frame.rs
 
 
 def _number(value):
@@ -288,22 +327,31 @@ def _extent(xs, ys):
     return float(math.hypot(float(xs.max() - xs.min()), float(ys.max() - ys.min())))
 
 
-def detect_objects(ranges, *, angle_min, angle_increment, range_min, range_max,
-                   lidar_y_cm=0.0, body=None):
-    """Small segments (object candidates) of one robot-frame scan.
+def _line_rms(xs, ys):
+    """RMS distance of the points from their own best straight line."""
+    if np is None or len(xs) < 3:
+        return 0.0
+    dx, dy = xs - xs.mean(), ys - ys.mean()
+    sxx, syy, sxy = float(np.mean(dx * dx)), float(np.mean(dy * dy)), float(np.mean(dx * dy))
+    # Smaller eigenvalue of the 2x2 scatter matrix = variance across the line.
+    across = 0.5 * (sxx + syy) - math.sqrt(0.25 * (sxx - syy) ** 2 + sxy * sxy)
+    return math.sqrt(max(0.0, across))
+
+
+def build_segments(frame, body=None):
+    """Segments of one converted scan, or None for an empty/unavailable frame.
 
     body: (front_cm, rear_cm, half_width_cm) of the chassis; returns inside it
     are the robot itself and are ignored.
     """
-    points = scan_points(ranges, angle_min, angle_increment, range_min, range_max, lidar_y_cm)
-    if points is None or np is None:
-        return []
-    index, xs, ys, rs = points
+    if frame is None or np is None or len(frame) == 0:
+        return None
+    index, xs, ys, rs = frame.index, frame.xs, frame.ys, frame.rs
     if body is not None:
         front, rear, half = body
         outside = ~((xs <= front) & (xs >= -rear) & (np.abs(ys) <= half))
         index, xs, ys, rs = index[outside], xs[outside], ys[outside], rs[outside]
-    segments = [s for s in segment_scan(index, xs, ys, rs, angle_increment) if len(s)]
+    segments = [s for s in segment_scan(index, xs, ys, rs, frame.angle_increment) if len(s)]
     # Merge neighbouring small segments (an arm beside a torso, two legs).
     merged = []
     for seg in segments:
@@ -318,8 +366,28 @@ def detect_objects(ranges, *, angle_min, angle_increment, range_min, range_max,
                     merged[-1] = joined
                     continue
         merged.append(seg)
+    return ScanSegments(xs, ys, rs, tuple(merged))
+
+
+def detect_objects(ranges=None, *, angle_min=0.0, angle_increment=0.0, range_min=0.0,
+                   range_max=0.0, lidar_y_cm=0.0, body=None, segments=None):
+    """Small segments (object candidates) of one robot-frame scan.
+
+    Pass ``segments`` (build_segments of this scan) to reuse a segmentation;
+    otherwise the scan is converted and segmented here.
+    """
+    if np is None:
+        return []
+    if segments is None:
+        frame = build_scan_frame(ranges, angle_min=angle_min, angle_increment=angle_increment,
+                                 range_min=range_min, range_max=range_max,
+                                 lidar_y_cm=lidar_y_cm)
+        segments = build_segments(frame, body)
+    if segments is None:
+        return []
+    xs, ys, rs = segments.xs, segments.ys, segments.rs
     detections = []
-    for seg in merged:
+    for seg in segments.groups:
         if len(seg) < MIN_POINTS:
             continue
         sx, sy = xs[seg], ys[seg]
@@ -331,10 +399,12 @@ def detect_objects(ranges, *, angle_min, angle_increment, range_min, range_max,
             continue
         cx, cy = float(sx.mean()), float(sy.mean())
         distance = math.hypot(cx, cy)
+        flat = (extent >= FLAT_MIN_EXTENT_CM and near <= FLAT_MAX_RANGE_CM
+                and _line_rms(sx, sy) <= FLAT_MAX_RMS_CM)
         if distance > 1e-6:
             shift = VISIBLE_ARC_BIAS * min(0.5 * extent, OBJECT_RADIUS_MAX_CM) / distance
             cx, cy = cx * (1.0 + shift), cy * (1.0 + shift)
-        detections.append(Detection(cx, cy, extent, len(seg), near))
+        detections.append(Detection(cx, cy, extent, len(seg), near, flat))
     return detections
 
 
@@ -355,8 +425,11 @@ class _Track:
     ttc: float | None = None
     moving: bool = False
     shape_jump: bool = False
-    # (time, x, y) of corrected positions in the pseudo-ground frame (relative
-    # position plus the robot's own integrated travel).
+    person: bool = False         # latched for the track's life: still red when they stop
+    sightings: int = 0
+    flat_sightings: int = 0
+    # (time, x, y) of corrected positions in the ground frame: the robot's own
+    # integrated travel and rotation are taken out.
     trail: deque = field(default_factory=lambda: deque(maxlen=12))
 
     def radius(self):
@@ -382,19 +455,32 @@ class MotionTracker:
         self._slow_until = -1.0
         self._turn_until = -1.0
         self._last_reason = ""
-        self._ego_travel = 0.0      # robot's integrated forward travel, cm
+        # The robot's own pose in the ground frame the trails are kept in: the
+        # rotation centre's position (cm) and the heading (rad, + = left).
+        self._ego_x = 0.0
+        self._ego_y = 0.0
+        self._ego_heading = 0.0
+        self._last_wall_heading = None   # H of the previous scan, deg
+        self._yaw_unknown_until = -1.0
         self.enabled = np is not None
 
     # -- lifecycle ---------------------------------------------------------
     def reset(self):
         self._tracks = []
         self._last_time = None
-        self._ego_travel = 0.0
+        self._ego_x = self._ego_y = self._ego_heading = 0.0
+        self._last_wall_heading = None
+        self._yaw_unknown_until = -1.0
 
     # -- one scan ----------------------------------------------------------
-    def update(self, ranges, *, angle_min, angle_increment, range_min, range_max,
-               scan_time, ego=None):
-        """Process one robot-frame scan acquired at ``scan_time`` (monotonic s)."""
+    def update(self, ranges=None, *, angle_min=0.0, angle_increment=0.0, range_min=0.0,
+               range_max=0.0, scan_time, ego=None, heading_deg=None, segments=None):
+        """Process one robot-frame scan acquired at ``scan_time`` (monotonic s).
+
+        heading_deg: the robot's heading relative to the hallway walls in this
+        scan (hallway_geometry's H, + = rotated left), or None without walls.
+        segments: build_segments() of this scan, to reuse its segmentation.
+        """
         if not self.enabled:
             return MotionAssessment(reason="numpy unavailable")
         ego = ego if ego is not None else EgoMotion()
@@ -403,7 +489,8 @@ class MotionTracker:
             detections = detect_objects(
                 ranges, angle_min=angle_min, angle_increment=angle_increment,
                 range_min=range_min, range_max=range_max, lidar_y_cm=geometry.lidar_y_cm,
-                body=(geometry.front_cm, geometry.rear_cm, geometry.half_width_cm))
+                body=(geometry.front_cm, geometry.rear_cm, geometry.half_width_cm),
+                segments=segments)
         except (TypeError, ValueError, OverflowError):
             self.reset()
             return MotionAssessment(reason="invalid scan")
@@ -422,13 +509,23 @@ class MotionTracker:
         self._last_time = scan_time
 
         v_ego, ego_lo, ego_hi = self._ego_bounds(ego, known)
+        turned, yaw_known = self._ego_rotation(ego, known, heading_deg, dt is not None)
+        if not yaw_known:
+            self._yaw_unknown_until = scan_time + NET_WINDOW_MAX_S
+        yaw_allow = math.radians(YAW_UNKNOWN_ALLOW_DPS if scan_time <= self._yaw_unknown_until
+                                 else YAW_KNOWN_ALLOW_DPS)
         if dt is not None:
-            self._ego_travel += v_ego * dt
+            self._ego_heading += turned
+            self._ego_x += v_ego * dt * math.cos(self._ego_heading)
+            self._ego_y += v_ego * dt * math.sin(self._ego_heading)
+            yaw_sigma = (math.radians(YAW_STEP_SIGMA_DEG) if yaw_known
+                         else math.radians(YAW_UNKNOWN_ALLOW_DPS) * dt)
             for track in self._tracks:
                 self._predict(track, dt, v_ego, ego_hi - ego_lo)
+                self._rotate(track, turned, yaw_sigma)
         self._associate(detections, scan_time)
         for track in self._tracks:
-            self._classify(track, ego_lo, ego_hi, v_ego, scan_time)
+            self._classify(track, ego_lo, ego_hi, v_ego, scan_time, yaw_allow)
         return self._decide(scan_time, ego, known, v_ego)
 
     # -- internals -----------------------------------------------------------
@@ -444,6 +541,51 @@ class MotionTracker:
         # Unknown: assume stopped in the filter, but the robot may be doing anything
         # from standing to full speed forward.
         return 0.0, -EGO_SPEED_SIGMA_CM_S, ROBOT_MAX_SPEED_CM_S + EGO_SPEED_SIGMA_CM_S
+
+    def _ego_rotation(self, ego, known, heading_deg, continuing):
+        """(rotation since the last scan in rad, whether it is known)."""
+        previous = self._last_wall_heading
+        try:
+            heading = None if heading_deg is None else float(heading_deg)
+        except (TypeError, ValueError):
+            heading = None
+        if heading is not None and not math.isfinite(heading):
+            heading = None
+        self._last_wall_heading = heading
+        if known and ego.mode == "S":
+            return 0.0, True  # wheels stopped: no rotation, whatever the wall noise says
+        if not continuing:
+            return 0.0, True  # first scan of a tracking run: nothing to turn yet
+        if heading is None or previous is None:
+            return 0.0, False
+        step = heading - previous
+        if abs(step) > YAW_STEP_MAX_DEG:
+            return 0.0, False  # another wall was fitted; not a rotation
+        return math.radians(step), True
+
+    def _rotate(self, track, turned, yaw_sigma):
+        """Turn a track back by the robot's own rotation about its spin centre."""
+        centre = self.geometry.rotation_x_cm
+        x, y, vx, vy = track.state
+        px, py = x - centre, y
+        if turned:
+            c, s = math.cos(-turned), math.sin(-turned)
+            px, py = c * px - s * py, s * px + c * py
+            vx, vy = c * vx - s * vy, s * vx + c * vy
+            track.state = [px + centre, py, vx, vy]
+        # The rotation is known only to yaw_sigma: that much position noise across
+        # the line of sight from the spin centre, and none along it.
+        tx, ty = -py * yaw_sigma, px * yaw_sigma
+        track.cov[0][0] += tx * tx
+        track.cov[0][1] += tx * ty
+        track.cov[1][0] += tx * ty
+        track.cov[1][1] += ty * ty
+
+    def _ground(self, x, y):
+        """Robot-frame point to the ground frame of the trails."""
+        px, py = x - self.geometry.rotation_x_cm, y
+        c, s = math.cos(self._ego_heading), math.sin(self._ego_heading)
+        return self._ego_x + c * px - s * py, self._ego_y + s * px + c * py
 
     @staticmethod
     def _predict(track, dt, v_ego, ego_spread):
@@ -496,7 +638,7 @@ class MotionTracker:
             self._correct(track, detections[di], R, now, reacquired)
             if reacquired:
                 track.trail.clear()
-            track.trail.append((now, track.state[0] + self._ego_travel, track.state[1]))
+            track.trail.append((now, *self._ground(track.state[0], track.state[1])))
         survivors = []
         for ti, track in enumerate(self._tracks):
             if ti not in used_tracks:
@@ -515,7 +657,9 @@ class MotionTracker:
                 self._next_id, [det.x, det.y, 0.0, 0.0],
                 [[m0, 0, 0, 0], [0, m0, 0, 0], [0, 0, v0, 0], [0, 0, 0, v0]],
                 det.extent, born=now, last_seen=now)
-            track.trail.append((now, det.x + self._ego_travel, det.y))
+            track.sightings = 1
+            track.flat_sightings = 1 if det.flat else 0
+            track.trail.append((now, *self._ground(det.x, det.y)))
             self._tracks.append(track)
             self._next_id += 1
 
@@ -540,6 +684,8 @@ class MotionTracker:
         track.state = state.tolist()
         track.cov = (0.5 * (P + P.T)).tolist()
         track.extent = 0.7 * track.extent + 0.3 * det.extent
+        track.sightings += 1
+        track.flat_sightings += 1 if det.flat else 0
         track.hits += 1
         track.misses = 0
         track.last_seen = now
@@ -548,44 +694,79 @@ class MotionTracker:
     def _band_residual(value, lo, hi):
         return 0.0 if lo <= value <= hi else (lo - value if value < lo else value - hi)
 
-    def _classify(self, track, ego_lo, ego_hi, v_ego, now):
+    def _classify(self, track, ego_lo, ego_hi, v_ego, now, yaw_allow=0.0):
         """Moving if the ground motion is beyond every still-object explanation."""
         if track.misses > 0 or track.last_seen != now:
             # Coasting on a prediction is not evidence of anything.
             track.moving_streak = 0
             track.moving = False
             return
-        vx, vy = track.state[2], track.state[3]
+        x, y, vx, vy = track.state
         # A still object's estimated ground velocity lies in [v_ego - hi, v_ego - lo].
         lo, hi = v_ego - ego_hi, v_ego - ego_lo
-        residual = math.hypot(self._band_residual(vx, lo, hi), vy)
+        residual = self._beyond_rotation(x, y, self._band_residual(vx, lo, hi), vy, yaw_allow)
         P = track.cov
         sigma = math.sqrt(max(0.0, 0.5 * (P[2][2] + P[3][3])))
         fast = residual >= FAST_MOVING_CM_S
         significant = (track.hits >= CONFIRM_HITS and not track.shape_jump
                        and residual >= MOVING_MIN_CM_S and residual >= MOVING_SIGMAS * sigma
                        and self._travelled(track, now, lo, hi,
-                                           FAST_NET_WINDOW_MIN_S if fast else NET_WINDOW_MIN_S))
+                                           FAST_NET_WINDOW_MIN_S if fast else NET_WINDOW_MIN_S,
+                                           yaw_allow) >= NET_DISPLACEMENT_MIN_CM)
         track.moving_streak = track.moving_streak + 1 if significant else 0
         needed = FAST_MOVING_CONFIRM if fast else MOVING_CONFIRM
         track.moving = track.moving_streak >= needed
+        if (track.moving and not track.person and track.hits >= PERSON_MIN_HITS
+                and PERSON_MIN_EXTENT_CM <= track.extent <= PERSON_MAX_EXTENT_CM
+                and PERSON_MIN_SPEED_CM_S <= residual <= PERSON_MAX_SPEED_CM_S
+                and track.flat_sightings < FLAT_VETO_FRACTION * max(1, track.sightings)
+                and self._travelled(track, now, lo, hi, PERSON_MIN_TRAVEL_S, yaw_allow,
+                                    window_max=PERSON_WINDOW_MAX_S) >= PERSON_MIN_TRAVEL_CM):
+            track.person = True
 
-    @classmethod
-    def _travelled(cls, track, now, lo, hi, window_min):
-        """Net ground displacement over the last window_min..NET_WINDOW_MAX_S."""
+    def _beyond_rotation(self, x, y, dx, dy, yaw_allow_span):
+        """Size of (dx, dy) at (x, y) after taking off what a rotation of the robot
+        by up to yaw_allow_span (rad, or rad/s for a velocity) could explain."""
+        px, py = x - self.geometry.rotation_x_cm, y
+        rng = math.hypot(px, py)
+        if rng < 1e-6:
+            return math.hypot(dx, dy)
+        ux, uy = px / rng, py / rng
+        radial = dx * ux + dy * uy
+        tangential = -dx * uy + dy * ux
+        tangential = max(0.0, abs(tangential) - rng * yaw_allow_span)
+        return math.hypot(radial, tangential)
+
+    def _travelled(self, track, now, lo, hi, window_min, yaw_allow=0.0,
+                   window_max=NET_WINDOW_MAX_S):
+        """Net ground displacement (cm) over the last window_min..window_max
+        seconds that neither the robot's speed error nor its rotation explains;
+        0.0 when the trail is too short."""
         oldest = None
-        for t, x, y in track.trail:
-            if now - t <= NET_WINDOW_MAX_S:
-                oldest = (t, x, y)
+        for t, gx, gy in track.trail:
+            if now - t <= window_max:
+                oldest = (t, gx, gy)
                 break
         if oldest is None or now - oldest[0] < window_min - 1e-6:
-            return False
+            return 0.0
         t0, x0, y0 = oldest
         _, x1, y1 = track.trail[-1]
         span = now - t0
-        # A still object's pseudo-ground x drifts by (v_ego - v_true) * span.
-        dx = cls._band_residual(x1 - x0, lo * span, hi * span)
-        return math.hypot(dx, y1 - y0) >= NET_DISPLACEMENT_MIN_CM
+        # Into the robot's present axes: its speed error lies along x.
+        c, s = math.cos(-self._ego_heading), math.sin(-self._ego_heading)
+        gx, gy = x1 - x0, y1 - y0
+        dx, dy = c * gx - s * gy, s * gx + c * gy
+        # A still object's ground x drifts by (v_ego - v_true) * span.
+        dx = self._band_residual(dx, lo * span, hi * span)
+        return self._beyond_rotation(track.state[0], track.state[1], dx, dy, yaw_allow * span)
+
+    @staticmethod
+    def _view(track, ttc):
+        x, y, vx, vy = track.state
+        kind = "person" if track.person else "moving" if track.moving else "still"
+        return TrackView(track.track_id, round(x, 1), round(y, 1), round(vx, 1), round(vy, 1),
+                         track.moving, None if ttc is None else round(ttc, 2), kind,
+                         round(track.extent, 1))
 
     def _footprint(self, radius):
         g = self.geometry
@@ -645,7 +826,7 @@ class MotionTracker:
                 closing = -(x * rvx + y * rvy) / rng if rng > 1e-6 else 0.0
                 if ttc is not None and x < -g.rear_cm and rvx > 0.0:
                     # Catching up from behind: stopping would only make the contact
-                    # harder. The static rear sector (35 cm) still stops for it.
+                    # harder, and forward route segments ignore what is behind them.
                     ttc = None
                 elif ttc == 0.0 and closing < CLOSING_MIN_CM_S:
                     # Already within the margins but abeam or moving off: it is
@@ -655,8 +836,7 @@ class MotionTracker:
                     # Robot motion unknown: a spin or the robot's own speed could
                     # explain this; it is not evidence of anything coming at it.
                     track.ttc = None
-                    views.append(TrackView(track.track_id, round(x, 1), round(y, 1),
-                                           round(vx, 1), round(vy, 1), track.moving, None))
+                    views.append(self._view(track, None))
                     continue
                 if ttc is not None and ttc <= STOP_TTC_S:
                     stop = True
@@ -681,9 +861,7 @@ class MotionTracker:
                 if ttc is not None and (best is None or ttc < best[0]):
                     best = (ttc, rng, closing)
             track.ttc = ttc
-            views.append(TrackView(track.track_id, round(x, 1), round(y, 1), round(vx, 1),
-                                   round(vy, 1), track.moving,
-                                   None if ttc is None else round(ttc, 2)))
+            views.append(self._view(track, ttc))
         if stop:
             self._stop_until = now + STOP_HOLD_S
         if stop or slow:

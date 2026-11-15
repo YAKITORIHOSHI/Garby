@@ -59,7 +59,8 @@ class LidarOrientationTests(unittest.TestCase):
                 self.assertEqual(frame[0]["LEFT"][0], 1.2)
                 self.assertEqual(frame[0]["RIGHT"][0], 1.8)
                 self.assertEqual(fields["CF"], "80.0")
-                self.assertIn("F=O|B=O", path)
+                # 25 cm behind is shown but never holds a forward route segment.
+                self.assertIn("F=O|B=C", path)
                 self.assertEqual(node.history["FRONT"][-1], 80.0)
                 self.assertEqual(node.history["BACK"][-1], 25.0)
                 snapshot = frame[5]
@@ -83,7 +84,7 @@ class LidarOrientationTests(unittest.TestCase):
         runtime = self.runtime()
         runtime.front_disabled.set()
         node, _, path, fields = self.produce(runtime, self.scan(0))
-        self.assertIn("F=C|B=O", path)
+        self.assertIn("F=C|B=C", path)
         self.assertEqual(fields["CF"], "80.0")
         self.assertEqual(fields["CL"], "30.0")
         self.assertEqual(fields["CR"], "50.0")

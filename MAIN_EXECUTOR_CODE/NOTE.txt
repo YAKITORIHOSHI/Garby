@@ -108,7 +108,11 @@ pre-run centring. Report: docs/obstacle-sweep-hold-2026-11-12.md.
   step-limit turn, or 5 minutes without the MPU stream (HEADING_RECOVERY_MS, was 10 s)
   fail a segment. After a heading outage over 10 s with a new S3 reference, two wall
   scans must confirm the route direction before moving on.
-- Sonar: a ping with no echo inside the 18 ms timeout is a far clear reading (it was
+- Sonar (2026-11-14): reads only to ULTRASONIC_MAX_RANGE_CM = 110 cm; the ping gives up
+  after about 6.6 ms and a further echo is clear. A forward stop beyond 25 cm needs two
+  consecutive echoes inside 60 cm (one stray echo used to brake). Continue run after an
+  emergency stop: RouteResume.h, step lists in pointsRun.ino, test_continue_run.cpp.
+- Sonar: a ping with no echo inside the timeout (18 ms before 2026-11-14) is a far clear reading (it was
   "unknown" and could never release a hold in an open hallway). The servo sweeps
   (SonarSweep.h): CRUISE forward/+25/forward/-25 while driving; SURVEY forward between
   +-25/+-50/+-70 while stopped in a route; forward only while spinning, idle or parked.

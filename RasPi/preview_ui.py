@@ -51,6 +51,7 @@ def main():
                                     "emergency_stopped": False if not unavailable else None,
                                     "ultrasonic_enabled": True if not unavailable else None,
                                     "can_configure": not unavailable, "can_release": False,
+                                    "can_continue": False,
                                     "can_reset": False, "message": "Preview only: no robot commands sent"},
               "manual_start": {"enabled": not unavailable,
                                "message": "Preview: ready to start" if not unavailable else "Waiting for both controllers"}}
@@ -65,10 +66,17 @@ def main():
         status = health["operator_controls"]
         if action == "stop":
             status.update(emergency_stopped=True, can_release=not unavailable,
+                          can_continue=not unavailable,
                           can_reset=not unavailable, can_configure=not unavailable)
             health["manual_start"] = {"enabled": False, "message": "Preview: emergency stop applied"}
+        elif action == "continue":
+            status.update(emergency_stopped=False, can_release=False, can_continue=False,
+                          can_reset=False)
+            health["robot_state"] = "OUTBOUND"
+            health["manual_start"] = {"enabled": False, "message": "Preview: route continued"}
         elif action == "release":
-            status.update(emergency_stopped=False, can_release=False, can_reset=False)
+            status.update(emergency_stopped=False, can_release=False, can_continue=False,
+                          can_reset=False)
             health["robot_state"] = "IDLE"
             health["manual_start"] = {"enabled": True, "message": "Preview: ready for a new start"}
         elif action == "sonar":
@@ -81,6 +89,7 @@ def main():
                    read_health=lambda: health, allow_safety_disable=True, request_start=preview_start,
                    request_emergency_stop=lambda: preview_operator("stop"),
                    request_release_stop=lambda: preview_operator("release"),
+                   request_continue_run=lambda: preview_operator("continue"),
                    request_ultrasonic=lambda enabled: preview_operator("sonar", enabled),
                    request_system_reset=lambda: preview_operator("restart"))
     root.title("GARBY - UI preview (sample data)")

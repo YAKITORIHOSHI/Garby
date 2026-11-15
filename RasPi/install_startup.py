@@ -32,6 +32,8 @@ def main():
                             'WorkingDirectory=' + str(directory).replace('%', '%%'))
     source = source.replace('/home/garby/GARBY/RasPi/run_bridge.sh',
                             unit_quote(str(directory / 'run_bridge.sh')))
+    source = source.replace('/home/garby/GARBY/RasPi/run_headless.sh',
+                            unit_quote(str(directory / 'run_headless.sh')))
     source = source.replace('EnvironmentFile=/etc/default/garby-bridge',
                             'EnvironmentFile=' + str(environment).replace('%', '%%'))
     if args.output:

@@ -4,13 +4,14 @@
 
 This repository owns robot source, robot tools and robot verification. The Android project
 is maintained at https://github.com/YAKITORIHOSHI/Garby-Mobile-App. Never copy its source,
-Gradle project, app evidence or APKs into this repository or its current release packages.
-Use links and an optional external checkout for interoperability checks. Keep preserved
-Test1 archives unchanged; current Test2 must respect the repository boundary.
+Gradle project, app evidence or APKs into this repository or its release package.
+Use links and an optional external checkout for interoperability checks.
 
-Publish exactly one release named `Most Latest`, with only `GarbyMostLatest-Test1.zip`
-and `GarbyMostLatest-Test2.zip` as uploaded assets. Do not attach APKs, checksum files or
-extra archives. Preserve both existing ZIP contents during release-list cleanup.
+Publish exactly one release named `Most Latest` (tag `latest`), with one uploaded asset:
+`GarbyMostLatest.zip`, a `git archive` of the published commit. Do not attach APKs, checksum
+files or extra archives. On 2026-11-15 the owner replaced the earlier
+`GarbyMostLatest-Test1.zip` and `GarbyMostLatest-Test2.zip` with it; copies of both are kept
+outside the repository.
 
 This directory contains a coordinated Raspberry Pi, BLE/MPU bridge, motor
 executor and Android system. Start with `README.md` and the relevant sections of
@@ -94,15 +95,38 @@ User instructions and authorization in the current session take precedence.
   grid (an outage mid-turn may leave the old hallway in view).
 - Chassis zones (`RasPi/hallway_geometry.py`) only ADD stop/slow evidence to the sector
   limits: front box (body width + 10 cm to 95 cm, front-group bypass), slow zone to
-  160 cm (`F=W` -> `GO:SLOW`), side band within 2 cm of the body (never bypassed), spin
-  sweep `T=` (required clear between `[TURN:START]`/`[TURN:END]`). Chassis outline is
-  env-configured and unmeasured.
+  160 cm (`F=W` -> `GO:SLOW`), side band within 2 cm of the body from the spin centre to
+  the front edge (never bypassed), spin sweep `T=` (required clear between
+  `[TURN:START]`/`[TURN:END]`). Chassis outline is env-configured and unmeasured.
+- Every route segment drives forward (owner, 2026-11-14): back-sector distances are shown
+  but never hold motion (`BACK_DISTANCE_HOLDS_MOTION`, set True only for a reverse
+  segment), and nothing beside the rear half holds a forward move. Turns keep the full
+  spin sweep; missing/stale back data still holds. "Reverse to start" keeps this rule: it
+  turns the robot around and drives forward.
+- Station steps (owner, 2026-11-14, `docs/objects-station-reverse-2026-11-14.md`): the station
+  is at the hallway wall. Route steps flagged `STEP_STATION` (`RouteResume.h`, `pointsRun.ino`)
+  are named in the executor's `[LEG:..]` notice; while that notice is fresh (3.5 s), the link
+  up and a route running, the Pi treats long straight wall pieces, and short straight pieces
+  joined to them near the robot, as "nothing there" for every LiDAR hold
+  (`RasPi/station_mode.py`). Anything else still holds. The notice is telemetry: losing it
+  only restores the ordinary rules. Station turns skip wall alignment; steps facing the
+  station wall use the sonar's expected-wall rule (`STATION_PARK_GAP_CM`, unmeasured: the
+  forward sonar then does not hold those steps). Do not widen this to other steps or to
+  non-wall returns without a new owner request.
 - Gyro bias is re-measured only while the wheels are held (STOP latched >= 1 s, or the
   executor reporting IDLE/OUTBOUND COMPLETE/ROUTE FAULT for >= 1 s), never in a turn,
   at most 0.2 deg/s per window and 1 deg/s from boot.
 - Operator emergency stop is latched separately from ordinary obstacle STOP.
   GO, reconnect and return commands cannot release it. Release aborts to IDLE
-  and requires a new deliberate start. Preserve Pi stop/request-ID files and
+  and requires a new deliberate start. Reverse to start (owner, 2026-11-14,
+  `docs/objects-station-reverse-2026-11-14.md`) is a third deliberate choice with the
+  same confirmed release: `[OP:<id>:REVERSE]`, offered only while the executor reports
+  `REV=1`, drives the interrupted route back to its start behind every motion gate and
+  ends needing a new deliberate start. Continue run (owner, 2026-11-14,
+  `docs/continue-run-sonar-range-2026-11-14.md`) is the operator's other deliberate
+  choice: the same confirmed release, into the route the stop interrupted, resumed from
+  the executor's RAM checkpoint (`RouteResume.h`) behind fresh GO and every motion gate;
+  a new S3 heading reference since the stop needs wall confirmation. Preserve Pi stop/request-ID files and
   both controllers' software-reboot stop markers.
 - `[RESET:<id>]` requests robot return/recovery. `[OP:<id>:REBOOT]` is the
   separate coordinated restart requiring confirmed STOP. Do not confuse them.
@@ -112,7 +136,9 @@ User instructions and authorization in the current session take precedence.
   Since 2026-11-12 the servo sweeps (`SonarSweep.h`: forward/+-25 fan driving, the whole
   span stopped inside a route, forward-only spinning/idle). A ping with no echo inside the
   timeout is a far clear reading (the old "unknown" could never release a hold in an open
-  hallway); releases still need the confirmation counts. Inside a turn the sonar evidence
+  hallway); releases still need the confirmation counts. Since 2026-11-14 the sonar reads
+  only to 110 cm (`ULTRASONIC_MAX_RANGE_CM`; a further echo is clear) and a forward stop
+  beyond 25 cm needs two consecutive echoes inside 60 cm, as the side bearings do. Inside a turn the sonar evidence
   is only the spin circle at floor level, surveyed before every spin.
 - Obstacle and path holds never end a route (owner, 2026-11-12): `waitUntilMotionPermitted()`
   holds until fresh GO, no STOP and no sonar obstacle, and a STOP at any moment holds again.
@@ -125,7 +151,27 @@ User instructions and authorization in the current session take precedence.
   predicted contact within 2 s is generic `F=O`, a closing mover `F=W`, a mover reaching the
   spin circle `T=O`; the read-only front bypass bypasses it. It needs the executor's
   `[DRIVE:..]` telemetry for ego motion (telemetry only, grants nothing) and degrades to
-  "robot speed unknown" without it. It reports moving objects, never people.
+  "robot speed unknown" without it. Since 2026-11-14 the wall heading of each scan removes
+  the robot's own rotation from the tracks, and a person-sized, non-flat track proven to
+  move over the ground is labelled a **likely person** (red dot on the map; owner's request).
+  That label is display and report only: every stop/slow rule treats all movers alike.
+- Hallway objects (`RasPi/scene_objects.py`, 2026-11-14) only ADD evidence: with both walls
+  fitted 120-450 cm apart, returns between them are grouped into objects (wall fixtures and
+  the end wall excluded) and marked on the map; one standing in the robot's path beyond the
+  slow zone and within 4 m asks for `F=W` after three scans. The read-only front bypass
+  bypasses it. No walls, no scene.
+- Wall heading (2026-11-14): `H` may come from the long-baseline fit when it agrees with the
+  near fit; WL/WR never do. The Pi learns the LiDAR mounting error from lateral drift
+  (`RasPi/wall_heading_offset.py`, at most 0.1 deg per 3 m stretch, +-3 deg) and takes it out
+  of `H` only. It is heading evidence, never clearance.
+- Phone control (owner, 2026-11-14, `RasPi/cloud_control.py`,
+  `docs/phone-control-headless-2026-11-15.md`): an operator request in
+  `devices/<id>/commands/operator` is claimed in a transaction, passed through the SAME
+  `operator_control.request` gate as the monitor's buttons, and answered with the executor's
+  own acknowledgement. At most once: a request claimed by a process that restarted ends
+  `unconfirmed`, never replayed. A stop is applied up to 120 s old; any other action older
+  than 20 s is refused. The status mirror and the leased map frames are telemetry. None of it
+  is path evidence or grants GO, and the phone's stop is a convenience, not a safety device.
 - `[HEALTH:1:UUUUU]` reports internet/cloud/LiDAR/bin sensors/thermal U/D/X.
   It is low-priority, coalesced and age/session checked, never readiness or
   path evidence. Firebase failure alone is not proof of internet loss.
@@ -157,10 +203,11 @@ User instructions and authorization in the current session take precedence.
   Confirmed SONAR_OFF likewise permits operation with its local gate bypassed
   and servo parked at DEFAULT_VIEW. Do not reinstate an extra motion interlock
   without a new user request.
-- The current 2D LiDAR reports generic returns in its scan plane; it does not
-  classify people. Do not label legacy `H` packets as human recognition or claim
-  injury prevention without a separately validated people sensor and physical
-  stopping-distance evidence.
+- The current 2D LiDAR reports generic returns in its scan plane; it cannot
+  recognise people. The "likely person" marker (owner, 2026-11-14) is a size-and-motion
+  guess for the map and the log, and must be described as that. Do not label legacy `H`
+  packets as human recognition or claim injury prevention without a separately validated
+  people sensor and physical stopping-distance evidence.
 - Pi PATH snapshots retain their LiDAR acquisition deadline through the bounded
   BLE queue and are revalidated before GATT write. This does not replace an
   end-to-end timestamp/age check in the controllers; never describe it as one.

@@ -174,7 +174,9 @@ The Pi remembers it in `~/.config/garby/operator-stop` (override with
 `GARBY_OPERATOR_STOP_FILE`). The controllers retain their stop marker across
 software restarts. **Release stop** requires confirmed stationary IDLE and
 controller acknowledgements. Release grants no motion: a new manual start is
-required. Keep the stop-state file when deploying or restarting the Pi runtime.
+required. **Continue run** (2026-11-14) has the same preconditions plus an executor
+report of a stopped route (`RESUME=1`), asks for confirmation, and releases the stop
+into that route; it moves only after fresh path clearance. Keep the stop-state file when deploying or restarting the Pi runtime.
 The adjacent `.request-id` file reserves monotonic request IDs in batches to
 survive process restarts and Pi clock rollback; keep that file too.
 

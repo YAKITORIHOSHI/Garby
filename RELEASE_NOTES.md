@@ -1,5 +1,73 @@
 # GARBY release notes
 
+## Phone control, map on the phone, headless launcher — 2026-11-15
+
+- **Headless.** `bash RasPi/run_headless.sh start|stop|status|logs|doctor` runs GARBY without a
+  screen, with a saved daily log. The boot service uses it.
+- **Phone control.** The app can send every action of the monitor's Controls tab (emergency
+  stop, Release, Continue, Reverse to start, sonar, read-only, restart). The Pi passes each
+  through the monitor's own gate, acts on it at most once and reports the controller's answer.
+- **Map on the phone.** The LiDAR scan with its markers, published only while a phone has the
+  map open.
+- **Heat.** `tools/thermal_profile.py` measures where the load is. On an isolated bench the Pi
+  software used about 0.5 % of one core headless and 1 % with the monitor; a real run still has
+  to be measured before blaming the software.
+- **At most once, and fresh when acted on.** A phone request whose database claim took so long
+  that it expired meanwhile is refused instead of acted on (fixed 2026-11-15, before any
+  deployment).
+- **One release package.** At the owner's request the `Most Latest` release carries one
+  package, `GarbyMostLatest.zip`, in place of the Test1 and Test2 ZIPs.
+- **MCU upload requirement: None** for this part (Pi software `PHONE-20261114`; the controllers
+  stay on `REVERSE-20261114`). **Pi deployment: entire RasPi/**. Needs the database rules and
+  operator list described in `docs/phone-control-headless-2026-11-15.md`.
+
+## Likely people, hallway objects, station steps, reverse run — 2026-11-14
+
+- **Map.** A red dot marks a likely person (person-sized, not flat, proven to move over the
+  ground), an amber dot a moving object, an orange square an object standing between the
+  hallway walls. GARBY's own rotation is now removed from the tracks, so heading corrections
+  no longer make still things look like movers (6 to 90 false movers a minute in the model
+  before). The label is for the map and the log; stop and slow rules treat all objects alike.
+- **Caution speed** for an object standing in GARBY's own path between the walls within 4 m.
+- **Station steps.** Leaving the station and parking, the station's own walls no longer hold
+  the robot; anything that is not wall still does. The executor names each route step
+  (`[LEG:..]`), shown under the state and logged.
+- **Reverse to start** beside Release stop and Continue run: after an emergency stop GARBY
+  turns around, drives forward back along the route and faces its starting direction.
+- **Straighter runs.** A longer wall fit supplies the heading, and the Pi learns the LiDAR's
+  mounting angle from sideways drift and takes it out of the heading it sends.
+- **MCU upload requirement: Both**, complete sketches, build `REVERSE-20261114` (it includes
+  `CONTINUE-20261114`). **Pi deployment: entire RasPi/**. Not uploaded here. Details and bench
+  steps: `docs/objects-station-reverse-2026-11-14.md`; evidence: `artifacts/work-2026-11-14/`.
+
+## Continue run, sonar range, stop-and-go — 2026-11-14
+
+- The monitor's *Controls* tab adds **Continue run** beside **Release stop**. After a
+  confirmed emergency stop it lets GARBY finish the stopped route from where it stopped
+  (the rest of a straight or turn, or parked again at the destination), behind fresh path
+  clearance and every motion gate. Release still ends the route at idle. A new S3 heading
+  reference since the stop needs two agreeing wall scans first. The saved point is in RAM.
+- Routes are step lists (same calibrated steps, angles and order) so a route can resume.
+- The obstacle sonar reads only to 110 cm (ping 6.6 ms, was 18 ms / ~3 m); a further echo is
+  clear. One stray forward echo inside 60 cm no longer brakes the robot: two consecutive ones
+  do (within 25 cm one still does). The owner's stop-and-go observation is recorded; its
+  field cause is not established without run logs.
+- **MCU upload requirement: Both**, complete sketches, build `CONTINUE-20261114`.
+  **Pi deployment: entire RasPi/** (it must understand the new status line). Not uploaded
+  here. Details: `docs/continue-run-sonar-range-2026-11-14.md`; evidence:
+  `artifacts/continue-run-2026-11-14/`.
+
+## Forward-only starts from base — 2026-11-14
+
+- A live manual disposal was accepted but held for ever at base: the wall 22.5 cm behind
+  the LiDAR and a wall step beside the rear corner sat in the never-bypassed side bands,
+  and the wall was inside the 35 cm rear limit. Every route segment drives forward, so
+  back-sector distances no longer hold motion and the side band covers the body from the
+  spin centre forward. Front, side and spin-sweep (turn) protection are unchanged;
+  missing/stale data still holds. 15 real scans of the base spot are a unit test.
+- **MCU upload requirement: None.** **Pi deployment: entire RasPi/.** Evidence:
+  `artifacts/manual-disposal-hold-2026-11-14/`.
+
 ## Test2 integration review — 2026-11-14
 
 - Android manual-disposal outcomes reconcile late reports by request identity in either

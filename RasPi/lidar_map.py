@@ -19,6 +19,9 @@ class LidarMapSnapshot:
     points_m: tuple[tuple[float, float], ...]
     acquired_at: float
     yaw_offset_deg: float
+    # (forward m, left m, kind, vx m/s, vy m/s) from scene_objects.scene_markers:
+    # "person" (likely person), "moving" or "object". Display only.
+    markers: tuple = ()
 
 
 def _ray_geometry(angle):
@@ -38,7 +41,7 @@ def _scan_geometry(count, angle_min, angle_increment):
 
 def build_lidar_map_snapshot(ranges, *, angle_min, angle_increment, range_min,
                              range_max, acquired_at, yaw_offset_deg=0.0,
-                             reflect_left_right=False):
+                             reflect_left_right=False, markers=()):
     """Keep the nearest finite measured hit per degree, at its actual angle.
 
     Positive infinity is valid clearance evidence in the safety processor but
@@ -84,5 +87,5 @@ def build_lidar_map_snapshot(ranges, *, angle_min, angle_increment, range_min,
             nearest[bucket] = (distance, distance * forward, distance * left)
     return LidarMapSnapshot(
         tuple((hit[1], hit[2]) for hit in nearest if hit is not None),
-        acquired_at, yaw_offset_deg,
+        acquired_at, yaw_offset_deg, tuple(markers),
     )

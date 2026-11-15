@@ -11,6 +11,7 @@ FastAccelStepperEngine engine   = FastAccelStepperEngine();
 FastAccelStepper*      stepper1 = nullptr;
 FastAccelStepper*      stepper2 = nullptr;
 HeadingControl         heading;
+RouteResume            routeResume;
 
 // ============================================================
 // STATIC / MISC VARS
@@ -115,6 +116,14 @@ static int ultrasonicPingCommand = DEFAULT_VIEW;    // servo command the ping in
 static unsigned long ultrasonicEchoHighSinceMs = 0;
 static bool spinInProgress = false;                 // spinning in place: forward-only pings
 static bool spinSonarCheck = false;                 // inside a turn: floor-level spin clearance applies
+// Station steps and the [LEG:..] notice (2026-11-14, RouteResume.h STEP_*). Set
+// by the route runner for the step in progress, cleared when the route ends.
+static bool stationStep = false;                    // LiDAR walls are the station's: no wall alignment
+static bool stationWallAhead = false;               // the sonar faces the station wall
+static int32_t stationStepsBeyondLeg = 0;           // straight travel toward that wall after this leg
+static char legNotice[40] = "";
+static unsigned long legNoticeSentMs = 0;
+static void serviceLegReport();
 static bool surveyPassActive = false;               // a low-power hold's periodic survey
 static unsigned long lastSurveyPassMs = 0;
 static int surveyPassSteps = 0;
@@ -797,8 +806,12 @@ void enforcePathWatchdog() {
 }
 
 static void sendOperatorStatus() {
+  // RESUME=1: an emergency stop interrupted a route that "Continue run" can finish.
   ESP_Serial.println("[OP STATUS:1:ESTOP=" + String(operatorEmergencyLatched ? 1 : 0) +
-                     ":SONAR=" + String(operatorSonarEnabled ? 1 : 0) + "]");
+                     ":SONAR=" + String(operatorSonarEnabled ? 1 : 0) +
+                     ":RESUME=" + String(operatorEmergencyLatched && routeResume.available() ? 1 : 0) +
+                     // REV=1: "Reverse to start" can take the robot back along that route.
+                     ":REV=" + String(operatorEmergencyLatched && routeResume.reverseAvailable() ? 1 : 0) + "]");
 }
 
 static void serviceOperatorReboot() {
@@ -846,6 +859,7 @@ static void reportRobotStatus() {
   if (routeFaultLatched) ESP_Serial.println("[ROUTE FAULT]");
   else if (outboundComplete) ESP_Serial.println("[OUTBOUND COMPLETE]");
   else if (garbyState == GarbyState::RETURNING) ESP_Serial.println("[RETURNING]");
+  else if (garbyState == GarbyState::REVERSING) ESP_Serial.println("[REVERSING]");
   else if (garbyState == GarbyState::RUNNING) ESP_Serial.println("[RUNNING]");
   else ESP_Serial.println("[IDLE]");
   reportMotionStatus(true);
@@ -898,9 +912,14 @@ static void latchOperatorEmergency() {
   linkFaultActive = true;
   resetGoEvidence();
   emergencyStopMotors();  // force-stop is nonblocking and does not poll UART
+  // Save what is left of the route (wheel positions after the force-stop) for
+  // "Continue run". Taken once, at the stop; the route then unwinds to IDLE.
+  if (firstStop)
+    routeResume.capture(stepper1 ? stepper1->getCurrentPosition() : 0,
+                        stepper2 ? stepper2->getCurrentPosition() : 0, heading.reanchors());
   if (firstStop)
     queueSMSNotice(SmsNoticeKind::EMERGENCY,
-        "GARBY: Emergency stop active. Motors stopped; operator release and a fresh start are required.", 'D');
+        "GARBY: Emergency stop active. Motors stopped; operator release or continue is required.", 'D');
   commandServoTracked(DEFAULT_VIEW);
   if (resetOutcome == ResetOutcome::ACTIVE) {
     resetOutcome = ResetOutcome::FAILED;
@@ -920,8 +939,8 @@ static void processOperatorCommand(const String& espMsg) {
   const String id = espMsg.substring(4, colon);
   const String action = espMsg.substring(colon + 1, espMsg.length() - 1);
   if (!validOperatorId(id)) return;
-  if (action != "ESTOP" && action != "RELEASE" && action != "SONAR_OFF" &&
-      action != "SONAR_ON" && action != "REBOOT") {
+  if (action != "ESTOP" && action != "RELEASE" && action != "CONTINUE" && action != "REVERSE" &&
+      action != "SONAR_OFF" && action != "SONAR_ON" && action != "REBOOT") {
     sendOperatorOutcome(id, action, false, "UNKNOWN_ACTION");
     return;
   }
@@ -944,6 +963,8 @@ static void processOperatorCommand(const String& espMsg) {
   operatorLastAccepted = false;
   operatorLastFailure = "";
   const bool stationaryIdle = garbyState == GarbyState::IDLE && !motorsRunning();
+  uint8_t continuedRoute = RouteResume::NONE;
+  uint8_t reversedRoute = RouteResume::NONE;
   if (action == "ESTOP") {
     operatorLastAccepted = true;
   } else if (operatorRebootScheduled) {
@@ -952,13 +973,22 @@ static void processOperatorCommand(const String& espMsg) {
     operatorLastFailure = "NOT_READY";
   } else if (!stationaryIdle) {
     operatorLastFailure = "NOT_IDLE";
-  } else if (action == "RELEASE") {
+  } else if (action == "RELEASE" || action == "CONTINUE" || action == "REVERSE") {
+    // RELEASE ends the interrupted route at IDLE. CONTINUE (owner, 2026-11-14) is
+    // the operator's deliberate choice to finish it from where it stopped.
+    // REVERSE (owner, 2026-11-14) is the choice to drive back along it to its
+    // start. A route stopped on its way back continues that way back either way.
+    const bool reversing = action == "REVERSE" ||
+        (action == "CONTINUE" && routeResume.available() && routeResume.saved().reversed);
+    const bool continuing = action == "CONTINUE" && !reversing;
     if (!operatorEmergencyLatched) operatorLastFailure = "NOT_STOPPED";
+    else if (action == "CONTINUE" && !routeResume.available()) operatorLastFailure = "NO_ROUTE";
+    else if (reversing && !routeResume.reverseAvailable()) operatorLastFailure = "NO_ROUTE";
     else {
       operatorStopMarker = 0;
       operatorEmergencyLatched = false;
-      operatorManualStartRequired = true;
-      // Releasing the latch grants no GO evidence and cannot restart a route.
+      operatorManualStartRequired = !continuing;
+      // None of them grants GO evidence: the route moves only after fresh clearance.
       shouldStop = true;
       pathCommandSeen = false;
       linkFaultActive = true;
@@ -966,8 +996,27 @@ static void processOperatorCommand(const String& espMsg) {
       routeFaultLatched = false;
       resetGoEvidence();
       operatorLastAccepted = true;
-      queueSMSNotice(SmsNoticeKind::EMERGENCY,
-          "GARBY: Emergency stop released. Robot remains stopped until a deliberate fresh start.", 'U');
+      if (reversing) {
+        reversedRoute = routeResume.saved().route;
+        routeResume.armReverse();
+        outboundComplete = false;
+        garbyState = GarbyState::REVERSING;
+        queueSMSNotice(SmsNoticeKind::EMERGENCY,
+            "GARBY: Emergency stop released; the operator sent the robot back to the route start. Motion awaits safety clearance.", 'U');
+      } else if (continuing) {
+        continuedRoute = routeResume.saved().route;
+        routeResume.arm();
+        outboundComplete = false;
+        garbyState = continuedRoute == RouteResume::RETURN ? GarbyState::RETURNING : GarbyState::RUNNING;
+        queueSMSNotice(SmsNoticeKind::EMERGENCY,
+            "GARBY: Emergency stop released; the operator continued the route. Motion awaits safety clearance.", 'U');
+      } else {
+        // The route is over: neither its saved point nor a parked route remains.
+        routeResume.endRoute();
+        routeResume.discard();
+        queueSMSNotice(SmsNoticeKind::EMERGENCY,
+            "GARBY: Emergency stop released. Robot remains stopped until a deliberate fresh start.", 'U');
+      }
     }
   } else if (action == "REBOOT") {
     if (!operatorEmergencyLatched) operatorLastFailure = "ESTOP_REQUIRED";
@@ -993,6 +1042,15 @@ static void processOperatorCommand(const String& espMsg) {
   }
   noteBridgeRx();
   sendOperatorOutcome(id, action, operatorLastAccepted, operatorLastFailure);
+  if (continuedRoute != RouteResume::NONE) {
+    Serial.println(continuedRoute == RouteResume::RETURN ? "[STATE] IDLE -> RETURNING (continue run)"
+                                                         : "[STATE] IDLE -> RUNNING (continue run)");
+    ESP_Serial.println(continuedRoute == RouteResume::RETURN ? "[RETURNING]" : "[RUNNING]");
+  }
+  if (reversedRoute != RouteResume::NONE) {
+    Serial.println("[STATE] IDLE -> REVERSING (reverse to start)");
+    ESP_Serial.println("[REVERSING]");
+  }
 }
 
 // LiDAR caution zone (bridge "GO:SLOW"): something is in the swept corridor
@@ -1088,6 +1146,7 @@ static void processESPMessage(const String& espMsg) {
         // path freshness, and local obstacle sensing in charge of the wheels.
         outboundComplete = false;
         garbyState = GarbyState::RUNNING;
+        routeResume.discard();
         startAccepted = true;
         operatorManualStartRequired = false;
         startFailure = "";
@@ -1124,7 +1183,8 @@ static void processESPMessage(const String& espMsg) {
         ESP_Serial.println(ACK_MSG);
         return;
       }
-      if (garbyState == GarbyState::RETURNING && !routeFaultLatched) {
+      if ((garbyState == GarbyState::RETURNING || garbyState == GarbyState::REVERSING) &&
+          !routeFaultLatched) {
         if (correlated) sendResetOutcome(id, ResetOutcome::FAILED);
         ESP_Serial.println(ACK_MSG);
         return;
@@ -1308,6 +1368,7 @@ void pollESP() {
   serviceNoticeMonitoring((uint32_t)millis());
   serviceBuzzerPattern();
   serviceDriveReport();
+  serviceLegReport();
 }
 
 class ClearanceWaitNotice {
@@ -1555,6 +1616,8 @@ void fullReset() {
   routeFaultNoticeRaised = false;
   outboundComplete = false;
   garbyState = GarbyState::IDLE;
+  routeResume.endRoute();
+  routeResume.discard();
   Serial.println("[RESET] State cleared -- IDLE and fail-closed");
   ESP_Serial.println("[IDLE]");
   if (resetOutcome == ResetOutcome::ACTIVE) {
@@ -1693,7 +1756,7 @@ struct SpinInProgress {
 // follow keeps surveying).
 #define SPIN_SURVEY_WAIT_MS 2500UL
 static void waitForSpinSurvey() {
-  if (!operatorSonarEnabled || operatorEmergencyLatched) return;
+  if (!operatorSonarEnabled || operatorEmergencyLatched || stationWallAhead) return;
   const uint32_t since = (uint32_t)millis();
   while (sonarSweep.spinClearance(since, (uint32_t)millis()) == SonarSweep::Spin::UNKNOWN &&
          (uint32_t)millis() - since < SPIN_SURVEY_WAIT_MS) {
@@ -2093,7 +2156,8 @@ bool turnLeft(float degrees) {
   TurnSegmentNotice notice;
   if (!movementGate(false)) return false;
   heading.addTurn(degrees);
-  return rotateToHeading(heading.routeTarget(), degrees);
+  routeResume.commitTurn();
+  return rotateToHeading(heading.routeTarget(), degrees, !stationStep);
 }
 
 bool turnRight(float degrees) {
@@ -2101,7 +2165,8 @@ bool turnRight(float degrees) {
   TurnSegmentNotice notice;
   if (!movementGate(false)) return false;
   heading.addTurn(-degrees);
-  return rotateToHeading(heading.routeTarget(), -degrees);
+  routeResume.commitTurn();
+  return rotateToHeading(heading.routeTarget(), -degrees, !stationStep);
 }
 
 // A spin to an absolute heading that is not a route turn (pre-run centring). The
@@ -2140,6 +2205,156 @@ bool beginRouteHeading() {
   ESP_Serial.printf("[HEADING ROUTE:%s ok=%lu bad=%lu]\n", ready ? "MPU" : "NO_MPU",
                     (unsigned long)heading.accepted(), (unsigned long)heading.rejected());
   return ready;
+}
+
+// "Continue run" (2026-11-14): the route frame from before the emergency stop is
+// kept. The executor heading continues across a new S3 reference, which is right
+// only if nobody turned the robot meanwhile, so then two agreeing wall scans must
+// put the route direction within ALIGN_MAX_CORRECTION_DEG of its right-angle grid
+// (the same rule as a long heading outage). Missing walls keep it stopped.
+bool resumeRouteHeading(uint32_t reanchorsAtStop) {
+  if (stepper1 && stepper2) heading.attach(stepper1, stepper2);
+  const unsigned long started = millis();
+  while (!heading.headingReady((uint32_t)millis()) &&
+         millis() - started < HeadingControl::START_MPU_WAIT_MS) {
+    serviceTurnSafety();
+    if (resetQueued || routeFaultLatched || operatorEmergencyLatched) return false;
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+  bool ready = heading.headingReady((uint32_t)millis());
+  if (!ready && !resetQueued && !operatorEmergencyLatched) ready = holdForHeading(false);
+  if (!ready) {
+    ESP_Serial.println("[HEADING ROUTE:NO_MPU continue]");
+    return false;
+  }
+  if (heading.reanchors() == reanchorsAtStop) {
+    ESP_Serial.println("[HEADING ROUTE:CONTINUE]");
+    return true;
+  }
+  bool reportedMissingWalls = false;
+  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
+    const unsigned long elapsed = millis() - started;
+    if (elapsed >= HeadingControl::HEADING_RECOVERY_MS) {
+      ESP_Serial.println("[HEADING CONTINUE verify=TIMEOUT]");
+      return false;
+    }
+    serviceTurnSafety();
+    if (!heading.headingReady((uint32_t)millis())) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+      continue;
+    }
+    const uint32_t anchorsAtCheck = heading.reanchors();
+    float axis = 0.0f;
+    const int measured = measureWallAxis(
+        &axis, min((uint32_t)(HeadingControl::HEADING_RECOVERY_MS - elapsed), HeadingControl::ALIGN_WAIT_MS));
+    if (measured == -2) return false;
+    if (!heading.headingReady((uint32_t)millis()) || heading.reanchors() != anchorsAtCheck) continue;
+    if (measured != 1) {
+      if (!reportedMissingWalls) ESP_Serial.println("[HEADING CONTINUE verify=WAIT_WALLS]");
+      reportedMissingWalls = true;
+      continue;
+    }
+    const float offRoute = HeadingControl::wrap180(axis - heading.routeTarget());
+    const float offGrid = offRoute - 90.0f * roundf(offRoute / 90.0f);
+    if (fabsf(offGrid) > HeadingControl::ALIGN_MAX_CORRECTION_DEG) {
+      ESP_Serial.printf("[HEADING CONTINUE verify=FAIL walls=%+.1f]\n", offGrid);
+      return false;
+    }
+    heading.setRouteTarget(heading.routeTarget() + offGrid);
+    ESP_Serial.printf("[HEADING CONTINUE verify=OK walls=%+.1f]\n", offGrid);
+    return true;
+  }
+  return false;
+}
+
+// A route turn interrupted after its angle entered the route frame: spin to that
+// target (the remaining angle), then align to the walls as every turn does.
+bool resumeRouteTurn() {
+  if (!stepper1 || !stepper2) return false;
+  TurnSegmentNotice notice;
+  if (!movementGate(false)) return false;
+  routeResume.commitTurn();
+  const float target = heading.routeTarget();
+  return rotateToHeading(target, HeadingControl::wrap180(target - heading.heading()), !stationStep);
+}
+
+// ============================================================
+// ROUTE LEG NOTICE, STATION STEPS, REVERSE RUN (2026-11-14)
+// ============================================================
+// [LEG:<O|R><F|B>:<step>/<count>:<op>:<flags>] names the route step in progress
+// (O outbound, R return; F forward, B the way back of a reverse run; op B bumps,
+// S straight, H long hallway, L/R turn; flags = RouteStep STEP_* bits). It is
+// sent when a step begins and every 2 s while it lasts; [LEG:0] ends it. The Pi
+// uses the STATION bit, while fresh, to leave the station's walls out of its
+// LiDAR holds. It is telemetry: it grants nothing, and when it stops arriving
+// the Pi is back on its ordinary rules.
+void routeLegBegin(uint8_t route, bool reverse, uint8_t index, uint8_t count, RouteOp op,
+                   uint8_t flags, int32_t wallAheadStepsBeyond) {
+  static const char OPS[] = {'B', 'S', 'H', 'L', 'R'};
+  stationStep = (flags & STEP_STATION) != 0;
+  stationWallAhead = (flags & (reverse ? STEP_WALL_AHEAD_REV : STEP_WALL_AHEAD_FWD)) != 0;
+  stationStepsBeyondLeg = wallAheadStepsBeyond > 0 ? wallAheadStepsBeyond : 0;
+  snprintf(legNotice, sizeof(legNotice), "[LEG:%c%c:%u/%u:%c:%u]",
+           route == RouteResume::RETURN ? 'R' : 'O', reverse ? 'B' : 'F', (unsigned)index,
+           (unsigned)count, OPS[(uint8_t)op < sizeof(OPS) ? (uint8_t)op : 1], (unsigned)flags);
+  ESP_Serial.println(legNotice);
+  legNoticeSentMs = millis();
+}
+
+void routeLegEnd() {
+  stationStep = stationWallAhead = false;
+  stationStepsBeyondLeg = 0;
+  if (legNotice[0] == '\0') return;
+  legNotice[0] = '\0';
+  ESP_Serial.println("[LEG:0]");
+}
+
+static void serviceLegReport() {
+  if (legNotice[0] == '\0' || millis() - legNoticeSentMs < 2000UL) return;
+  legNoticeSentMs = millis();
+  ESP_Serial.println(legNotice);
+}
+
+// The nearest the station wall can read on the forward sonar right now, less a
+// margin: an echo nearer than this is something between the robot and the wall.
+// Negative when the wall cannot be told from an obstacle: the parked gap is not
+// measured (STATION_PARK_GAP_CM < 0), or no straight is in progress.
+static float stationWallFloorCm() {
+  if (SonarSweep::STATION_PARK_GAP_CM < 0.0f || spinSonarCheck || !stepper1 || !stepper2) return -1.0f;
+  const int32_t left = routeResume.legLeft(stepper1->getCurrentPosition(),
+                                           stepper2->getCurrentPosition());
+  if (left < 0) return -1.0f;
+  return (float)(left + stationStepsBeyondLeg) / HeadingControl::STEPS_PER_CM +
+         SonarSweep::STATION_PARK_GAP_CM - SonarSweep::STATION_SONAR_MARGIN_CM;
+}
+
+// Reverse run: a spin to an absolute heading of the route frame, with the turn
+// notices, gates and (unless the step is a station step) the wall alignment of
+// every route turn.
+bool spinToRouteHeading(float targetDeg, bool alignAfter) {
+  return spinToHeading(targetDeg, alignAfter);
+}
+
+// The reverse run reached the start of its route.
+void finishReverseRun(uint8_t route) {
+  smoothDecelStopMotors();
+  ESP_Serial.println("[REVERSE COMPLETE]");
+  Serial.println("[REVERSE] Back at the start of the route");
+  // The next run is a new deliberate start, as after Release.
+  operatorManualStartRequired = true;
+  if (route == RouteResume::RETURN) {
+    // Where the return route began: parked at the destination again.
+    shouldStop = true;
+    resetGoEvidence();
+    movingForward = false;
+    outboundComplete = true;
+    garbyState = GarbyState::RUNNING;
+    ESP_Serial.println("[OUTBOUND COMPLETE]");
+  } else {
+    fullReset();
+  }
+  queueSMSNotice(SmsNoticeKind::ROUTE,
+      "GARBY: Reverse run completed. Robot is stopped at the start of the route.");
 }
 
 // ============================================================
@@ -2381,7 +2596,8 @@ static float medianOfThree(float a, float b, float c) {
 }
 
 // One forward-bearing sample. validEcho=false is a ping with no echo inside the
-// timeout (about 3 m): nothing in range, so it is a far, clear reading. Until
+// timeout (ULTRASONIC_MAX_RANGE_CM, 1.1 m since 2026-11-14; about 3 m before):
+// nothing in range, so it is a far, clear reading. Until
 // 2026-11-12 it was "unknown" and reset the clear streak, so an obstacle that
 // walked away into an open hallway could never release the latch and the robot
 // stayed held for good (also after the operator re-enabled the sonar). Release
@@ -2492,7 +2708,7 @@ static SonarSweep::Pattern sonarPatternNow(bool* parked) {
   if (movingForward) return SonarSweep::Pattern::CRUISE;
   const bool routeActive = !routeFaultLatched &&
       ((garbyState == GarbyState::RUNNING && !outboundComplete) ||
-       garbyState == GarbyState::RETURNING);
+       garbyState == GarbyState::RETURNING || garbyState == GarbyState::REVERSING);
   if (!routeActive) {
     // Idle at base or parked at the destination: no reason to wear the servo.
     *parked = true;
@@ -2560,7 +2776,10 @@ void serviceUltrasonic() {
   const SonarSweep::Pattern pattern = sonarPatternNow(&parked);
   if (echoReady) {
     ultrasonicPingInFlight = false;
-    sonarSampleDone(ultrasonicPingCommand, true, (float)echoWidthUs * 0.0343f * 0.5f, pattern);
+    const float cm = (float)echoWidthUs * 0.0343f * 0.5f;
+    // Beyond the sonar's working range (2026-11-14) an echo is a clear reading.
+    if (cm > ULTRASONIC_MAX_RANGE_CM) sonarSampleDone(ultrasonicPingCommand, false, 999.0f, pattern);
+    else sonarSampleDone(ultrasonicPingCommand, true, cm, pattern);
   } else if (ultrasonicPingInFlight &&
              (uint32_t)(micros() - ultrasonicPingStartedUs) >= ULTRASONIC_TIMEOUT_US) {
     portENTER_CRITICAL(&ultrasonicMux);
@@ -2609,21 +2828,31 @@ void serviceUltrasonic() {
 bool frontObstacleDetected() {
   if (!operatorSonarEnabled) return false;
   const uint32_t now = (uint32_t)millis();
+  // A station step that faces the station wall (2026-11-14): the wall's own echo
+  // is expected. With the parked gap measured, only an echo nearer than the wall
+  // can be is an obstacle; unmeasured, the sonar cannot tell them apart and does
+  // not hold these few steps (the LiDAR still sees what is not wall).
+  if (stationWallAhead) {
+    const float wallFloor = stationWallFloorCm();
+    return wallFloor >= 0.0f && frontDistanceFresh() && frontDistance < wallFloor;
+  }
   // Inside a turn nothing moves forward: only what lies inside the circle the
   // base sweeps can be hit (a wall 50 cm ahead of the sonar cannot).
   if (spinSonarCheck) {
     return sonarSweep.spinClearance(0, now) == SonarSweep::Spin::BLOCKED;
   }
-  // Once confirmed, remain fail-closed until confirmed clear samples arrive.
-  // A fresh single echo inside the stop envelope also stops immediately; the
-  // confirmation latch remains responsible for persistence and recovery. The
-  // +/-25 (and, while fresh, wider) bearings add what is low beside the path.
-  return frontObstacleLatched ||
-         (frontDistanceFresh() && latestFrontRawCm <= ULTRASONIC_STOP_DISTANCE_CM) ||
-         sonarSweep.sideBlocking(now);
+  // Once confirmed, remain fail-closed until confirmed clear samples arrive. An
+  // echo within VERY_CLOSE_DISTANCE_CM latches on its own (recordFrontSample);
+  // beyond it, ULTRASONIC_BLOCK_CONFIRM_SAMPLES consecutive forward echoes inside
+  // the stop distance, as at the side bearings. Until 2026-11-14 one stray echo
+  // anywhere inside 60 cm braked the robot, which then had to re-confirm GO: a
+  // short stop-and-go for a reading the next ping did not repeat. The +/-25
+  // (and, while fresh, wider) bearings add what is low beside the path.
+  return frontObstacleLatched || sonarSweep.sideBlocking(now);
 }
 
 bool frontEmergencyObstacleDetected() {
+  if (stationWallAhead) return frontEmergencyActive && frontObstacleDetected();
   return operatorSonarEnabled && frontEmergencyActive;
 }
 
@@ -2633,6 +2862,8 @@ bool frontDistanceFresh() {
 }
 
 float latestFrontDistance() {
+  // Facing the station wall, its echo neither slows the robot nor holds it.
+  if (stationWallAhead && !frontObstacleDetected()) return 999.0f;
   return frontDistanceFresh() ? frontDistance : 999.0f;
 }
 
@@ -3316,7 +3547,7 @@ static void serviceBuzzerPattern() {
   BuzzerPattern want = BuzzerPattern::OFF;
   const bool routeActive = !operatorEmergencyLatched && !routeFaultLatched &&
       ((garbyState == GarbyState::RUNNING && !outboundComplete) ||
-       garbyState == GarbyState::RETURNING);
+       garbyState == GarbyState::RETURNING || garbyState == GarbyState::REVERSING);
   if (routeActive) {
     if (lowPowerActive) want = BuzzerPattern::LOW_POWER;
     else if (haltWaitingForClearance || headingHoldActive) want = BuzzerPattern::HOLDING;

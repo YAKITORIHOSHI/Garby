@@ -266,6 +266,43 @@ class CircularCanvasTests(unittest.TestCase):
         self.assertEqual(set(canvas.items), known_items)
         self.assertEqual(sum(canvas.items[item]["state"] == "normal" for item in gui._map_points), 360)
 
+    def test_markers_draw_a_red_dot_for_a_likely_person_and_hide_with_the_scan(self):
+        gui = self.renderer()
+        canvas = gui.scan_canvas
+        gui._scan_snapshot = types.SimpleNamespace(
+            points_m=((1, 0),), acquired_at=100, yaw_offset_deg=0,
+            markers=((2.0, 0.5, "person", -1.2, 0.0), (1.0, -1.0, "moving", 0.0, 0.6),
+                     (3.0, 0.0, "object", 0.0, 0.0), (1.0, 1.0, "ghost", 0.0, 0.0),
+                     (math.nan, 0.0, "person", 0.0, 0.0), (9.0, 0.0, "person", 0.0, 0.0)))
+        with patch.object(monitor_ui.time, "monotonic", return_value=100.1):
+            gui._render_scan()
+            dot, line = canvas.items[gui._map_marker_dots[0]], canvas.items[gui._map_marker_lines[0]]
+            self.assertEqual((dot["state"], dot["fill"]), ("normal", monitor_ui.RADAR["person"]))
+            # Left of centre and above it (ahead); the line points back at the robot.
+            self.assertLess((dot["coords"][0] + dot["coords"][2]) / 2, 240)
+            self.assertLess((dot["coords"][1] + dot["coords"][3]) / 2, 160)
+            self.assertGreater(line["coords"][3], line["coords"][1])
+            self.assertEqual(canvas.items[gui._map_marker_dots[1]]["fill"], monitor_ui.RADAR["moving"])
+            self.assertEqual(canvas.items[gui._map_marker_squares[2]]["state"], "normal")
+            self.assertEqual(canvas.items[gui._map_marker_dots[2]]["state"], "hidden")
+            # Unknown kinds and invalid numbers are dropped; one beyond the 4 m
+            # view is counted but not drawn.
+            self.assertEqual(sum(canvas.items[item]["state"] == "normal"
+                                 for item in gui._map_marker_dots), 2)
+            self.assertIn("2 likely people · 1 moving object · 1 object", gui.map_info_lbl.text)
+        with patch.object(monitor_ui.time, "monotonic", return_value=100.81):
+            gui._render_scan()
+        for pool in (gui._map_marker_dots, gui._map_marker_lines, gui._map_marker_squares):
+            self.assertTrue(all(canvas.items[item]["state"] == "hidden" for item in pool))
+
+    def test_a_snapshot_without_markers_draws_none(self):
+        gui = self.renderer()
+        with patch.object(monitor_ui.time, "monotonic", return_value=100.1):
+            gui._render_scan()
+        self.assertTrue(all(gui.scan_canvas.items[item]["state"] == "hidden"
+                            for item in gui._map_marker_dots))
+        self.assertNotIn("person", gui.map_info_lbl.text)
+
     def test_real_renderer_hides_expired_or_invalid_scan_and_never_invents_walls(self):
         gui = self.renderer()
         with patch.object(monitor_ui.time, "monotonic", return_value=100.1):
@@ -956,7 +993,8 @@ class DashboardTests(unittest.TestCase):
         gui.notebook.select(gui.controls_tab)
         self.root.update()
         self.assert_widgets_visible([gui.front_btn, gui.back_btn, gui.start_btn, gui.start_status_lbl,
-                                     gui.ultrasonic_btn, gui.reset_btn, gui.release_btn, gui.emergency_btn])
+                                     gui.ultrasonic_btn, gui.reset_btn, gui.release_btn, gui.continue_btn,
+                                     gui.reverse_btn, gui.emergency_btn])
 
     def operator_status(self, **changes):
         self.health["operator_controls"] = {
@@ -1028,10 +1066,12 @@ class DashboardTests(unittest.TestCase):
 
     def test_unknown_status_never_claims_enabled_or_released(self):
         gui = self.dashboard(request_ultrasonic=lambda enabled: None,
-                             request_release_stop=lambda: None, request_system_reset=lambda: None)
+                             request_release_stop=lambda: None, request_system_reset=lambda: None,
+                             request_continue_run=lambda: None, request_reverse_run=lambda: None)
         self.assertEqual(gui.ultrasonic_btn.cget("text"), "Ultrasonic: unknown")
         self.assertIn("unconfirmed", gui.stop_status_lbl.cget("text"))
-        for button in (gui.ultrasonic_btn, gui.release_btn, gui.reset_btn):
+        for button in (gui.ultrasonic_btn, gui.release_btn, gui.reset_btn, gui.continue_btn,
+                       gui.reverse_btn):
             self.assertTrue(button.instate(["disabled"]))
 
     def test_ultrasonic_uses_confirmed_state_and_rechecks_at_click(self):
@@ -1082,6 +1122,91 @@ class DashboardTests(unittest.TestCase):
             gui._closed = True
             for child in self.root.winfo_children():
                 child.destroy()
+
+    def test_continue_run_confirms_and_rechecks_after_dialog(self):
+        # 2026-11-14: Continue run releases the stop into the stopped route.
+        calls = []
+        status = self.operator_status(emergency_stopped=True, can_release=True, can_continue=True)
+        gui = self.dashboard(request_continue_run=lambda: calls.append(True) or dict(status),
+                             request_release_stop=lambda: None)
+        self.assertTrue(gui.continue_btn.instate(["!disabled"]))
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=False) as confirm:
+            gui.continue_btn.invoke()
+        self.assertEqual(calls, [])
+        self.assertIn("moved by hand", confirm.call_args.args[1])
+        def lose_route(*args, **kwargs):
+            status["can_continue"] = False
+            return True
+        with patch.object(monitor_ui.messagebox, "askyesno", side_effect=lose_route):
+            gui.continue_btn.invoke()
+        self.assertEqual(calls, [])
+        self.assertTrue(gui.continue_btn.instate(["disabled"]))
+        status["can_continue"] = True
+        self.poll(gui)
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=True):
+            gui.continue_btn.invoke()
+        self.assertEqual(calls, [True])
+
+    def test_continue_run_is_unavailable_without_a_stopped_route(self):
+        calls = []
+        self.operator_status(emergency_stopped=True, can_release=True, can_continue=False)
+        gui = self.dashboard(request_continue_run=lambda: calls.append(True),
+                             request_release_stop=lambda: None)
+        self.assertTrue(gui.continue_btn.instate(["disabled"]))
+        self.assertTrue(gui.release_btn.instate(["!disabled"]))
+        with patch.object(monitor_ui.messagebox, "askyesno") as confirm:
+            gui._request_continue_run()
+        confirm.assert_not_called()
+        self.assertEqual(calls, [])
+
+    def test_reverse_to_start_confirms_and_rechecks_after_dialog(self):
+        # 2026-11-14: Reverse to start releases the stop into the way back.
+        calls = []
+        status = self.operator_status(emergency_stopped=True, can_release=True, can_continue=True,
+                                      can_reverse=True)
+        gui = self.dashboard(request_reverse_run=lambda: calls.append(True) or dict(status),
+                             request_release_stop=lambda: None, request_continue_run=lambda: None)
+        self.assertTrue(gui.reverse_btn.instate(["!disabled"]))
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=False) as confirm:
+            gui.reverse_btn.invoke()
+        self.assertEqual(calls, [])
+        self.assertIn("moved by hand", confirm.call_args.args[1])
+        self.assertIn("where this route started", confirm.call_args.args[1])
+        def lose_route(*args, **kwargs):
+            status["can_reverse"] = False
+            return True
+        with patch.object(monitor_ui.messagebox, "askyesno", side_effect=lose_route):
+            gui.reverse_btn.invoke()
+        self.assertEqual(calls, [])
+        self.assertTrue(gui.reverse_btn.instate(["disabled"]))
+        status["can_reverse"] = True
+        self.poll(gui)
+        with patch.object(monitor_ui.messagebox, "askyesno", return_value=True):
+            gui.reverse_btn.invoke()
+        self.assertEqual(calls, [True])
+
+    def test_reverse_to_start_is_unavailable_without_a_route_and_on_older_firmware(self):
+        calls = []
+        self.operator_status(emergency_stopped=True, can_release=True, can_continue=True)
+        gui = self.dashboard(request_reverse_run=lambda: calls.append(True),
+                             request_release_stop=lambda: None, request_continue_run=lambda: None)
+        self.assertTrue(gui.reverse_btn.instate(["disabled"]))
+        self.assertTrue(gui.continue_btn.instate(["!disabled"]))
+        with patch.object(monitor_ui.messagebox, "askyesno") as confirm:
+            gui._request_reverse_run()
+        confirm.assert_not_called()
+        self.assertEqual(calls, [])
+
+    def test_the_route_step_is_shown_under_the_state(self):
+        gui = self.dashboard()
+        self.health.update(robot_state="OUTBOUND",
+                           route_leg="Outbound step 2 of 15: straight · station step, station walls ignored")
+        self.poll(gui)
+        self.assertIn("State: Outbound", gui.subtitle_lbl.cget("text"))
+        self.assertIn("station walls ignored", gui.subtitle_lbl.cget("text"))
+        self.health.update(route_leg="")
+        self.poll(gui)
+        self.assertNotIn("step", gui.subtitle_lbl.cget("text"))
 
     def test_reset_confirmation_can_cancel_and_rechecks_after_dialog(self):
         calls = []

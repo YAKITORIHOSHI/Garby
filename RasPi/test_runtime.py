@@ -53,7 +53,11 @@ def load_runtime(*, lidar_reflection="0"):
     runtime._test_operator_state = tempfile.TemporaryDirectory(prefix="garby-runtime-operator-")
     weakref.finalize(runtime, runtime._test_operator_state.cleanup)
     environment = {
-        "GARBY_OPERATOR_STOP_FILE": str(Path(runtime._test_operator_state.name) / "operator-stop")}
+        "GARBY_OPERATOR_STOP_FILE": str(Path(runtime._test_operator_state.name) / "operator-stop"),
+        "GARBY_STATUS_FILE": str(Path(runtime._test_operator_state.name) / "bridge-status.json"),
+        # Neither read the robot's learned LiDAR mounting error nor write one.
+        "GARBY_WALL_HEADING_OFFSET_FILE":
+            str(Path(runtime._test_operator_state.name) / "wall-heading-offset.json")}
     if lidar_reflection is not None:
         environment["GARBY_LIDAR_REFLECT_LEFT_RIGHT"] = lidar_reflection
     with patch.dict(sys.modules, replacements), patch.dict("os.environ", environment):
@@ -127,6 +131,378 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreater(distance, 3.0)        # far outside the 95 cm static box
         self.assertIn("F=O", last_path)
         self.assertIn("MOVING_STOP", node._active_zones())
+
+    def hallway_scan(self, world, robot_x=0.0):
+        from test_motion_tracker import ANGLE_MIN, RANGE_MAX_M, STEP
+        stamp_ns = time.time_ns()
+        return types.SimpleNamespace(
+            ranges=world.scan(robot_x), angle_min=ANGLE_MIN, angle_increment=STEP,
+            range_min=0.1, range_max=RANGE_MAX_M,
+            header=types.SimpleNamespace(stamp=types.SimpleNamespace(
+                sec=stamp_ns // 1_000_000_000, nanosec=stamp_ns % 1_000_000_000)))
+
+    def test_an_object_standing_in_the_path_only_adds_caution_speed(self):
+        # 2026-11-14: a box between the fitted walls, 3 m ahead in the robot's own
+        # path, asks for caution speed (W) once three scans in a row show it. It
+        # never becomes a STOP, and the read-only front bypass removes it.
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        world = clear_world()
+        world.add_person(300.0, 0.0, 0.0, 0.0, radius=20.0)
+        node = runtime.LidarDistanceReader(None, None)
+        paths = []
+        for _ in range(4):
+            node.scan_callback(self.hallway_scan(world))
+            paths.append(node.build_status_packets()[0].split("|", 1)[1])
+            time.sleep(0.02)
+        self.assertEqual(paths[:2], ["F=C|B=C|T=C"] * 2)
+        self.assertEqual(paths[2:], ["F=W|B=C|T=C"] * 2)
+        self.assertIn("OBJECT_AHEAD", node._active_zones())
+        self.assertEqual([marker[2] for marker in node._markers], ["object"])
+        runtime.front_disabled.set()
+        try:
+            self.assertIn("F=C|B=C|T=C", node.build_status_packets()[0])
+        finally:
+            runtime.front_disabled.clear()
+        # An unusable scan discards the scene with the rest of the evidence.
+        stale = self.hallway_scan(world)
+        stale.header.stamp.sec -= 5
+        node.scan_callback(stale)
+        self.assertFalse(node._scene_caution)
+        self.assertEqual(node._markers, ())
+        self.assertIn("F=S", node.build_status_packets()[0])
+
+    def test_an_empty_hallway_and_a_fixture_ask_for_nothing(self):
+        from test_scene_objects import clear_world
+        world = clear_world()
+        world.add_person(260.0, 88.0, 0.0, 0.0, radius=8.0)   # on the wall
+        node = self.runtime.LidarDistanceReader(None, None)
+        for _ in range(5):
+            node.scan_callback(self.hallway_scan(world))
+            self.assertIn("F=C|B=C|T=C", node.build_status_packets()[0])
+            time.sleep(0.02)
+        self.assertEqual(node._markers, ())
+
+    def test_a_scene_fault_changes_no_path_decision(self):
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        world = clear_world()
+        world.add_person(300.0, 0.0, 0.0, 0.0, radius=20.0)
+        node = runtime.LidarDistanceReader(None, None)
+        with patch.object(runtime, "analyze_scene", side_effect=RuntimeError("scene")), \
+                self.assertLogs(runtime.logger, level="ERROR"):
+            for _ in range(4):
+                node.scan_callback(self.hallway_scan(world))
+        self.assertIn("F=C|B=C|T=C", node.build_status_packets()[0])
+        self.assertEqual(node._markers, ())
+
+    def test_markers_reach_the_map_snapshot(self):
+        from test_scene_objects import clear_world
+        world = clear_world()
+        world.add_person(300.0, 0.0, 0.0, 0.0, radius=20.0)
+        frames = queue.Queue(maxsize=5)
+        node = self.runtime.LidarDistanceReader(None, frames)
+        node.scan_callback(self.hallway_scan(world))
+        snapshot = frames.get_nowait()[5]
+        self.assertEqual([marker[2] for marker in snapshot.markers], ["object"])
+        self.assertAlmostEqual(snapshot.markers[0][0], 2.9, delta=0.15)
+
+    def test_the_learned_lidar_mounting_error_is_taken_out_of_h_only(self):
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        learner = runtime.wall_heading_offset
+        self.assertEqual(learner.offset_deg, 0.0)
+        self.assertEqual(learner.path.parent, Path(runtime._test_operator_state.name))
+        node = runtime.LidarDistanceReader(None, None)
+
+        def fields():
+            node.scan_callback(self.hallway_scan(clear_world()))
+            return dict(part.split("=") for part in node.build_status_packets()[1].split("|")[1:])
+        before = fields()
+        learner.offset_deg = 1.5
+        try:
+            after = fields()
+        finally:
+            learner.offset_deg = 0.0
+        self.assertAlmostEqual(float(after["H"]), float(before["H"]) - 1.5, delta=0.1)
+        self.assertAlmostEqual(float(after["WL"]), float(before["WL"]), delta=0.5)
+        self.assertAlmostEqual(float(after["WR"]), float(before["WR"]), delta=0.5)
+
+    def test_driving_a_hallway_with_a_rotated_lidar_learns_its_mounting_error(self):
+        # The production path: real wall fits of a ray-cast hallway, [DRIVE] speed.
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        learner = runtime.wall_heading_offset
+        node = runtime.LidarDistanceReader(None, None)
+        world = clear_world()
+        world.pillars = []
+        world.door_gap = (1e9, 1e9)
+        try:
+            with patch.object(runtime.time, "monotonic") as clock, \
+                    patch.object(runtime.time, "time_ns") as wall_clock:
+                t, x, y = 5000.0, 0.0, 0.0
+                for _ in range(120):
+                    clock.return_value = t
+                    wall_clock.return_value = int(t * 1e9)
+                    runtime.ego_motion._clock = lambda now=t: now
+                    runtime.ble_notify_handler("[DRIVE:F:71]")
+                    # The robot holds a true heading of -2 deg: the measured H is 0.
+                    scan = self.hallway_scan(world, x)
+                    scan.ranges = world.scan(x, y, -2.0 + 2.0)
+                    stamp = int(t * 1e9)
+                    scan.header.stamp.sec, scan.header.stamp.nanosec = divmod(stamp, 10**9)
+                    node.get_clock = lambda now=stamp: types.SimpleNamespace(
+                        now=lambda: types.SimpleNamespace(nanoseconds=now))
+                    node.scan_callback(scan)
+                    t += 0.174
+                    x += 71.0 * 0.174 * math.cos(math.radians(-2.0))
+                    y += 71.0 * 0.174 * math.sin(math.radians(-2.0))
+            self.assertGreater(learner.windows, 2)
+            self.assertGreater(learner.offset_deg, 0.25)
+        finally:
+            learner.offset_deg, learner.windows = 0.0, 0
+            runtime.ego_motion._clock = time.monotonic
+            runtime.ego_motion.invalidate()
+
+    def station_scan(self, extra=()):
+        # Parked with the back to the station wall (test_station_mode.PARKED).
+        from test_hallway_geometry import world_scan
+        from test_station_mode import PARKED
+        scan = world_scan(list(PARKED) + list(extra))
+        stamp_ns = time.time_ns()
+        return types.SimpleNamespace(
+            ranges=scan["ranges"], angle_min=scan["angle_min"],
+            angle_increment=scan["angle_increment"], range_min=0.1, range_max=8.0,
+            header=types.SimpleNamespace(stamp=types.SimpleNamespace(
+                sec=stamp_ns // 1_000_000_000, nanosec=stamp_ns % 1_000_000_000)))
+
+    def path_after(self, node, scan, repeats=4):
+        for _ in range(repeats):
+            scan.header.stamp.sec, scan.header.stamp.nanosec = divmod(time.time_ns(), 10**9)
+            node.scan_callback(scan)
+            time.sleep(0.01)
+        return node.build_status_packets()[0].split("|", 1)[1]
+
+    def test_a_station_step_takes_the_station_walls_out_of_every_lidar_hold(self):
+        # 2026-11-14: while the executor says a station step is running, the wall the
+        # robot is parked against holds neither the turn sweep nor anything else.
+        runtime = self.runtime
+        node = runtime.LidarDistanceReader(None, None)
+        runtime.ble_connected.set()
+        try:
+            runtime.ble_notify_handler("[RUNNING]")
+            self.assertIn("T=O", self.path_after(node, self.station_scan()))   # ordinary rules
+            while not runtime.ble_recv_queue.empty():
+                runtime.ble_recv_queue.get_nowait()
+            with self.assertLogs(runtime.logger, level="INFO") as logs:
+                runtime.ble_notify_handler("[LEG:OF:1/15:S:5]")
+                runtime.ble_notify_handler("[LEG:OF:1/15:S:5]")   # the 2 s repeat
+            self.assertEqual(sum("Route step: Outbound step 2 of 15" in line for line in logs.output), 1)
+            self.assertTrue(runtime.ble_recv_queue.empty())      # kept out of the GUI log
+            self.assertEqual(self.path_after(node, self.station_scan()), "F=C|B=C|T=C")
+            self.assertIn("STATION_WALLS_IGNORED", node._active_zones())
+            # A bin in front of the robot at the station still stops it.
+            from test_station_mode import box
+            self.assertIn("F=O", self.path_after(node, self.station_scan(box(70.0, 0.0))))
+            self.assertEqual(self.path_after(node, self.station_scan()), "F=C|B=C|T=C")
+            # An ordinary step, the end of the route, a controller restart and a
+            # lost link each put the ordinary rules back.
+            for ending in ("[LEG:OF:2/15:L:0]", "[LEG:0]", "[MCU READY]"):
+                with self.subTest(ending=ending):
+                    runtime.ble_notify_handler("[RUNNING]")
+                    runtime.ble_notify_handler("[LEG:OF:1/15:S:5]")
+                    self.assertEqual(self.path_after(node, self.station_scan()), "F=C|B=C|T=C")
+                    runtime.ble_notify_handler(ending)
+                    self.assertIn("T=O", self.path_after(node, self.station_scan()))
+            runtime.ble_notify_handler("[RUNNING]")
+            runtime.ble_notify_handler("[LEG:OF:1/15:S:5]")
+            runtime.ble_connected.clear()
+            self.assertIn("T=O", self.path_after(node, self.station_scan()))
+            runtime.ble_connected.set()
+            # Outside a route the notice means nothing.
+            runtime.ble_notify_handler("[IDLE]")
+            runtime.ble_notify_handler("[LEG:OF:1/15:S:5]")
+            self.assertIn("T=O", self.path_after(node, self.station_scan()))
+        finally:
+            runtime.ble_connected.clear()
+            runtime.station_mode.invalidate()
+            runtime.publish_robot_state("UNKNOWN")
+
+    def test_a_station_notice_that_stops_arriving_expires(self):
+        runtime = self.runtime
+        node = runtime.LidarDistanceReader(None, None)
+        runtime.ble_connected.set()
+        try:
+            runtime.ble_notify_handler("[RETURNING]")
+            runtime.ble_notify_handler("[LEG:RF:13/15:S:3]")
+            self.assertEqual(self.path_after(node, self.station_scan()), "F=C|B=C|T=C")
+            leg = runtime.station_mode._leg
+            runtime.station_mode._leg = type(leg)(leg.route, leg.reverse, leg.step, leg.count, leg.op,
+                                                  leg.flags, leg.received_at - 4.0)
+            self.assertIn("T=O", self.path_after(node, self.station_scan()))
+        finally:
+            runtime.ble_connected.clear()
+            runtime.station_mode.invalidate()
+            runtime.publish_robot_state("UNKNOWN")
+
+    def test_reversing_is_a_route_state_and_its_notices_are_logged(self):
+        runtime = self.runtime
+        with self.assertLogs(runtime.logger, level="INFO") as logs:
+            runtime.ble_notify_handler("[REVERSING]")
+            runtime.ble_notify_handler("[ROUTE REVERSE:4/15]")
+            runtime.ble_notify_handler("[REVERSE COMPLETE]")
+        self.assertEqual(runtime._robot_state, "REVERSING")
+        self.assertTrue(any("Executor state: REVERSING" in line for line in logs.output))
+        self.assertTrue(any("[ROUTE REVERSE:4/15]" in line for line in logs.output))
+        self.assertTrue(any("[REVERSE COMPLETE]" in line for line in logs.output))
+        runtime.publish_robot_state("UNKNOWN")
+
+    def ready_controller(self, runtime, *, stopped=False, resume=False, reverse=False):
+        runtime.ble_connected.set()
+        runtime.ble_notify_handler("[IDLE]")
+        runtime.ble_notify_handler(
+            f"[OP STATUS:1:ESTOP={int(stopped)}:SONAR=1:RESUME={int(resume)}:REV={int(reverse)}]")
+
+    def test_the_phone_uses_the_monitors_own_gate_and_gets_the_controllers_answer(self):
+        # 2026-11-14: a phone request goes through request_operator_action's gate.
+        import cloud_control
+        from test_cloud_control import FakeManager, request
+        runtime = self.runtime
+        relay = cloud_control.OperatorRelay(runtime.cloud_request_operator_action,
+                                            runtime.operator_control.outcome,
+                                            runtime.cloud_set_read_only)
+        now_ms = int(time.time() * 1000)
+
+        def fresh(action, request_id):
+            command = request(action, request_id)
+            command["requestedAt"] = now_ms - 500
+            return FakeManager(command)
+        try:
+            # Release without a confirmed stop: the gate refuses, nothing is queued.
+            self.ready_controller(runtime)
+            manager = fresh("RELEASE", "1" * 32)
+            relay.poll(manager, "garby", manager.command, now_ms)
+            self.assertEqual(manager.command["status"], "failed")
+            self.assertIsNone(runtime.operator_control._pending)
+            # A stop is applied locally at once, then confirmed by the executor's ACK.
+            manager = fresh("ESTOP", "2" * 32)
+            with self.assertLogs(runtime.logger, level="WARNING") as logs:
+                relay.poll(manager, "garby", manager.command, now_ms)
+            self.assertTrue(runtime.operator_control.blocks_motion())
+            self.assertIn("from the phone", logs.output[0])
+            self.assertEqual(manager.command["status"], "claimed")
+            packet = runtime.operator_control.next_packet(True)
+            runtime.operator_control.mark_sent(packet)
+            request_id = packet[4:-1].split(":")[0]
+            runtime.ble_notify_handler(f"[OP ACK:{request_id}:ESTOP]")
+            relay.poll(manager, "garby", manager.command, now_ms + 1000)
+            self.assertEqual(manager.command["status"], "accepted")
+            # Reverse with a route record: queued, refused by the executor, reported.
+            self.ready_controller(runtime, stopped=True, resume=True, reverse=True)
+            manager = fresh("REVERSE", "3" * 32)
+            relay.poll(manager, "garby", manager.command, now_ms)
+            packet = runtime.operator_control.next_packet(True)
+            self.assertTrue(packet.endswith(":REVERSE]"))
+            runtime.operator_control.mark_sent(packet)
+            runtime.ble_notify_handler(f"[OP FAILED:{packet[4:-1].split(':')[0]}:NO_ROUTE]")
+            relay.poll(manager, "garby", manager.command, now_ms + 1000)
+            self.assertEqual((manager.command["status"], manager.command["reason"]),
+                             ("failed", "NO_ROUTE"))
+            self.assertTrue(runtime.operator_control.blocks_motion())
+            # Read-only from the phone follows the Pi's own permission.
+            manager = fresh("FRONT_READONLY_ON", "4" * 32)
+            relay.poll(manager, "garby", manager.command, now_ms)
+            self.assertTrue(runtime.front_disabled.is_set())
+            self.assertEqual(manager.command["status"], "accepted")
+            with patch.object(runtime, "ALLOW_RUNTIME_SAFETY_DISABLE", False):
+                manager = fresh("BACK_READONLY_ON", "5" * 32)
+                relay.poll(manager, "garby", manager.command, now_ms)
+            self.assertFalse(runtime.back_disabled.is_set())
+            self.assertEqual((manager.command["status"], manager.command["reason"]),
+                             ("failed", "not_permitted"))
+        finally:
+            runtime.front_disabled.clear()
+            runtime.ble_connected.clear()
+            runtime.publish_robot_state("UNKNOWN")
+
+    def test_the_phone_mirror_and_map_frame_come_from_the_current_scan_only(self):
+        import base64, struct
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        world = clear_world()
+        world.add_person(300.0, 0.0, 0.0, 0.0, radius=20.0)
+        node = runtime.LidarDistanceReader(None, None)
+        self.assertIsNone(node.cloud_map_frame(1))                 # no scan yet
+        for _ in range(4):
+            node.scan_callback(self.hallway_scan(world))
+            node.build_status_packets()
+            time.sleep(0.02)
+        frame = node.cloud_map_frame(9)
+        self.assertEqual((frame["v"], frame["seq"], frame["p"]), (1, 9, "F=W|B=C|T=C"))
+        self.assertEqual([marker[2] for marker in frame["m"]], [3])
+        self.assertIn("OBJECT_AHEAD", frame["z"])
+        distances = struct.unpack("<360H", base64.b64decode(frame["d"]))
+        self.assertAlmostEqual(distances[0], 280, delta=8)          # the box ahead
+        self.assertTrue(80 <= distances[90] <= 97)                  # the wall (or its pillar) on the left
+        with patch.object(runtime, "_lidar_node_ref", node):
+            mirror = runtime.build_operator_mirror()
+        self.assertEqual((mirror["people"], mirror["objects"], mirror["supported"]), (0, 1, False))
+        self.assertIsNone(mirror["emergencyStopped"])
+        self.assertEqual(mirror["launcher"]["software"], runtime.PI_SOFTWARE_ID)
+        # A scan the path logic calls stale is not published as a map either.
+        node._last_scan_time -= 2.0
+        self.assertIsNone(node.cloud_map_frame(10))
+        with patch.object(runtime, "_lidar_node_ref", node):
+            self.assertEqual(runtime.build_operator_mirror()["objects"], 0)
+
+    def test_the_phone_control_loop_polls_mirrors_and_publishes_only_under_a_lease(self):
+        from test_scene_objects import clear_world
+        runtime = self.runtime
+        node = runtime.LidarDistanceReader(None, None)
+        node.scan_callback(self.hallway_scan(clear_world()))
+
+        class Cloud:
+            def __init__(self):
+                self.commands = {}
+                self.mirrors, self.frames, self.reads = [], [], 0
+            def cloud_health(self): return {"state": "Online", "online": True}
+            def get_commands(self, device_id):
+                self.reads += 1
+                return self.commands
+            def update_operator_mirror(self, device_id, mirror): self.mirrors.append(mirror)
+            def update_map_frame(self, device_id, frame): self.frames.append(frame)
+        cloud = Cloud()
+        stop = threading.Event()
+
+        def run(seconds):
+            stop.clear()
+            worker = threading.Thread(target=runtime.firebase_control_loop, args=(stop,))
+            with patch.object(runtime, "firebase", cloud), \
+                    patch.object(runtime, "_lidar_node_ref", node):
+                worker.start()
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    stamp = self.hallway_scan(clear_world())
+                    node.scan_callback(stamp)
+                    time.sleep(0.1)
+                stop.set()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+        run(0.7)
+        self.assertGreaterEqual(cloud.reads, 1)
+        self.assertEqual(len(cloud.mirrors), 1)          # unchanged status is not rewritten
+        self.assertEqual(cloud.frames, [])               # nobody is watching the map
+        status_file = Path(runtime._test_operator_state.name) / "bridge-status.json"
+        self.assertEqual(Path(runtime.STATUS_FILE), status_file)   # never the robot's own file
+        self.assertIn('"robotState"', status_file.read_text())
+        cloud.commands = {"map": {"leaseAt": int(time.time() * 1000)}}
+        run(1.4)
+        self.assertGreaterEqual(len(cloud.frames), 1)
+        self.assertLessEqual(len(cloud.frames), 4)       # at most two a second
+        cloud.commands = {"map": {"leaseAt": int(time.time() * 1000) - 60_000}}
+        published = len(cloud.frames)
+        run(1.2)
+        self.assertLessEqual(len(cloud.frames) - published, 1)   # the lease ran out
 
     def test_drive_lines_feed_the_prediction_and_stay_out_of_the_gui_log(self):
         runtime = self.runtime
@@ -274,9 +650,10 @@ class RuntimeTests(unittest.TestCase):
         for index in (0, 45, 135, 180, 225, 315):
             scan.ranges[index] = .15
         node.scan_callback(scan)
-        self.assertIn("F=O|B=O", node.build_status_packets()[0])
+        # Back readings never hold a forward route segment (owner, 2026-11-14).
+        self.assertIn("F=O|B=C", node.build_status_packets()[0])
         self.runtime.front_disabled.set()
-        self.assertIn("F=C|B=O", node.build_status_packets()[0])
+        self.assertIn("F=C|B=C", node.build_status_packets()[0])
         self.runtime.back_disabled.set()
         self.assertIn("F=C|B=C", node.build_status_packets()[0])
         for side in node.FRONT_GROUP | node.BACK_GROUP:

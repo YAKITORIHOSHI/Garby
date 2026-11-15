@@ -1,5 +1,40 @@
 # GARBY deployment and acceptance
 
+## Phone control and headless — 2026-11-15
+
+Pi only (`PHONE-20261114`): deploy the entire `RasPi/` directory. Before the app's controls
+work, merge the rules example from the app repository into the database rules and add each
+operator's uid under `operators/`. Then `bash RasPi/run_headless.sh doctor` and `start`.
+`sudo python3 RasPi/install_startup.py` installs the boot service, which now runs
+`run_headless.sh run` (saved log, status file). First-use steps are in
+`docs/phone-control-headless-2026-11-15.md`; none has been run yet.
+
+## Station steps, reverse run, map markers — 2026-11-14
+
+Flash both complete sketches with build ID `REVERSE-20261114` and deploy the entire matching
+`RasPi/` directory at the same time. This build replaces `CONTINUE-20261114` (it contains it):
+if that build was never flashed, flash only this one. The executor's operator status line
+gains `:REV=`, which an older Pi does not parse (its operator controls would read as
+unsupported; emergency stop still works). The new Pi accepts the older lines.
+
+New optional Pi settings, all in `RasPi/garby-bridge.env.example`: `GARBY_WALL_FAR_FIT`,
+`GARBY_WALL_HEADING_LEARN`, `GARBY_WALL_HEADING_OFFSET_FILE`, `GARBY_STATION_WALL_MIN_GAP_CM`.
+Two values wait for a tape measure: the chassis outline (`GARBY_CHASSIS_*`) and the sonar's
+distance to the station wall when parked (`STATION_PARK_GAP_CM` in
+`MAIN_EXECUTOR_CODE/SonarSweep.h`, an executor rebuild).
+
+Acceptance steps (wheels lifted first, then supervised on the floor) and the log lines to send
+back are in `docs/objects-station-reverse-2026-11-14.md`; none has been run yet.
+
+## Continue run — 2026-11-14
+
+Flash both complete sketches with build ID `CONTINUE-20261114` and deploy the entire matching
+`RasPi/` directory at the same time: the executor's operator status line gains `:RESUME=`,
+which an older Pi does not parse (its operator controls would read as unsupported; emergency
+stop still works). The new Pi also accepts the older line. Keep the Pi stop-state and
+request-ID files. Acceptance steps (wheels lifted first, then supervised on the floor) are in
+`docs/continue-run-sonar-range-2026-11-14.md`; none has been run yet.
+
 ## Test2 turn recovery — 2026-11-14
 
 Use matching complete bridge and executor sketches with build ID `RECONNECT-20261114`.
@@ -318,7 +353,7 @@ Record board IDs, firmware versions, configuration, payload, and serial logs.
    Restart each node separately and confirm recovery starts stationary.
 4. Check LiDAR physical FRONT/LEFT/BACK/RIGHT with a target at known positions.
    Set `GARBY_LIDAR_YAW_OFFSET_DEG` from observation, not assumptions. FRONT must be
-   the way the robot travels: the rear limit is only 35 cm, against 95 cm in front.
+   the way the robot travels: back readings never hold a forward move.
 5. Confirm both motors accept short target moves. A motor command rejection
    must stop both and report a route fault. Verify physical left/right wheel
    assignment against the nudge commands. Start must roll both wheels forward,
@@ -372,7 +407,7 @@ Perform these with supervision and a clear test boundary:
 
 - Measure stopping distance and payload stability for empty/max load, lowest
   expected battery, and lowest-traction floor, including communication loss.
-- Confirm the 95 cm front, 60 cm front diagonal, 35 cm rear, and 22 cm side
+- Confirm the 95 cm front, 60 cm front diagonal and 22 cm side
   envelopes cover the whole chassis and worst measured stop distance with a
   margin. The diagonal limit assumes the chassis stays within 22 cm of the LiDAR
   to each side; a wider chassis needs this limit reviewed.

@@ -145,6 +145,146 @@ class OperatorControlTests(unittest.TestCase):
         self.control.request("ESTOP", True, 101)
         self.assertTrue(self.control.reboot_allowed())
 
+    def stopped_with_route(self, now=100):
+        self.control.note_state("IDLE", now)
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1]", now)
+
+    def test_continue_needs_a_confirmed_stop_and_a_route_to_continue(self):
+        # 2026-11-14: Continue run releases the stop into the route it interrupted.
+        self.ready(stopped=True)  # older executor status: no RESUME field
+        status = self.control.status(True, 100)
+        self.assertTrue(status["can_release"])
+        self.assertFalse(status["can_continue"])
+        self.assertIsNone(status["route_to_continue"])
+        self.assertIsNone(self.control.request("CONTINUE", True, 100))
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=0]", 100)
+        self.assertFalse(self.control.status(True, 100)["can_continue"])
+        self.assertIsNone(self.control.request("CONTINUE", True, 100))
+        self.stopped_with_route()
+        self.assertTrue(self.control.status(True, 100)["can_continue"])
+        self.control.note_state("OUTBOUND", 100)
+        self.assertFalse(self.control.status(True, 100)["can_continue"])
+        self.assertIsNone(self.control.request("CONTINUE", True, 100))
+        self.stopped_with_route()
+        self.assertFalse(self.control.status(False, 100)["can_continue"])
+        self.assertFalse(self.control.status(True, 108)["can_continue"])  # stale status
+        self.control.notification("[OP STATUS:1:ESTOP=0:SONAR=1:RESUME=1]", 100)
+        self.assertFalse(self.control.status(True, 100)["can_continue"])  # not stopped
+
+    def test_continue_is_a_confirmed_release_that_is_never_replayed(self):
+        self.acknowledge(self.control.request("ESTOP", True, 100))
+        self.stopped_with_route()
+        packet = self.control.request("CONTINUE", True, 100)
+        self.assertTrue(packet.endswith(":CONTINUE]"))
+        self.assertTrue(self.control.blocks_motion())
+        self.assertTrue(self.control.can_send(packet, True, 100))
+        self.control.mark_sent(packet, 100)
+        self.assertFalse(self.control.can_send(packet, True, 100.1))
+        self.assertNotEqual(self.control.next_packet(True, 101), packet)
+        self.assertTrue(self.control.blocks_motion())  # sending alone never releases
+        self.acknowledge(packet, 101)
+        self.assertFalse(self.control.blocks_motion())
+        # Like RELEASE, an ACK updates only its field: a fresh full status is needed.
+        status = self.control.status(True, 101)
+        self.assertFalse(status["supported"])
+        self.assertFalse(status["can_continue"])
+        self.assertEqual(self.control.next_packet(True, 101), "[OP STATUS]")
+        self.control.note_state("OUTBOUND", 101)
+        self.control.notification("[OP STATUS:1:ESTOP=0:SONAR=1:RESUME=0]", 101)
+        status = self.control.status(True, 101)
+        self.assertFalse(status["emergency_stopped"])
+        self.assertFalse(status["can_continue"] or status["can_release"])
+
+    def test_continue_with_a_different_acknowledgement_or_lost_route_does_not_release(self):
+        self.acknowledge(self.control.request("ESTOP", True, 100))
+        self.stopped_with_route()
+        packet = self.control.request("CONTINUE", True, 100)
+        _, request_id, _ = packet[1:-1].split(":")
+        self.control.mark_sent(packet, 100)
+        self.control.notification(f"[OP ACK:{request_id}:RELEASE]", 100)
+        self.assertTrue(self.control.blocks_motion())
+        self.control.notification(f"[OP FAILED:{request_id}:NO_ROUTE]", 100)
+        self.assertTrue(self.control.blocks_motion())
+        self.assertIn("NO_ROUTE", self.control.status(True, 100)["message"])
+        # The route disappears between the request and the write: cancel, never send.
+        self.stopped_with_route(101)
+        packet = self.control.request("CONTINUE", True, 101)
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=0]", 101)
+        self.assertFalse(self.control.can_send(packet, True, 101))
+        self.assertTrue(self.control.blocks_motion())
+
+    def stopped_with_reverse(self, now=100):
+        self.control.note_state("IDLE", now)
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1:REV=1]", now)
+
+    def test_reverse_needs_a_confirmed_stop_and_a_route_to_reverse(self):
+        # 2026-11-14: Reverse to start releases the stop into the way back.
+        self.stopped_with_route()   # CONTINUE-20261114 firmware: no REV field
+        status = self.control.status(True, 100)
+        self.assertTrue(status["can_continue"])
+        self.assertFalse(status["can_reverse"])
+        self.assertIsNone(status["route_to_reverse"])
+        self.assertIsNone(self.control.request("REVERSE", True, 100))
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1:REV=0]", 100)
+        self.assertFalse(self.control.status(True, 100)["can_reverse"])
+        self.assertIsNone(self.control.request("REVERSE", True, 100))
+        self.stopped_with_reverse()
+        status = self.control.status(True, 100)
+        self.assertTrue(status["can_reverse"] and status["can_continue"] and status["can_release"])
+        self.control.note_state("REVERSING", 100)
+        self.assertFalse(self.control.status(True, 100)["can_reverse"])
+        self.stopped_with_reverse()
+        self.assertFalse(self.control.status(False, 100)["can_reverse"])
+        self.assertFalse(self.control.status(True, 108)["can_reverse"])  # stale status
+        self.control.notification("[OP STATUS:1:ESTOP=0:SONAR=1:RESUME=1:REV=1]", 100)
+        self.assertFalse(self.control.status(True, 100)["can_reverse"])  # not stopped
+        for malformed in ("[OP STATUS:1:ESTOP=1:SONAR=1:REV=1:RESUME=1]",
+                          "[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1:REV=2]"):
+            self.control.disconnect()
+            self.control.note_state("IDLE", 100)
+            self.control.notification(malformed, 100)
+            self.assertFalse(self.control.status(True, 100)["supported"], malformed)
+
+    def test_reverse_is_a_confirmed_release_that_is_never_replayed(self):
+        self.acknowledge(self.control.request("ESTOP", True, 100))
+        self.stopped_with_reverse()
+        packet = self.control.request("REVERSE", True, 100)
+        self.assertTrue(packet.endswith(":REVERSE]"))
+        self.assertTrue(self.control.blocks_motion())
+        self.assertTrue(self.control.can_send(packet, True, 100))
+        self.control.mark_sent(packet, 100)
+        self.assertFalse(self.control.can_send(packet, True, 100.1))
+        self.assertNotEqual(self.control.next_packet(True, 101), packet)
+        self.assertTrue(self.control.blocks_motion())  # sending alone never releases
+        _, request_id, _ = packet[1:-1].split(":")
+        self.control.notification(f"[OP ACK:{request_id}:CONTINUE]", 101)
+        self.assertTrue(self.control.blocks_motion())  # another action's acknowledgement
+        self.acknowledge(packet, 101)
+        self.assertFalse(self.control.blocks_motion())
+        status = self.control.status(True, 101)
+        self.assertFalse(status["supported"] or status["can_reverse"])
+        self.control.note_state("REVERSING", 101)
+        self.control.notification("[OP STATUS:1:ESTOP=0:SONAR=1:RESUME=0:REV=0]", 101)
+        status = self.control.status(True, 101)
+        self.assertFalse(status["emergency_stopped"])
+        self.assertFalse(status["can_reverse"] or status["can_continue"] or status["can_release"])
+
+    def test_a_refused_or_lost_reverse_does_not_release(self):
+        self.acknowledge(self.control.request("ESTOP", True, 100))
+        self.stopped_with_reverse()
+        packet = self.control.request("REVERSE", True, 100)
+        _, request_id, _ = packet[1:-1].split(":")
+        self.control.mark_sent(packet, 100)
+        self.control.notification(f"[OP FAILED:{request_id}:NO_ROUTE]", 100)
+        self.assertTrue(self.control.blocks_motion())
+        self.assertIn("NO_ROUTE", self.control.status(True, 100)["message"])
+        # The route record disappears between the request and the write: never sent.
+        self.stopped_with_reverse(101)
+        packet = self.control.request("REVERSE", True, 101)
+        self.control.notification("[OP STATUS:1:ESTOP=1:SONAR=1:RESUME=1:REV=0]", 101)
+        self.assertFalse(self.control.can_send(packet, True, 101))
+        self.assertTrue(self.control.blocks_motion())
+
     def test_failed_release_persistence_reapplies_stop(self):
         store = types.SimpleNamespace(load=lambda: True, save=lambda stopped: (_ for _ in ()).throw(OSError("disk")))
         self.control = OperatorControl(store)

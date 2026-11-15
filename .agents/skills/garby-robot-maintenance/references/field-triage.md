@@ -100,7 +100,7 @@ Check the GUI motion hold, the `[MOTION:...]` log line, or the SMS reason:
 | --- | --- | --- |
 | Emergency stop / `STOP:OPERATOR` | Operator latch, stored in `~/.config/garby/operator-stop` | Explicit release from the GUI; a reboot keeps it |
 | `MPU:HEADING_LOST` / `STOP:MPU` | Over 100 ms without good gyro data in a straight run | Check I2C wiring, align the robot, send `R` on the bridge console |
-| `LiDAR obstacle` (`F=O`) | Within 95 cm straight ahead, 60 cm front diagonal, 35 cm rear or 22 cm side | A wall W cm to the side reads about 1.08 W on the diagonal, so it trips when closer than about 55 cm |
+| `LiDAR obstacle` (`F=O`) | Within 95 cm straight ahead, 60 cm front diagonal or 22 cm side, or a `LEFT_BAND`/`RIGHT_BAND` chassis zone (rear readings never hold since 2026-11-14) | A wall W cm to the side reads about 1.08 W on the diagonal, so it trips when closer than about 55 cm |
 | `Stale LiDAR data` (`F=S`) | Scan stale, or a sector with under 3 returns | An open-sided area with nothing within 8 m across a full 45 degree sector holds STOP |
 | `BLE link unavailable`, `Controller UART unavailable` | No fresh packets, or no UART ACKs | BLE table above; then UART wiring and `uart_resync` |
 

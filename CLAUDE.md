@@ -5,9 +5,13 @@
 Active sources: `RasPi/final_w_serial.py` and its helpers, `BLE_Receiver-Final/` (S3 bridge),
 `MAIN_EXECUTOR_CODE/` (motor controller), `Garby_MobileApp/app/` (Android).
 `RasPi/final_w_serial-simulator.py`, `Test/` and `WebConnect-GarbyController` are not production.
-Newest findings: `docs/obstacle-sweep-hold-2026-11-12.md` (stuck-forever root causes, holds that
-resume, low power, sonar sweep, moving-object prediction, pre-run centring, buzzer, bench steps).
-Before it: `docs/lidar-map-2026-11-12.md` (X3 scan truncation, radar map) and
+Newest findings: `docs/phone-control-headless-2026-11-15.md` (phone control and the map over
+Firebase, `run_headless.sh`, thermal profile) and `docs/objects-station-reverse-2026-11-14.md`
+(likely-person red dots, hallway objects, station steps, Reverse to start, far wall fit and LiDAR
+mounting-angle learning, bench steps); progress is in `docs/work-plan-2026-11-14.md`. Before it: `docs/continue-run-sonar-range-2026-11-14.md` (Continue
+run after an emergency stop, route step lists, 110 cm sonar range, two-echo forward stop) and
+`docs/obstacle-sweep-hold-2026-11-12.md` (stuck-forever root causes, holds that
+resume, low power, sonar sweep, moving-object prediction, pre-run centring, buzzer, bench steps), `docs/lidar-map-2026-11-12.md` (X3 scan truncation, radar map) and
 `docs/navigation-2026-11-11.md` (navigation design, calibration).
 
 ```bash

@@ -52,10 +52,17 @@ class LidarOfflineTests(unittest.TestCase):
                 self.node.scan_callback(scan)
                 self.assertIn('F=O', self.path())
 
-    def test_rear_obstacle_blocks_reverse(self):
+    def test_rear_obstacle_does_not_hold_a_forward_route(self):
+        # Every route segment drives forward (owner, 2026-11-14).
         scan = fixtures.RuntimeTests.scan(); scan.ranges[0] = 0.20
         self.node.scan_callback(scan)
-        self.assertIn('B=O', self.path())
+        self.assertIn('F=C|B=C', self.path())
+
+    def test_rear_obstacle_blocks_reverse_when_a_route_reverses(self):
+        scan = fixtures.RuntimeTests.scan(); scan.ranges[0] = 0.20
+        with patch.object(self.runtime, 'BACK_DISTANCE_HOLDS_MOTION', True):
+            self.node.scan_callback(scan)
+            self.assertIn('B=O', self.path())
 
     def test_close_side_chair_blocks_both_directions(self):
         for index in (90, 270):

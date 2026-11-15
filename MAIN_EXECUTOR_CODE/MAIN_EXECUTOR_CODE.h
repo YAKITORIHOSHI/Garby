@@ -103,7 +103,14 @@ BuzzerPattern currentBuzzerPattern();
 // ============================================================
 #define TRIG_PIN  5
 #define ECHO_PIN  4
-#define ULTRASONIC_TIMEOUT_US          18000UL
+// The sonar reads only as far as ULTRASONIC_MAX_RANGE_CM (owner, 2026-11-14: the
+// route drives the hallway centre, so nothing far away matters to it). The ping
+// gives up after the echo time of that range plus a small margin (was 18 ms, about
+// 3 m), and an echo from further away counts as "nothing in range", a clear
+// reading. Every decision distance below (slow 90, resume speed 105, the spin
+// circle about 80) lies inside this range.
+#define ULTRASONIC_MAX_RANGE_CM          110.0f
+#define ULTRASONIC_TIMEOUT_US  ((uint32_t)(ULTRASONIC_MAX_RANGE_CM * 2.0f / 0.0343f) + 200UL)
 #define ULTRASONIC_PING_INTERVAL_MS       40UL
 #define ULTRASONIC_PARKED_PING_INTERVAL_MS 250UL   // forward-only while idle or parked
 #define ULTRASONIC_ECHO_STUCK_MS          500UL   // ECHO held high this long = no echo
@@ -118,6 +125,8 @@ BuzzerPattern currentBuzzerPattern();
 #define ULTRASONIC_CLEAR_DISTANCE_CM      72.0f
 #define ULTRASONIC_RESUME_SPEED_DISTANCE_CM 105.0f
 #define VERY_CLOSE_DISTANCE_CM            25.0f
+static_assert(ULTRASONIC_MAX_RANGE_CM > ULTRASONIC_RESUME_SPEED_DISTANCE_CM,
+              "the sonar must still see the distance that restores full speed");
 // LiDAR is the single steering authority. Side-sonar steering can be enabled
 // only after hardware testing proves it will not fight the center controller.
 #define ENABLE_ULTRASONIC_SIDE_NUDGE         0
@@ -141,7 +150,7 @@ BuzzerPattern currentBuzzerPattern();
 // the MPU confirms or swaps it on the first turn and the steering probe.
 const bool MOTOR1_DIR_HIGH_COUNTS_UP = false;
 const bool MOTOR2_DIR_HIGH_COUNTS_UP = true;
-const char EXECUTOR_BUILD_ID[] = "RECONNECT-20261114";
+const char EXECUTOR_BUILD_ID[] = "REVERSE-20261114";
 
 const uint32_t MAX_SPEED       = 5600;
 const uint32_t CAUTION_SPEED   = 3900;
@@ -263,7 +272,8 @@ struct LidarZones {
 // ============================================================
 // ROBOT STATE MACHINE
 // ============================================================
-enum class GarbyState { IDLE, RUNNING, RETURNING };
+// REVERSING (2026-11-14): driving back along an interrupted route to its start.
+enum class GarbyState { IDLE, RUNNING, RETURNING, REVERSING };
 extern GarbyState garbyState;
 extern bool       resetQueued;
 // Stationary route-fault latch: set when a route segment fails so the route is
@@ -286,6 +296,10 @@ extern FastAccelStepperEngine engine;
 extern FastAccelStepper* stepper1;
 extern FastAccelStepper* stepper2;
 extern HeadingControl    heading;
+
+// Where the running route is, and what is left of it after an emergency stop.
+#include "RouteResume.h"
+extern RouteResume       routeResume;
 
 // ============================================================
 // GLOBAL STATE DECLARATIONS
@@ -392,6 +406,19 @@ bool safeMoveDistance(int32_t steps, bool isADJ = false, bool isNudgeEnabled = t
 bool safeTurnLeft (float degrees);
 bool safeTurnRight(float degrees);
 bool beginRouteHeading();
+// "Continue run" (2026-11-14): keep the route frame; a new S3 heading reference
+// since the stop needs two agreeing wall scans on the route's right-angle grid.
+bool resumeRouteHeading(uint32_t reanchorsAtStop);
+// Finish a route turn whose target is already in the route frame.
+bool resumeRouteTurn();
+// Route leg notice and station flags for the step in progress (RouteResume.h STEP_*).
+void routeLegBegin(uint8_t route, bool reverse, uint8_t index, uint8_t count, RouteOp op,
+                   uint8_t flags, int32_t wallAheadStepsBeyond);
+void routeLegEnd();
+// "Reverse to start" (2026-11-14): pointsRun.ino drives the saved route backwards.
+bool spinToRouteHeading(float targetDeg, bool alignAfter);
+bool runReverse(uint8_t* routeOut);
+void finishReverseRun(uint8_t route);
 // Pre-run centring before a long hallway straight (2026-11-12): stand still,
 // measure the walls, face the hallway axis and sidestep onto the centre line.
 // False only when the route must stop; *progressSteps = forward travel used.
