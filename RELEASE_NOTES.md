@@ -1,5 +1,240 @@
 # GARBY release notes
 
+## Phone controls checked one by one — 2026-11-18
+
+- The phone's RunStart Continue/Reverse/Discard, its arrows and their Stop now reach the robot.
+  The Pi's phone handler called four functions that did not exist; each request crashed the
+  relay after its claim and ended "unconfirmed".
+- Phone arrows are **nudges** (owner's choice): each tap drives 0.6 s, timed and ended by the
+  Pi with the window's own `[TEST END]`, about 18 cm Normal / 36 cm Fast nominal. A slow link
+  delays a nudge but cannot lengthen it. No sensor gates, as for the window's arrows.
+- The phone offers Developer controls exactly when the Pi's Developer window does, and Stop
+  test ends a running test or list (the fastest way available). Refusals carry the window's
+  reason; the mirror adds `developerMessage`, `developerBlocked` and `developerRun`.
+- The phone has the RunStart tab's editor too: rows (what each step does, how many steps),
+  Max speed, Acceleration and Start run (`DEV_RUN_START`), checked with the window's own rules
+  and sent through its `request_run`. The rows lock while a list moves or stands part-way.
+- Ordinary Controls-tab requests no longer carry `sensors`/`fast`, which field-checking
+  database rules refuse. The app repository's example rules now list all 32 actions and the
+  Start run fields; they still have to be published in the Firebase console.
+- **MCU upload requirement for this change: None.** Deploy the entire `RasPi/` directory,
+  build `PHONEDEV-20261118`, and a new app APK. Earlier firmware awaiting upload is separate.
+  Nothing was run on the robot or a phone. Details: `docs/phone-controls-rundown-2026-11-18.md`.
+
+## Completed-route locations in Firebase — 2026-11-17
+
+- Outbound completion publishes `status/location = POINT_B` (disposal area). A successful
+  return publishes `POINT_A` (station) and `isAtStation = true`; a generic IDLE, boot,
+  operator release, developer test or reset acknowledgement cannot claim station arrival.
+- The executor retains `[RETURN COMPLETE]` for status/reconnect replay until a new motion,
+  reset or controller restart. Continued returns report it only after their remaining route
+  completes. The existing bridge transports the new telemetry without source changes.
+- Motion publishes `IN_TRANSIT`; a controller/link uncertainty or fault publishes `UNKNOWN`.
+  `lastArrival` retains the most recently confirmed route endpoint through later state
+  changes. These are executor completion reports, not measured physical localization.
+- **MCU upload requirement for this change: Executor only**, complete `MAIN_EXECUTOR_CODE`
+  sketch, plus the entire `RasPi/` directory, both `ARRIVAL-20261117`. Earlier bridge changes
+  may still await upload independently. No hardware upload or live database change was
+  performed here. Details: `docs/route-arrival-2026-11-17.md`.
+
+## MPU turn correction, developer speed and map space — 2026-11-17
+
+- The owner's estimated 100° physical turn for a reported 90° gives MPU scale `100/90`.
+  The bridge applies it to yaw rate and integration; turn targets stay in degrees.
+  This estimate needs measured floor acceptance in both directions.
+- Developer measured turns wait for fresh, steady MPU samples after queue cancellation
+  and enforce the 1° final tolerance. Rotation that does not settle, stale MPU and emergency
+  stop cannot produce successful completion. Approach updates are limited to 50 Hz.
+- Developer speed settings start at 2351 steps/s, nominally 30 cm/s. Remote Slow/Fast are
+  about 30/60 cm/s; RunStart accepts 2351..8000 and defaults to 2351. Acceleration, short
+  moves, motor-side confirmation and turn braking may be slower.
+- The map fills its panel. State/notices, scan status, range, captions, hits and geometry
+  details move into the scrollable bin-sensor sidebar; other tabs retain header notices.
+  The main button is **Developer**.
+- **MCU upload requirement: Both**, complete bridge/executor sketches, plus the entire
+  `RasPi/` directory, build `TURNSCALE-20261116`. Compilation and tests do not establish
+  installation or floor acceptance. Details: `docs/developer-turn-speed-2026-11-17.md`.
+
+## Developer 90-degree floor turns — 2026-11-16
+
+- The Developer tests window adds **Turn left 90°** and **Turn right 90°**. Each asks you to
+  confirm GARBY is on the floor with its wheels down: the MPU measures the robot turning,
+  so spinning lifted wheels cannot validate the angle. A no-rotation result explains this;
+  missing/lost MPU messages also name the floor requirement and the sensor connection.
+- The tests use the immediate turn endpoint stop below. They keep the 400 steps/s speed,
+  selected sensor checks and 800 ms live lease. Only 90° gets up to 30 seconds; small tests
+  retain 8 seconds. An unchanged MPU angle ends a 90° test promptly as `NO_ROTATION`.
+- **MCU upload requirement: Both**, whole bridge and executor sketches, plus the whole
+  `RasPi/` directory, all `TURNTEST-20261116`. This contains the earlier turn-stop and
+  `RUNSTART-20261116B` changes; do not install the intermediate turn-stop image separately.
+  Installation and physical acceptance are unverified. Details:
+  `docs/developer-90-turns-2026-11-16.md`.
+
+## Immediate stop at a turn target — 2026-11-16
+
+- Left/right MPU-measured turns immediately cancel both wheel pulse queues at the
+  estimated target heading, including 90-degree turns. They no longer request a normal
+  decelerating stop at the endpoint. The 0.3-degree early allowance is removed; approach
+  speed reduction, heading supervision, safety holds and wall alignment remain.
+- **MCU upload requirement: Executor only**, whole `MAIN_EXECUTOR_CODE` sketch,
+  build `TURNSTOP-20261116`. No additional bridge flash or Pi deployment for this change.
+  Earlier `RUNSTART-20261116B` bridge/Pi updates retain their separate requirement;
+  installation status is unverified. Exact physical turn angle still needs measurement.
+  Details and evidence: `docs/turn-force-stop-2026-11-16.md`.
+
+## RunStart: drive a list of steps — 2026-11-16
+
+- **Max speed up to 8000 steps/s** (was 5600), as the owner asked. Routes keep their 5600.
+  Build `RUNSTART-20261116B`: upload **both** sketches and deploy `RasPi/` again.
+- The Developer tests window has a *RunStart* tab. Build a list of steps, each a dropdown
+  (Forward, Backward, Turn left, Turn right, Bump calibrate) and a number of steps: **+** adds a
+  row, the bin deletes one. Max speed and acceleration are set on the side. **Start run** drives
+  the list in order, with no LiDAR, sonar or gyro checks, as the owner asked. The rows lock
+  once it starts.
+- **EMERGENCY STOP** stops it at once. GARBY remembers exactly where it stopped: **Continue
+  run** finishes the list, **Reverse to start** drives it back to where it began (both release
+  the emergency stop first, after you confirm). Reverse to start also works after a list
+  finished. **Discard saved** forgets it and unlocks the rows.
+- Like every developer test it needs the Pi in contact: if the window closes, the ssh session
+  drops or the link is lost, it stops within 0.8 s and stays stopped until you choose.
+- A test ended by the emergency stop now says so (it said "the link to the robot dropped").
+- **MCU upload requirement: Both** (`RUNSTART-20261116`), and deploy the whole `RasPi/`
+  folder. Details: `docs/runstart-2026-11-16.md`.
+
+## You decide when it moves — 2026-11-16
+
+- The owner saw GARBY start by itself when a LiDAR read-only switch was turned on. The log
+  showed why: a Manual disposal route held on the bench stayed alive when the monitor was
+  closed, and drove on by itself as soon as the LiDAR cleared it (once on the station rule
+  after a restart, once when read-only was switched on).
+- Now a read-only change during a route, and a monitor that finds a route still running when
+  it starts, both latch the emergency stop and say why above the tabs (and on the phone). You
+  choose Continue run, Reverse to start, or Release stop and then Manual disposal. A Bluetooth
+  reconnect mid-route still carries on. Every read-only change is logged.
+- The LiDAR driver's own info lines are no longer shown as warnings.
+- **MCU upload requirement: None** (Pi only, `DECIDE-20261116`); both boards stay at
+  `REMOTE-20261116`. Details: `docs/operator-decides-2026-11-16.md`.
+
+## Sides read-only — 2026-11-16
+
+- The Controls tab has a third LiDAR read-only toggle, **Sides**, next to Front and Back (the
+  owner: "so that the motor can be tested and run"). It stops the side checks — something
+  right beside GARBY, including beside the rear half while parking — from holding the motors.
+  Readings and zones stay on the map. A spin still needs Front/Back read only, missing or
+  stale scans still stop GARBY, and it is off whenever the monitor starts. Headless key `l`.
+- **MCU upload requirement: None** for this change (Pi only, `SIDES-20261116`). Still pending:
+  both boards at `REMOTE-20261116`. Details: `docs/side-read-only-2026-11-16.md`.
+
+## Remote control: drive while an arrow is held — 2026-11-16
+
+- The Developer tests window has a *Remote control* tab: ▲ forward, ▼ backward, ◀ ▶ spin in
+  place, a Slow/Fast switch (about 5 or 25 cm/s). It drives only while an arrow is held and
+  stops when it is let go; no step value, no time limit and, by the owner's choice, no sensor
+  checks. A closed or frozen window, a lost link and EMERGENCY STOP also stop it.
+- **MCU upload requirement: Both** complete sketches plus the whole `RasPi/` folder, all
+  `REMOTE-20261116`. This includes the Backward test, the rear-wall parking and the two-window
+  monitor, which were still waiting. Details: `docs/remote-control-2026-11-16.md`.
+
+## Two windows, logs in the monitor, controls that explain themselves — 2026-11-16
+
+- Developer tests open in their own window (button in the main header), with their own
+  emergency stop; closing it stops a running test. The main window keeps the real controls.
+- A greyed-out control now says why when clicked. A Manual disposal that "did nothing" was a
+  route already running and held by something within the side limit on the bench; the
+  message now says exactly that and how to end the route. Holds are shown in plain words.
+- The Pi's log is on a new *Log* tab and saved in `~/garby-logs/bridge.log`; the terminal
+  only says where. The LiDAR driver's errors and the ROS node's lines go there too.
+- Restart from an ssh session needs a one-time rule (`RasPi/49-garby-reboot.rules`); a
+  refusal now says so.
+- **MCU upload requirement: None** for this change; deploy the whole `RasPi/` folder
+  (`CONTROLS-20261116`). The executor's `BACKTEST-20261116` is still waiting to be flashed.
+  Details: `docs/gui-controls-2026-11-16.md`.
+
+## Backward developer test, live rear-wall reading — 2026-11-16
+
+- The owner found that backward "was not working at all" on the bench. With the wheels
+  lifted nothing could reverse: there was no backward test, and a lifted route ends at its
+  first turn, long before the parking step. The Developer tests tab now has **Backward ~5 cm**
+  (400 steps, the same limits as Forward). It runs under the same rear LiDAR check as reverse
+  parking (`GO:BACK` only on a clear rear) and names that check when it holds.
+- The Developer tab's Live line also shows the rear wall that parking squares up to: its
+  distance and angle (0 = square). It is display only.
+- Codex's rear-wall parking was reviewed and is unchanged. Points to check on the floor are
+  listed in `docs/backward-test-2026-11-16.md`.
+- **MCU upload requirement: Both** complete sketches plus the whole `RasPi/` folder, all
+  `BACKTEST-20261116` (includes `REARPARK-20261116`).
+
+## Rear-wall parking alignment — 2026-11-16
+
+- Both final parking steps use two fresh scans of the wall behind GARBY before
+  reversing. The final approach turn leaves alignment to that rear wall; side-wall
+  heading does not choose the parking direction. MPU supervision remains active.
+- Rear fits are measured before station-wall filtering and retain their acquisition
+  age through Pi, bridge and executor. Missing, stale or disagreeing evidence holds
+  parking; lost rear fits or drift during the approach brakes and rechecks it. Holds
+  preserve the remaining calibrated travel. The final gyro-only spin is removed.
+- Controls, developer-test behavior and nudge tuning are unchanged. Independent
+  hallway-model checks support retaining the working nudge deadband.
+- **MCU upload requirement: Both**, complete `BLE_Receiver-Final` and
+  `MAIN_EXECUTOR_CODE` sketches, plus the entire `RasPi/` folder, all
+  `REARPARK-20261116`. This supersedes the earlier source build `PARK-20261116`;
+  installed firmware identity remains unverified. See
+  `docs/rear-wall-parking-2026-11-16.md` for verification and acceptance limits.
+
+## Reverse parking, fewer false red dots while moving — 2026-11-16
+
+- GARBY parks by reversing at both ends of its route (owner's request). Each route used to
+  end by driving at the parking spot and spinning 180 degrees beside it; now its last turn
+  faces away from the spot and it backs in slowly by the same travel, so it ends in the same
+  place facing the same way, without the spin beside the wall.
+- While it backs, only the LiDAR watches behind it: the Pi sends a rear-travel clearance
+  with every path packet, and the bridge lets the executor reverse only on that clearance
+  (`GO:BACK`). A bridge or Pi without it holds the robot instead. The sonar faces away and
+  does not hold a backing move. Nothing below the LiDAR's height behind the robot is seen.
+- A likely-person red dot now also needs the object to move relative to the other tracked
+  objects when they all drift together along GARBY's travel direction. With the wheels
+  lifted on the bench (or slipping), still posts and bins had been marked red. Stops, slow
+  downs and every other rule are unchanged.
+- **MCU upload requirement: Both** (`PARK-20261116` on the executor and on the bridge), plus
+  the whole `RasPi/` folder (`PARK-20261116`). Deploy all three together. This includes the
+  executor's quiet developer turns (`DEVTEST-20261116`), which were never installed. Details:
+  `docs/reverse-parking-2026-11-16.md`.
+
+## Quiet developer turns, clearer Developer tab, deployment-only folders — 2026-11-16
+
+- After the owner's first bench run, a developer test never restarts its wheels after a hold:
+  a lifted turn with every sensor selected had stop-started loudly on flickering LiDAR/sonar
+  clearance. The test now ends at once and names the cause (LiDAR, sonar, gyro, or "no
+  rotation" for lifted wheels). Routes keep their hold-and-resume behaviour.
+- The Developer tests tab always says why it is unavailable and what to do, uses plain labels
+  and shows the last result in words.
+- An orderly shutdown no longer logs a LiDAR "stream stale" ERROR (the STOP is still sent).
+- `RasPi/` and both sketch folders now contain only what runs on the robot; tests, the Pi
+  simulator and bench sketches are in `tests/`, the monitor preview in `tools/`.
+- **MCU upload requirement: Executor only** (`DEVTEST-20261116`); the bridge stays on
+  `DEVTEST-20261115`. Deploy the whole `RasPi/` folder. Details:
+  `docs/developer-tests-start-hold-2026-11-15.md`.
+
+## Developer tests, explicit motion holds, fewer false person labels — 2026-11-15
+
+- The recent stopped start was an accepted outbound route held by LiDAR side clearance.
+  Fresh scans reproduce `LEFT_BAND` even with station-wall filtering; front/rear read-only
+  cannot bypass that production gate. The monitor now displays the actual hold above every
+  tab and gives the same detailed reason to the status mirror.
+- The owner requested developer controls to isolate sensors. The monitor now offers
+  short, confirmed forward/single-motor/MPU-turn tests with per-test LiDAR, MPU and sonar
+  selections, independent gyro/wall readings, a live connection lease and hard duration/
+  speed/travel limits. They cannot start or continue a normal route with those overrides.
+- Likely-person markers require repeated rounded-profile evidence. Moving box corners
+  remain objects, and a label is retired when its track inherits a different/flat outline.
+  Generic obstacle and moving-object decisions are unchanged. A similarly shaped mover
+  can still be labelled; this is no proof of human identity.
+- **MCU upload requirement: Both** complete sketches (`DEVTEST-20261115`), plus the whole
+  matching `RasPi/` directory. Bridge hardware confirmed by the owner: ESP32-S3 N16R8
+  (16 MB flash / 8 MB octal PSRAM). Software/build evidence and physical limits are in
+  `docs/developer-tests-start-hold-2026-11-15.md`. No firmware upload or live motor test
+  was performed for this change.
+
 ## Phone control, map on the phone, headless launcher — 2026-11-15
 
 - **Headless.** `bash RasPi/run_headless.sh start|stop|status|logs|doctor` runs GARBY without a

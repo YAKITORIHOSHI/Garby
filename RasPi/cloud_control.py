@@ -42,7 +42,12 @@ except ImportError:  # pragma: no cover - stripped install: no map frames
 CONTROLLER_ACTIONS = ("ESTOP", "RELEASE", "CONTINUE", "REVERSE", "SONAR_ON", "SONAR_OFF",
                       "REBOOT")
 READ_ONLY_ACTIONS = {"FRONT_READONLY_ON": ("front", True), "FRONT_READONLY_OFF": ("front", False),
-                     "BACK_READONLY_ON": ("back", True), "BACK_READONLY_OFF": ("back", False)}
+                     "BACK_READONLY_ON": ("back", True), "BACK_READONLY_OFF": ("back", False),
+                     "SIDE_READONLY_ON": ("side", True), "SIDE_READONLY_OFF": ("side", False)}
+DEV_ACTIONS = ("DEV_TEST_F", "DEV_TEST_B", "DEV_TEST_L", "DEV_TEST_R", "DEV_TEST_L90",
+               "DEV_TEST_R90", "DEV_TEST_M1", "DEV_TEST_M2", "DEV_TEST_I", "DEV_CANCEL",
+               "DEV_RUN_START", "DEV_RUN_CONTINUE", "DEV_RUN_UNDO", "DEV_RUN_CLEAR",
+               "DEV_HOLD_W", "DEV_HOLD_S", "DEV_HOLD_A", "DEV_HOLD_D", "DEV_HOLD_STOP")
 ESTOP_MAX_AGE_MS = 120_000
 ACTION_MAX_AGE_MS = 20_000
 FUTURE_TOLERANCE_MS = 5_000
@@ -70,7 +75,7 @@ def command_problem(command, now_ms):
             or type(command.get("requestedAt")) is not int or command["requestedAt"] <= 0
             or not isinstance(action, str)):
         return "invalid_request"
-    if action not in CONTROLLER_ACTIONS and action not in READ_ONLY_ACTIONS:
+    if action not in CONTROLLER_ACTIONS and action not in READ_ONLY_ACTIONS and action not in DEV_ACTIONS:
         return "unknown_action"
     age = now_ms - command["requestedAt"]
     limit = ESTOP_MAX_AGE_MS if action == "ESTOP" else ACTION_MAX_AGE_MS
@@ -88,10 +93,11 @@ class OperatorRelay:
     clock() -> seconds, monotonic: measures how long a claim took
     """
 
-    def __init__(self, request_action, action_outcome, set_read_only, clock=time.monotonic):
+    def __init__(self, request_action, action_outcome, set_read_only, dev_action=None, clock=time.monotonic):
         self._request_action = request_action
         self._action_outcome = action_outcome
         self._set_read_only = set_read_only
+        self._dev_action = dev_action
         self._clock = clock
         self._active = None      # {"requestId", "controllerId", "at"} of this process's claim
 
@@ -138,6 +144,14 @@ class OperatorRelay:
             manager.finish_operator(device_id, command, "accepted" if accepted else "failed",
                                     reason)
             return
+        if action in DEV_ACTIONS:
+            if self._dev_action is None:
+                manager.finish_operator(device_id, command, "failed", "developer_tests_unavailable")
+                return
+            accepted, reason = self._dev_action(action, command)
+            manager.finish_operator(device_id, command, "accepted" if accepted else "failed",
+                                    reason)
+            return
         controller_id, message = self._request_action(action)
         if controller_id is None:
             manager.finish_operator(device_id, command, "failed", message or "not_available")
@@ -168,10 +182,12 @@ class OperatorRelay:
             self._active = None
 
 
-def operator_mirror(status, *, robot_state, front_read_only, back_read_only, read_only_allowed,
-                    motion_hold, zones, route_leg, people, objects, launcher, now_ms=None):
+def operator_mirror(status, *, robot_state, front_read_only, back_read_only, side_read_only=False,
+                    developer=None, read_only_allowed, motion_hold, zones, route_leg, people,
+                    objects, launcher, now_ms=None):
     """The ``devices/<id>/operator`` document from the monitor's own status."""
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    developer = developer or {}
     return {
         "version": 1,
         "updatedAt": now_ms,
@@ -190,14 +206,49 @@ def operator_mirror(status, *, robot_state, front_read_only, back_read_only, rea
         "robotState": str(robot_state),
         "frontReadOnly": bool(front_read_only),
         "backReadOnly": bool(back_read_only),
+        "sideReadOnly": bool(side_read_only),
         "readOnlyAllowed": bool(read_only_allowed),
         "motionHold": str(motion_hold or "")[:80],
         "zones": ",".join(zones)[:160],
         "routeLeg": str(route_leg or "")[:120],
         "people": int(people),
         "objects": int(objects),
+        "developerEnabled": bool(developer.get("enabled")),
+        "developerPending": bool(developer.get("pending")),
+        "developerResult": str(developer.get("result", ""))[:120],
+        # 2026-11-18: what the Developer window shows, so the phone can say why a test is
+        # unavailable, how the last one ended and where a RunStart list stands.
+        "developerMessage": str(developer.get("message", ""))[:160],
+        "developerBlocked": str(developer.get("blocked", ""))[:160],
+        "developerRun": developer_run_mirror(developer.get("run")),
         "launcher": launcher,
     }
+
+
+def developer_run_mirror(run):
+    """The RunStart tab's state for the phone. While a list moves only its step number is
+    sent: [RUN AT] arrives four times a second and would rewrite the mirror as often."""
+    run = run if isinstance(run, dict) else {}
+    saved = run.get("saved") if isinstance(run.get("saved"), dict) else None
+    running = bool(run.get("running"))
+    document = {
+        "known": bool(run.get("known")),
+        "place": str(run.get("place") or "unknown"),
+        "running": running,
+        "waitingRelease": bool(run.get("waiting_release")),
+        "mode": str(run.get("mode") or ""),
+        "message": str(run.get("message", ""))[:160],
+    }
+    if saved:
+        document.update(
+            steps=",".join(f"{op}{amount}" for op, amount in saved["steps"])[:200],
+            step=int(saved["step"]), speed=int(saved["speed"]), accel=int(saved["accel"]))
+        if not running:
+            document["done"] = int(saved["done"])
+    progress = run.get("progress")
+    if running and isinstance(progress, dict):
+        document["runningStep"] = int(progress["step"])
+    return document
 
 
 def mirror_changed(previous, current):

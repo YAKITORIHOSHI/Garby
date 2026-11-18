@@ -17,6 +17,14 @@ scope, including stopped holds, before status readiness; repeated START is idemp
 An explicit controller `[MCU READY]` or confirmed operator RELEASE establishes idle mode.
 Occupied, stale or absent `T=` continues to stop an interrupted turn after reconnection.
 
+Reverse parking (2026-11-16, build `PARK-20261116`, all three parts): each route's last
+step backs the robot into its parking spot (`RouteOp::BACKING`) instead of driving at it and
+spinning 180 degrees beside it. Between `[BACK:START]` and `[BACK:END]` the bridge grants
+`GO:BACK` only on the Pi's rear-travel code `R=C` and `B=C` (the front group is not
+consulted); the executor backs only on `GO:BACK`, so an older bridge holds it. The scope is
+replayed in every status report like the turn scope and is unknown after a bridge reboot
+until replayed. See `docs/reverse-parking-2026-11-16.md`.
+
 Release: 2026-10-04. Software builds and behavioral tests are documented in
 `VALIDATION_RESULTS.md`; physical acceptance remains hardware-unverified.
 This file describes the active source. Older audit reports are historical.
@@ -31,8 +39,9 @@ This file describes the active source. Older audit reports are historical.
 | Android | [separate Android repository](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) | Authenticated Firebase dashboard, confirmed manual-disposal intent, explicit return request and matching completion |
 
 The separately maintained Android project contains no Pi code (its old compatibility launcher was
-removed on 2026-11-14; run `RasPi/final_w_serial.py`). The Pi simulator is a manual
-test producer, not production firmware. `Test/Test.ino` is a serial-only sketch.
+removed on 2026-11-14; run `RasPi/final_w_serial.py`). Since 2026-11-16 the deployable folders
+hold only runtime files; the Pi simulator (`tests/pi/final_w_serial-simulator.py`, a manual test
+producer), the tests and the bench sketches (`tests/sketches/Test/Test.ino`, serial-only) are in `tests/`.
 
 ```text
 LaserScan -> Pi path + clearance + wall line fit -> BLE ESP32-S3 -> UART -> main ESP32 -> motors
@@ -72,7 +81,8 @@ LiDAR also handles obstacles/path clearance. Wheel pulse counts do not prove mot
    stationary at the destination, and the Pi publishes readiness to the app.
 6. An explicit operator return request with a unique ID starts `returnToPointB()`.
    The return uses the same motion gates and obstacle recovery.
-7. Only a completed return calls `fullReset()` and reports a matching DONE.
+7. A completed return calls `fullReset(true)`, emits `[IDLE]` then `[RETURN COMPLETE]`,
+   and reports a matching DONE. Ordinary `fullReset()` does not report station arrival.
    A failed segment latches a stationary route fault and reports FAILED.
 
 An ordinary obstacle wait is recoverable. A rejected motor command or incomplete
@@ -101,6 +111,19 @@ not be treated as equivalent.
   or stale coverage, the 22 cm side envelope, emergency stop and MPU/nearest
   steering-clearance gates remain authoritative. Both toggles default to checks on
   when the Pi process starts.
+- Sides read-only (2026-11-16, owner's request, Pi `SIDES-20261116`): a third toggle
+  (`side_disabled`, monitor "Sides", headless key `l`) makes `_side_status()` clear and
+  drops the bands beside the rear half from `R=`, so something right beside the body no
+  longer holds F, B or R. Zones and readings stay listed and drawn; the spin sweep `T=`
+  still follows the front/back groups; missing or stale scans are still `S`. Front/back
+  toggles still never bypass a side. Off when the Pi process starts. Not on the phone.
+- The operator decides when GARBY moves (2026-11-16, owner; Pi `DECIDE-20261116`):
+  `safety_checks_changed()` logs every read-only change, and a change while the robot is in a
+  route state latches the operator stop (`pause_route_for_operator`). The first known state
+  of a Pi process that is a route state does the same, so a route left running by an earlier
+  monitor never drives on by itself when the LiDAR clears it; a reconnect within one process
+  does not. The reason is shown above the monitor's tabs and as the phone's operator message;
+  Continue run, Reverse to start and Release stop are unchanged.
 - The BLE writer converts a queued path to STOP when its Pi-side LiDAR evidence
   deadline has expired. This check happens before the GATT write; the wire
   protocol does not carry source acquisition time end to end.
@@ -192,7 +215,8 @@ unavailable interval. A new valid acquisition restores normal processing.
 | --- | ---: |
 | Front sector | 95 cm |
 | Front-left and front-right sectors | 60 cm |
-| Rear sectors | 35 cm, shown only: forward-only routes never hold on them (2026-11-14) |
+| Rear sectors | 35 cm, shown only: forward segments never hold on them (2026-11-14) |
+| Rear box (reverse parking only, `R=`) | 35 cm behind the rear edge, corridor width (2026-11-16) |
 | Side hard envelope | 22 cm, blocks both travel directions |
 
 Chassis zones (`RasPi/hallway_geometry.py`, 2026-11-11) are evaluated on the same
@@ -287,6 +311,48 @@ return more than 0.8 cm off its line, up to three rounded-corner returns at each
 a leftover of at most 8 cm between two wall pieces. The map still draws every return.
 `GARBY_STATION_WALL_MIN_GAP_CM` (default 0) keeps a wall that close ahead of the front edge.
 
+### Reverse parking (2026-11-16)
+
+Both routes end by backing into their parking spot (`RouteOp::BACKING`, op `K` in the leg
+notice): the last turn faces away from the spot at the same place, and the robot reverses
+the travel it used to drive forward (outbound 11100 steps, return 7500), at
+`BACKING_SPEED` (2000 steps/s, ~25 cm/s), both wheels the same remaining steps. Travel
+counts remain calibrated; parking orientation comes from the rear wall as follows.
+
+The Pi fits the original rear returns before station masking (`RasPi/rear_wall.py`),
+using the existing mount rotation/reflection. A rear plane must span at least 80 cm
+(or chassis width + 20 cm), cross the centreline with support on both rear halves,
+and have continuous central support. Side-wall `H` and its learned mounting correction
+do not enter this fit. `RD`/`RH` in S become checksummed `D` lines carrying the same
+acquisition and total source age. Unavailable fits explicitly withdraw old rear evidence;
+duplicates cannot refresh it. A new Pi session resets rear scan numbering in the executor
+without resetting the continuous heading.
+
+Before any backing travel, two stationary scans must agree within 1 degree and 3 cm;
+alignment must be within 1 degree. A correction is at most 8 degrees and uses full
+turn clearance/sonar plus MPU supervision, with another fresh pair AFTER the turn gate
+and after the correction. At most two completed corrections are tried; an unconfirmed
+angle holds in low power rather than repeatedly spinning. The final approach turn
+skips side-wall alignment on both routes. During backing, missing/stale rear fits or
+more than 2 degrees of rear-relative drift brakes the robot and rechecks it outside
+the backing scope, preserving remaining mean travel. There is no final gyro-only spin.
+The gyro timestamps/supervises movement; the rear plane chooses the parking direction.
+
+The Pi computes the rear-travel code `R=` for every scan, whatever the robot is doing:
+`S` without a current scan; `O` for side clearance, a return within 2 cm beside the rear
+half (rear edge to spin centre, never bypassed), a return in the corridor-wide box up to
+`backing_stop_cm` (35 cm) behind the rear edge, or a mover predicted to reach the body
+(while backing, a mover catching up from behind counts); `C` otherwise. A read-only back
+group bypasses the box and the mover. Returns inside the body outline are the robot itself.
+The back sectors' 35 cm limit is not part of `R=`. Station mode applies on the return's
+backing step (it is a station step), so the station wall behind the robot does not hold it;
+the calibrated step count decides where it stops, as the forward approach did.
+
+The bridge holds the backing scope like the turn scope: `R=C` and `B=C` give `GO:BACK`;
+`F` is not consulted; a packet without `R` is `STOP:BACK_UNKNOWN`. The executor counts only
+`GO:BACK` while backing, and never counts `GO:BACK` outside it. While backing the sonar
+does not hold or slow the move (it faces away); nothing low behind the robot is seen.
+
 ## BLE and UART protocol
 
 BLE name: `GarbyESP32`.
@@ -318,9 +384,11 @@ See `BLE_CONNECTION_GUIDE.md` and `RasPi/check_ble.py` for isolated diagnosis.
 
 ```text
 Pi -> bridge:
-P:<uint32-seq>|F=<C|W|O|H|S>|B=<C|O|H|S>|T=<C|O|S>
-   (W: clear to the stop, caution zone ahead; T: spin-sweep clearance, gated only in turns)
-S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|CF=..|CL=..|CR=..|A=<uint32>[|WL=..][|WR=..][|H=..]|G=<ms>|T=..
+P:<uint32-seq>|F=<C|W|O|H|S>|B=<C|O|H|S>|T=<C|O|S>|R=<C|O|S>
+   (W: clear to the stop, caution zone ahead; T: spin-sweep clearance, gated only in turns;
+    R: rear-travel clearance, gated only while backing: rear box, bands beside the rear
+    half, side clearance, a mover predicted to reach the body; 2026-11-16)
+S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|CF=..|CL=..|CR=..|A=<uint32>[|WL=..][|WR=..][|H=..][|RD=..|RH=..]|G=<ms>|T=..
    (WL/WR: wall distances from the centreline, cm; H: heading vs walls, deg, + = left;
     G: scan age refreshed immediately before the Pi's GATT write, ms; T: legacy tilt, ignored)
 S:<same-seq>|STABLE
@@ -334,11 +402,12 @@ SENSOR:US=..|MQ4=..|MQ137=..|MQ135=..
 [OP STATUS]
 
 Bridge -> main, newline-delimited UART at 115200 baud:
-STOP[:reason]            (reasons include MPU, TURN, TURN_UNKNOWN, STALE, LINK, OPERATOR, ...)
-GO | GO:SLOW
+STOP[:reason]            (reasons include MPU, TURN, TURN_UNKNOWN, BACK, BACK_UNKNOWN, STALE, LINK, OPERATOR, ...)
+GO | GO:SLOW | GO:BACK   (GO:BACK only between [BACK:START]/[BACK:END]; the only GO a backing move counts)
 M,<seq>,<heading cdeg>,<rate cdeg/s>,<epoch>,<allow bits>*<xor hex>   (50 Hz, no ACK)
 MPU:FAULT                                                            (no valid heading)
 W,<acq>,<age ms>,<flags>,<left mm>,<right mm>,<H cdeg>*<xor hex>      (per LiDAR scan, no ACK)
+D,<acq>,<age ms>,<valid 0|1>,<rear mm>,<rear H cdeg>*<xor hex>       (rear alignment only, no ACK; never GO)
 SENSOR:...
 [HEALTH:1:UUUUU]
 [BLE CONNECTION ESTABLISHED]
@@ -352,6 +421,7 @@ SENSOR:...
 Main -> bridge only (local UART, not relayed to the Pi):
 [HEADING:START:<route error cdeg>] / [HEADING:END]   (straight segment; logged, never re-zeroes)
 [TURN:START] / [TURN:END]   (bridge requires T=C and fresh confirmations in between)
+[BACK:START] / [BACK:END]   (reverse parking: bridge requires R=C and B=C, ignores F, sends GO:BACK)
 [MCU ALIVE]   (recovery ping during a route; changes nothing. [MCU READY] = restart)
 State lines [IDLE]/[OUTBOUND COMPLETE]/[ROUTE FAULT] vs [RUNNING]/[RETURNING] also
 gate the bridge's gyro-bias refresh; they are still relayed to the Pi.
@@ -367,9 +437,12 @@ Main -> Pi through bridge notifications:
 [ROUTE CONTINUE:<step>/<steps>]   (a continued route's first step)
 [ROUTE REVERSE:<step>/<steps>]    (Reverse to start: the step the way back begins in)
 [REVERSING] / [REVERSE COMPLETE]  (executor state while driving back; its end)
-[LEG:<O|R><F|B>:<step>/<steps>:<B|S|H|L|R>:<flags>] / [LEG:0]
-                                  (route step in progress, every 2 s; flags bit0 = station step,
-                                   bit1/bit2 = station wall ahead forward / on the way back)
+[LEG:<O|R><F|B>:<step>/<steps>:<B|S|H|L|R|K>:<flags>] / [LEG:0]
+                                  (route step in progress, every 2 s; K = backing into the parking
+                                   spot; flags bit0 = station step, bit1/bit2 = station wall ahead
+                                   forward / on the way back)
+[HEADING BACK steps=<n> err=<deg> mpu=<0|1>]   (after a backing move; a spin squares it up
+                                   if the error is over 1 degree)
 [MOTION:<CLEAR|WAITING_FOR_PATH|CONFIRMING_CLEARANCE|LOCAL_OBSTACLE|MOTORS_UNAVAILABLE|ROUTE_FAULT|STOP[:reason]>]
 [BRIDGE MPU VALID|INVALID bias=.. tilt=.. refresh=.. epoch=.. walls=..]
 [HEADING TURN ...], [HEADING STRAIGHT ...], [HEADING FUSE ...], [HEADING LOST ...], [HEADING ROUTE:...],
@@ -430,8 +503,10 @@ obstacle-sonar gate and locks the servo at DEFAULT_VIEW (70 degrees). SONAR_ON
 requires fresh clear confirmations; it is the default on executor boot. Bin
 level sensing is separate. Confirmed SONAR_OFF does not itself block motion or
 manual start. LiDAR front/rear read-only controls independently bypass their
-selected distance thresholds while retaining readings. Side, stale-data, MPU,
-nearest steering-clearance, emergency-stop and transport gates remain active.
+selected distance thresholds while retaining readings; since 2026-11-16 a sides
+read-only does the same for the side checks. Stale-data, MPU,
+nearest steering-clearance, emergency-stop and transport gates remain active, and side
+checks stay on unless the sides group itself is read only.
 
 REBOOT requires confirmed operator STOP. The executor commits a 750 ms delayed
 software restart and acknowledges; the bridge commits a 1000 ms delayed restart
@@ -524,6 +599,135 @@ Sensor-board UART into the Pi is **9600 baud**, separate from the 115200 bridge
 UART. Its firmware is not provided here. `US=999` and gas `-1` mean UNAVAILABLE,
 not full/danger/clearance. Trash-level ultrasonic telemetry is not path sonar.
 
+## Finite developer tests (2026-11-15)
+
+The owner explicitly requested sensor isolation and short motor tests. The Pi monitor's
+Developer tests window (a tab until 2026-11-16; its own window since, opened from the main
+header, with its own emergency stop; closing it during a test cancels the test, whose lease
+then lapses within 800 ms) sends one confirmed test, separate from a route. No persistent bypass
+setting is introduced. Current source identifies as `TURNSCALE-20261116` on Pi and both
+controllers, including the 90-degree test extension below. The base panel needs fresh test
+readiness; older controllers reject the new 90-degree amount and need the matching update.
+
+```text
+Pi -> bridge -> executor:
+[TEST:<id>:<I|F|B|1|2|L|R|W|S|A|D>:<amount>:<mask>]
+[TEST KEEP:<same-id>]
+[TEST END:<same-id>]                 (remote control: the arrow was let go)
+
+Executor -> Pi via bridge:
+[TEST READY:1]
+[TESTING]
+[TEST ACK:<id>]
+[TEST DATA:M=<0|1>:Y=<heading-cdeg>:W=<0|1>:H=<wall-cdeg>]
+[TEST RESULT:<id>:D1=<steps>:D2=<steps>:M=<0|1>:Y=<change-cdeg>]
+[TEST DONE:<id>] | [TEST FAILED:<id>:<reason>]
+```
+
+Mask bits select LiDAR clearance (1), MPU supervision (2) and obstacle sonar (4), initially
+all selected (7). `I` inspects sensors without movement (amount 0). `F` requests at most
+400 forward steps; `1` and `2` at most 100 steps on that motor; `L` and `R` accept 1..15
+MPU-measured degrees or exactly 90 and require MPU selected. The monitor offers 400/100/10,
+plus separate **Turn left 90°** / **Turn right 90°** buttons (owner, 2026-11-16).
+The finite-test speed setting is 2351 steps/s, nominally 30 cm/s from 1600 steps/revolution
+and 65 mm wheels, rounded up. Ramps, first-turn motor-side checks and endpoint braking
+can be slower; short moves may not reach that speed. Ordinary finite tests have an absolute
+eight seconds, including waits; the explicit 90-degree tests retain 30 seconds for readiness
+and settling. The Pi, bridge and executor keep that same
+scope; every finite test still needs its 800 ms KEEP lease. Limits never extend routes.
+Measured-turn confirmations require GARBY on the floor with both wheels down. If the new
+90-degree test's fresh MPU angle changes less than 0.5 degree while wheel counts exceed
+three expected degrees plus 300 steps, it ends as `NO_ROTATION`. It cannot prove why the
+chassis did not turn; the monitor explains lifted wheels and also checks on-floor grip/MPU.
+Missing/lost MPU keeps its own hold/failure and connection advice. See
+`docs/developer-90-turns-2026-11-16.md`.
+Step geometry and physical travel remain unverified. These short tests use the production
+motor targets and MPU turn code without hallway wall alignment. Raw wall-angle telemetry
+does not require a valid gyro, allowing the two measurements to be examined independently.
+
+`B` (2026-11-16, `BACKTEST-20261116`) requests at most 400 backward steps on both wheels, the
+same bound as `F`. The executor runs it inside the reverse-parking scope (`[BACK:START]` ...
+`[BACK:END]`), so with LiDAR selected only `GO:BACK` (the Pi's `R=C` with `B=C`) moves it and
+a plain GO holds it; a hold names `HELD_REAR` when the rear check caused it. The forward sonar
+faces away and does not hold it, as in parking. It does no rear-wall alignment (spins need
+ground contact). The monitor's Live line also shows the Pi's latest rear-wall fit (`RD/RH`,
+display only, at most 1 s old). With LiDAR deselected, a GO of the wrong kind is ignored like a
+STOP; only the lease counts. See `docs/backward-test-2026-11-16.md`.
+
+Remote control (2026-11-16, `REMOTE-20261116`, owner's choices): `W` forward, `S` backward,
+`A` spin left, `D` spin right, amount = speed 2351..4702 steps/s (the monitor sends 2351 or 4702,
+nominally 30 or 60 cm/s wheel speed),
+mask must be 0. The drive runs while held: no step value, no time limit, no LiDAR, MPU or sonar
+gate. The Pi renews it every 120 ms only while the window reports the arrow still pressed
+(every 100 ms; 0.5 s without that stops the renewals); the executor's lease for these is
+500 ms. Letting go sends `[TEST END:<id>]`: the bridge relays it for the last held drive's ID
+whatever its own record, lease, age or a latched stop, and the executor brakes
+(`activeBrakeStopMotors`) and reports DONE. Left/Right use the current left-wheel guess
+(the first MPU-measured turn confirms or swaps it). See `docs/remote-control-2026-11-16.md`.
+
+RunStart (2026-11-16, `RUNSTART-20261116B`, owner's request): the Developer window's own list
+of steps, driven in order with no LiDAR, MPU or sonar gate and no time limit.
+
+```text
+Pi -> bridge -> executor:
+[TEST:<id>:P:<speed 2351..8000>:<accel 100..20000>:<op><steps>,...]   op F|B|L|R|C, 1..100000, 1..20 steps
+[TEST:<id>:C:<saved-id>]     Continue run: from where the saved list stands to its end
+[TEST:<id>:U:<saved-id>]     Reverse to start: back to where the list began
+[TEST KEEP:<same-id>]        every 200 ms; executor lease 800 ms, no time limit
+[RUN CLEAR:<saved-id>]       Discard: forget the saved list (never moves anything)
+
+Executor -> Pi via bridge (besides TEST ACK/RESULT/DONE/FAILED):
+[RUN AT:<id>:<step>:<steps done in it>]                    every 250 ms and at each step
+[RUN SAVED:<id>:<step>:<done>:<speed>:<accel>:<program>] | [RUN SAVED:0]   in every status
+```
+
+`F`/`B` move both wheels, `L`/`R` spin in place (left wheel back and right wheel forward for
+`L`, by the current left-wheel guess), `C` goes forward in 100-step bumps with 300 ms pauses;
+250 ms between steps. Every step's wheel targets are fixed when the list starts, relative to
+the wheel positions then, so wherever a stop leaves it the executor knows the exact place:
+`C` moves on to the end, `U` undoes the current step and then each earlier one in reverse
+order (the same wheel steps the other way; bumps are undone in one move). The list stays saved
+after it finishes or stops (an emergency stop, its lease, a link/protocol STOP, a reset) until
+a new list, any other motion (a bench test, the remote, any route) or `RUN CLEAR` replaces it;
+an executor restart loses it. `C`/`U` must name the saved list and, like every test, need
+IDLE without a latched stop: the monitor's Continue/Reverse buttons release the emergency stop
+first through the operator gate (the same confirmed release), then send the request. The
+bridge relays the operator stop as `STOP:OPERATOR` just before `[OP:..:ESTOP]`; since this
+build a test ended by it reports `EMERGENCY_STOP` (was `LINK_OR_STOP`). The bridge treats a
+list as a developer test with mask 0 and no eight-second limit (KEEP age, session and stop
+generation still bound it; no gyro-bias refresh meanwhile) and relays `RUN CLEAR` on its
+control lane. See `docs/runstart-2026-11-16.md`.
+
+The executor accepts a test only while stationary IDLE, ready, without stop, route fault,
+pending reset or parked route. It reports TESTING so ordinary starts/configuration cannot
+overlap it. The selected overrides apply only inside that test's stack; omitted LiDAR
+clearance includes sides and stale/missing scans for this test. Operator emergency stop,
+link/protocol failures, motor-command rejection, the eight-second limit and a live test
+lease remain authoritative. MPU faults still hold a test that selected MPU feedback.
+Successful completion restores normal path evidence and re-arms bypassed sonar; another
+deliberate start is required. No route checkpoint or automatic continuation is created.
+
+The Pi reserves durable test IDs separately from operator IDs, checks a two-second send
+deadline again at the serialized GATT writer, attempts TEST once, and never retries an
+uncertain movement request. KEEP is sent every 200 ms after that attempt; only a matching
+currently pending/executing test can consume it. A missing ACK expires at five seconds.
+Disconnect/restart/emergency stop ends the Pi lease. Late ACK, KEEP and duplicate/reordered
+TEST cannot revive or replay travel. The executor requires KEEP within 800 ms. The bridge
+also rejects KEEP delayed over 300 ms at ingress, scopes its optional MPU veto bypass to
+the acknowledged matching test and fresh lease, and clears that scope on terminal/session/
+stop changes. None of these messages creates ordinary route GO evidence.
+
+The bridge inhibits stationary gyro-bias refresh throughout a pending/active test: an ignored
+LiDAR STOP cannot prove its wheels are held. Normal readiness, path/turn-sweep confirmation,
+nearest steering clearance and continuous heading behavior remain unchanged for routes.
+Independent readings and valid result telemetry are diagnostics; software step counters
+cannot prove that a motor physically moved. The normal motion-hold banner is reserved for
+normal routes; the developer panel reports the test's own acknowledgement/result.
+
+The latest hardware identification from the owner is ESP32-S3 N16R8 (16 MB flash, 8 MB octal
+PSRAM) for the bridge; earlier 8 MB/no-PSRAM build examples are superseded for this board.
+Procedure and evidence: `docs/developer-tests-start-hold-2026-11-15.md`.
+
 ## Pi process and serial ownership
 
 Both Python install profiles require NumPy for chassis zones, walls and moving
@@ -576,7 +780,7 @@ Full design, calibration and acceptance: `docs/navigation-2026-11-11.md`.
 | Scale | `GYRO_SCALE` (1.0 until calibrated) |
 | Bias | boot (2 s still); refreshed while held: ≤0.2°/s per 1.5 s window, ≤1°/s total |
 | Heading stream | M line every 20 ms; one continuous reference, new epoch only on re-reference |
-| Turn | MPU degrees, tolerance 1°, ≤5 passes, wrong-way swap once, step limit 1.5x |
+| Turn | MPU target with immediate wheel-queue abort, tolerance 1°, ≤5 passes, wrong-way swap once, step limit 1.5x |
 | Turn wall alignment | 2 scans agreeing within 1.5°, within 8° of command, tolerance 0.75°, ≤2 passes |
 | Hallway axis filter | alpha 0.15 / beta 0.01 per scan, gate 4°, ≤15° from the route frame |
 | Lateral | gain 0.5, gate 15 cm, dead reckoning ≤8 s between wall measurements |
@@ -587,6 +791,29 @@ Full design, calibration and acceptance: `docs/navigation-2026-11-11.md`.
 The executor anchors a route frame at route start (it refuses to start without a
 confirmed heading stream). Each turn adds its angle, is driven to it by the gyro,
 then checked against the walls; the measured hallway direction becomes the frame.
+At the target, `spinToward()` immediately aborts both wheel queues using
+`forceStopAndNewPosition(currentPosition)` through `emergencyStopMotors()`
+(`TURNSTOP-20261116`, 2026-11-16). The endpoint uses the existing estimated heading
+(MPU sample plus intervening wheel travel and sample-latency compensation), with
+no early 0.3-degree stop allowance. The approach still slows before the target;
+the 250 ms settled heading check and wall confirmation run with the wheels stopped.
+Successful completion does not latch an operator stop. This shared endpoint also
+serves measured correction spins; step-count RunStart turns use their own moves.
+It removes commanded deceleration run-out, not MPU error, slip or physical inertia.
+`TURNSCALE-20261116` applies the owner's approximate 100° physical / 90° reported
+observation as `GYRO_SCALE = 100/90` in the bridge's MPU rate and integration. Targets
+remain 90°; the same correction reaches every consumer through M lines and must not
+be applied a second time in the executor. It is provisional pending measured floor
+acceptance, and affects route heading as well as developer turns. Stationary drift
+refresh still has its 0.2°/s per-window and 1°/s total bounds in corrected units.
+Developer measured turns additionally require at least 200 ms of fresh samples with
+rate at most 1°/s and heading change at most 0.2°, after a minimum 250 ms settling
+period; missing data or continued rotation fails the test. Final error must be within
+1°, including on the last allowed pass. Their approach profile updates at most 50 Hz;
+stop, heading and lease checks continue every loop. Route settling/hold rules remain
+as above. See `docs/developer-turn-speed-2026-11-17.md`.
+The final parking approach is the exception: rear-wall confirmation owns its
+alignment, as described in Reverse parking above.
 On centring-enabled straights (`isNudgeEnabled`) each W line gives
 `axis = gyro heading at the scan - H` and `lateral = (R - L)/2` (or one wall plus
 the learned width). The steering target is `axis + centring`; between scans the
@@ -617,7 +844,7 @@ the real wheel distance from the first (`learn k=`), stopping on a wrong-way res
 sidesteps' travel along the hallway is taken off the run. No walls skips it. `[MCU ALIVE]` changes nothing and
 `[MCU READY]` restarts only the executor's frame. Ultrasonic side steering stays
 disabled (`ENABLE_ULTRASONIC_SIDE_NUDGE=0`). Model checks:
-`tools/firmware_tests/test_navigation.cpp` (kinematic, not physical).
+`tests/firmware/test_navigation.cpp` (kinematic, not physical).
 
 ## Local sonar and recovery
 
@@ -674,7 +901,7 @@ at the top of `MAIN_EXECUTOR_CODE.h`, `MOTOR1_DIR_HIGH_COUNTS_UP` (false) and
 `MOTOR2_DIR_HIGH_COUNTS_UP` (true), alone connect that to the wheels. The owner's
 November 9 report says the November 7 `true/false` build still drove backward;
 the new pair follows that observation. Boot diagnostics identify the build
-(`NAV-20261111`) and both DIR values. Which motor is the left wheel is a guess
+(`TURNTEST-20261116` for the executor) and both DIR values. Which motor is the left wheel is a guess
 checked by the first MPU turn (swapped once if the spin starts the wrong way);
 steering uses the proven side. See `docs/motor-direction-2026-11-09.md` and
 `docs/navigation-2026-11-11.md`.
@@ -691,6 +918,9 @@ Both `moveTo()` results are checked. One rejected wheel command stops both
 wheels; success is not guessed from immediate `isRunning()` state. Target moves
 and turns poll safety continuously. Safety stops use controlled deceleration,
 with hard force stop as a timeout fallback; no reverse braking pulse is used.
+The reached heading target of a measured turn uses an immediate force stop, as
+described above; obstacle holds and heading-loss/wrong-way/step-limit exits keep
+their existing stop paths.
 
 `pointsRun.ino` contains physically calibrated turn/distance sequences, including
 long positive moves in outbound and return. Signs and numbers were preserved,
@@ -706,6 +936,30 @@ the Pi heartbeat is every 30 s. The modem initializes and submits SMS from one
 persistent background owner. Parser, motion and GUI paths only enqueue bounded
 notices. No modem UART debug passthrough competes with its transactions.
 
+### Completed-route location telemetry (2026-11-17)
+
+Executor/Pi build `ARRIVAL-20261117` records route endpoints in
+`devices/<id>/status`. `[OUTBOUND COMPLETE]` sets `location = POINT_B` (disposal area),
+and `[RETURN COMPLETE]` received at IDLE sets `location = POINT_A` and `isAtStation = true`.
+Boot, ordinary IDLE, stop/release, RESET ACK/DONE, faults and developer-test completion
+cannot establish arrival at the station. The executor's RAM flag retains return completion
+for `[ROBOT STATUS]` and reconnect replay, and is cleared before a new route/test/reverse
+motion, by an ordinary reset or by controller boot. Continued returns use the same success
+path and report arrival only after the remaining steps finish.
+
+`locationUpdatedAt` is the Pi's confirmation time in epoch milliseconds. `lastArrival` is
+`{point, name, confirmedAt, source}`, where source is `OUTBOUND_COMPLETE` or `RETURN_COMPLETE`.
+Repeated unchanged status does not refresh its confirmation time. Motion states set current
+location to `IN_TRANSIT`; faults/link uncertainty set it to `UNKNOWN`; IDLE preserves an
+already confirmed stationary endpoint. `lastArrival` remains historical telemetry across
+later motion, faults and process restart. All changes use the existing asynchronous coalesced
+root updater and retries, never the command or GO paths. Neither wheel steps nor this record
+prove physical position, slip-free travel or parking accuracy.
+
+The bridge's generic UART-to-BLE forwarding already carries `[RETURN COMPLETE]`; no bridge
+source/firmware change is required for this telemetry addition. See
+`docs/route-arrival-2026-11-17.md` for deployment, software evidence and physical limits.
+
 ### Phone control and the map (2026-11-15)
 
 `RasPi/cloud_control.py` and `firebase_control_loop` (one thread, `firebase-phone-control`).
@@ -717,8 +971,17 @@ request), then call `cloud_request_operator_action`, which is `operator_control.
 the monitor's own gates. The executor's `[OP ACK]`/`[OP FAILED]` for that request ID
 (`OperatorControl.outcome`) finishes the cloud request as `accepted` or `failed`; 8 s without
 one is `unconfirmed`, and so is a request found `claimed` by a process that no longer runs.
-Front/back read-only requests set the same events as the monitor's toggles, only when
-`ALLOW_RUNTIME_SAFETY_DISABLE` is true.
+Front/back/side read-only requests set the same events as the monitor's toggles, only when
+`ALLOW_RUNTIME_SAFETY_DISABLE` is true. Developer requests (`DEV_*`, 2026-11-18) go to
+`cloud_developer_action`, which calls the Developer window's own functions and finishes the
+request `accepted` when the Pi took it, or `failed` with the window's "Not available" reason.
+Bench tests carry the request's `sensors` mask; phone arrows are Pi-timed nudges
+(`PHONE_NUDGE_S`); `DEV_CANCEL` is `DeveloperTestControl.stop()`; RunStart Continue/Reverse
+release a latched stop first, as the window's buttons do; `DEV_RUN_START` carries the phone's
+list (`program` "F4000,L980", `speed`, `accel`), read by `parse_run_program`, checked by
+`run_program` and refused while a list stands part-way, then sent by `request_run`. How each one went follows in the
+mirror's `developerMessage`/`developerResult`/`developerRun`
+(`docs/phone-controls-rundown-2026-11-18.md`).
 
 `build_operator_mirror()` writes `devices/<id>/operator` on change and every 10 s, and the
 same document to the status file `run_headless.sh status` reads. While

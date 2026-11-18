@@ -138,6 +138,11 @@ void loop() {
     return;
   }
 
+  if (garbyState == GarbyState::TESTING) {
+    runDeveloperTest();
+    return;
+  }
+
   // ── IDLE ──────────────────────────────────────────────────
   if (garbyState == GarbyState::IDLE) {
     printIdleUptime();
@@ -211,6 +216,7 @@ void loop() {
       loadConfirmCount = 0;
       gasConfirmCount  = 0;
       outboundComplete = false;
+      returnComplete = false;
       garbyState = GarbyState::RUNNING;
       ESP_Serial.println("[RUNNING]");
       Serial.println("[STATE] IDLE -> RUNNING");
@@ -271,7 +277,7 @@ void loop() {
       if (returnToPointB()) {
         Serial.println("[RETURN] Done.");
         outboundComplete = false;
-        fullReset();
+        fullReset(true);  // only the successful return route proves arrival at point A
         queueSMSNotice(SmsNoticeKind::ROUTE, "GARBY: Return route completed. Robot is stopped at base for the next cycle.");
       } else if (!resetQueued) {
         // A failed return segment must not be replayed from the robot's

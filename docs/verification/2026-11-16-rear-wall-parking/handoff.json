@@ -1,0 +1,40 @@
+{
+  "createdUtc": "2026-11-16T08:24:44.572575+00:00",
+  "buildId": "REARPARK-20261116",
+  "edited": [
+    "RasPi/final_w_serial.py",
+    "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h",
+    "MAIN_EXECUTOR_CODE/HeadingControl.h",
+    "MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp",
+    "MAIN_EXECUTOR_CODE/pointsRun.ino",
+    "BLE_Receiver-Final/SteeringAssist.h",
+    "BLE_Receiver-Final/BLE_Receiver-Final.ino",
+    "tests/pi/test_reverse_parking.py",
+    "tests/firmware/test_bridge.cpp",
+    "tests/firmware/hallway_sim.h",
+    "tests/firmware/test_route_reverse.cpp",
+    "tests/firmware/test_system.cpp",
+    "README.md",
+    "SYSTEM_ARCHITECTURE.md",
+    "RELEASE_NOTES.md",
+    "DEPLOYMENT_AND_ACCEPTANCE.md",
+    "AGENTS.md"
+  ],
+  "created": [
+    "RasPi/rear_wall.py",
+    "tests/firmware/test_rear_parking.cpp",
+    "docs/rear-wall-parking-2026-11-16.md"
+  ],
+  "mcuUploadRequirement": "Both",
+  "piDeployment": "entire RasPi directory",
+  "uploadedInThisTask": false,
+  "hardwareOperatedInThisTask": false,
+  "installedFirmwareIdentity": "unknown",
+  "finalCheckExits": {
+    "bridge-target-final": 0,
+    "executor-target-final": 0,
+    "firmware-final": 0,
+    "pi-final": 0,
+    "source-sanity": 0
+  }
+}

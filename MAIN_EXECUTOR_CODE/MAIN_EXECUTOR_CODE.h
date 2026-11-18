@@ -150,11 +150,16 @@ static_assert(ULTRASONIC_MAX_RANGE_CM > ULTRASONIC_RESUME_SPEED_DISTANCE_CM,
 // the MPU confirms or swaps it on the first turn and the steering probe.
 const bool MOTOR1_DIR_HIGH_COUNTS_UP = false;
 const bool MOTOR2_DIR_HIGH_COUNTS_UP = true;
-const char EXECUTOR_BUILD_ID[] = "REVERSE-20261114";
+const char EXECUTOR_BUILD_ID[] = "ARRIVAL-20261117";
 
 const uint32_t MAX_SPEED       = 5600;
 const uint32_t CAUTION_SPEED   = 3900;
 const uint32_t TURN_SPEED      = 3000;
+// Reverse parking (2026-11-16): backing into the parking spot, ~25 cm/s with the
+// calculated 78.4 steps/cm. Only the LiDAR sees behind the robot; the Pi's rear
+// box (hallway_geometry.py, backing_stop_cm 35 cm behind the rear edge) is sized
+// for this speed plus about 0.6 s of scan, link and braking delay.
+const uint32_t BACKING_SPEED   = 2000;
 const uint32_t ACCELERATION    = 4800;
 const uint32_t GENTLE_STOP_DECEL = 6500;
 const uint32_t SAFETY_STOP_DECEL = 14000;
@@ -273,7 +278,7 @@ struct LidarZones {
 // ROBOT STATE MACHINE
 // ============================================================
 // REVERSING (2026-11-14): driving back along an interrupted route to its start.
-enum class GarbyState { IDLE, RUNNING, RETURNING, REVERSING };
+enum class GarbyState { IDLE, RUNNING, RETURNING, REVERSING, TESTING };
 extern GarbyState garbyState;
 extern bool       resetQueued;
 // Stationary route-fault latch: set when a route segment fails so the route is
@@ -281,6 +286,7 @@ extern bool       resetQueued;
 // explicit [RESET] (supervised physical recovery) or on the next IDLE entry.
 extern bool       routeFaultLatched;
 extern bool       outboundComplete;
+extern bool       returnComplete;
 void reportRouteFault();
 
 #include "HeadingControl.h"
@@ -335,8 +341,8 @@ extern unsigned long lastIdlePrintMs;
 // ============================================================
 // Motor control
 // Turns are MPU-measured angles in degrees, absolute along the route.
-bool turnRight(float degrees);
-bool turnLeft (float degrees);
+bool turnRight(float degrees, bool alignAfter = true);
+bool turnLeft (float degrees, bool alignAfter = true);
 void emergencyStopMotors();
 void smoothDecelStopMotors();
 void activeBrakeStopMotors();
@@ -362,6 +368,10 @@ void serviceUltrasonic();
 void initOperatorControls();
 bool serviceOperatorStop();
 bool operatorAutomaticStartAllowed();
+// Deliberate, finite bench tests. Overrides exist only inside this test stack.
+void runDeveloperTest();
+// RunStart (2026-11-16): any route forgets the Developer window's saved step list.
+void discardRunCheckpoint();
 bool frontObstacleDetected();
 bool frontEmergencyObstacleDetected();
 bool frontDistanceFresh();
@@ -403,14 +413,18 @@ void haltAndWait(const String& reason);
 bool movementGate(bool isNudgeEnabled = true);
 
 bool safeMoveDistance(int32_t steps, bool isADJ = false, bool isNudgeEnabled = true);
-bool safeTurnLeft (float degrees);
-bool safeTurnRight(float degrees);
+bool safeTurnLeft (float degrees, bool alignAfter = true);
+bool safeTurnRight(float degrees, bool alignAfter = true);
 bool beginRouteHeading();
 // "Continue run" (2026-11-14): keep the route frame; a new S3 heading reference
 // since the stop needs two agreeing wall scans on the route's right-angle grid.
 bool resumeRouteHeading(uint32_t reanchorsAtStop);
 // Finish a route turn whose target is already in the route frame.
-bool resumeRouteTurn();
+bool resumeRouteTurn(bool alignAfter = true);
+// Reverse parking (2026-11-16): back `steps` into the parking spot (RouteOp::BACKING),
+// aligned to two fresh rear-wall scans first. Needs rear clearance and heading
+// supervision; no final gyro-only spin. Tunables are in HeadingControl.h.
+bool backIntoPlace(int32_t steps);
 // Route leg notice and station flags for the step in progress (RouteResume.h STEP_*).
 void routeLegBegin(uint8_t route, bool reverse, uint8_t index, uint8_t count, RouteOp op,
                    uint8_t flags, int32_t wallAheadStepsBeyond);
@@ -426,7 +440,7 @@ bool centerBeforeLongRun(int32_t* progressSteps);
 // Low-power hold support (motor-driver enable pin, if wired) and its state.
 void initPowerControl();
 bool lowPowerHoldActive();
-void fullReset();
+void fullReset(bool returnSucceeded = false);
 void printIdleUptime();
 void serviceBridgeRecovery();
 void responsiveDelay(unsigned long durationMs);

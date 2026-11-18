@@ -1,3 +1,72 @@
+2026-11-17: MPU turn correction and developer speed (TURNSCALE-20261116)
+
+MPU scale is provisionally 100/90 from the owner's approximate floor estimate;
+targets remain 90 degrees. Developer turns require fresh stationary MPU samples
+after braking and a final 1-degree tolerance. Developer speed settings start at
+2351 steps/s (nominal 30 cm/s); remote Slow/Fast are 2351/4702, and RunStart
+accepts 2351..8000, default 2351. Ramps, short moves, motor-side checks and turn
+braking can be slower. Selected gates and live leases retain their scope.
+
+Upload BOTH complete sketches and deploy the entire RasPi/ directory, including
+the map-sidebar changes and Developer button. Installed versions/floor angles
+are unverified. Details: docs/developer-turn-speed-2026-11-17.md (system root).
+
+2026-11-16: Developer 90-degree floor turns (TURNTEST-20261116)
+
+The Developer window adds separate left/right 90-degree MPU tests, each with a
+floor/wheels-down confirmation. L/R amount 90 is the only new angle accepted;
+small turns remain 1..15 degrees. All measured tests keep the 400 steps/s cap,
+selected gates and 800 ms KEEP lease. Only the 90-degree tests get a 30 s absolute
+limit (the usual 8 s cannot finish 4900 wheel steps at 400 steps/s). A 90-degree
+test with almost unchanged gyro heading after the first few degrees of expected
+wheel travel ends once as NO_ROTATION; missing MPU never permits movement.
+
+Includes TURNSTOP-20261116: immediate queue abort at measured turn endpoints.
+Upload BOTH whole sketches and deploy all RasPi/ for the new test protocol bound
+and UI. This supersedes the earlier executor-only turn-stop handoff and contains
+the earlier RUNSTART-20261116B changes. See docs/developer-90-turns-2026-11-16.md.
+
+2026-11-16: Immediate stop at an MPU turn target (TURNSTOP-20261116)
+
+Left/right MPU-measured turns abort both wheel pulse queues at the estimated
+heading target, instead of requesting stopMove() and waiting for deceleration.
+TURN_STOP_DEG is 0 (was 0.3 degrees early). The approach speed profile, heading
+checks, settled measurement and wall alignment remain. The shared spin endpoint
+also serves MPU correction spins; RunStart's step-count turns remain step-count
+moves. No emergency-stop latch is set by a successful turn.
+
+Upload the whole executor sketch only for this change. No new bridge or Pi
+revision is required; earlier RUNSTART-20261116B bridge/Pi updates retain their
+own deployment requirement. Source/build checks do not establish installation
+or exact physical stopping angle. See docs/turn-force-stop-2026-11-16.md.
+
+2026-11-16: RunStart max speed 8000 steps/s (RUNSTART-20261116B)
+
+The owner asked for RunStart lists up to 8000 steps/s (was 5600, the routes' MAX_SPEED).
+Only the RunStart bound changes; routes, tests and the remote keep their speeds. Flash
+together with the bridge, which checks the same bound.
+
+2026-11-16: RunStart (RUNSTART-20261116)
+
+The Developer window's own list of steps: [TEST:<id>:P:<speed>:<accel>:<op><steps>,...] with
+op F/B/L/R/C (C = forward in 100-step bumps), up to 20 steps of up to 100000, speed 10..8000,
+acceleration 100..20000. No LiDAR, sonar or MPU gate and no time limit (owner's choice); the
+800 ms KEEP lease and the emergency stop end it. Every step's wheel targets are fixed at the
+start, so the list stays saved at its exact place: [TEST:<id>:C:<saved>] continues it,
+[TEST:<id>:U:<saved>] drives it back to its start, [RUN CLEAR:<saved>] forgets it. Routes,
+bench tests and the remote forget it too. Flash together with the bridge. See
+docs/runstart-2026-11-16.md.
+
+2026-11-16: Reverse parking (PARK-20261116)
+
+Both routes end with a BACKING step (pointsRun.ino): the last turn faces away
+from the parking spot and the robot reverses the old forward approach
+(outbound 11100 steps, return 7500) at BACKING_SPEED 2000 steps/s, both wheels
+equal steps, no steering, then squares up by MPU if over 1 degree off. It backs
+only on GO:BACK from the bridge (PARK-20261116), which needs the Pi's rear
+clearance R=C. The sonar does not hold or slow a backing move. Flash together
+with the bridge. See docs/reverse-parking-2026-11-16.md.
+
 2026-10-29: Motor execution and steering review
 
 Motor pins, calibrated route step counts, 5600 Hz maximum straight speed,
@@ -127,5 +196,5 @@ pre-run centring. Report: docs/obstacle-sweep-hold-2026-11-12.md.
   the Pi's moving-object prediction. Grants nothing.
 - Pre-run centring: pointsRun.ino runLongHallway() calls centerBeforeLongRun() before both
   long runs (step counts and turn angles unchanged; sidestep travel is taken off the run).
-Host tests: tools/firmware_tests/test_hold_resume.cpp (new), test_navigation.cpp extended.
+Host tests: tests/firmware/test_hold_resume.cpp (new), test_navigation.cpp extended.
 Upload: this sketch only (the bridge source is unchanged, NAV-20261111). Not uploaded.

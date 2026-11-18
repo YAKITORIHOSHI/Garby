@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("combined_app")
 # Pi software revision, shown by the phone app next to the controller build IDs.
-PI_SOFTWARE_ID = "PHONE-20261114"
+PI_SOFTWARE_ID = "PHONEDEV-20261118"
 
 from bridge_core import (
     CoalescingUpdateWorker,
@@ -42,12 +42,16 @@ from bridge_core import (
 from port_detection import LIDAR, SENSOR, PortDetector
 from runtime_support import SingleInstanceGuard
 from operator_support import OperatorControl, StopLatchStore, reboot_pi
+from developer_support import (DeveloperTestControl, PHONE_NUDGE_S, RUN_OPS, TURN_ACTIONS,
+                               parse_run_program)
+import log_support
 from notice_support import HealthReporter, probe_internet
 from firebase_support import resolve_firebase_credentials
 from disposal_support import DisposalRelay, READY_MAX_AGE_S
 from lidar_map import build_lidar_map_snapshot
 from lidar_geometry import robot_scan_angles
 from hallway_geometry import analyze_hallway, geometry_from_environment
+from rear_wall import fit_rear_wall
 from motion_tracker import EgoMotionState, MotionAssessment, MotionTracker, build_segments
 from scan_frame import build_scan_frame
 from scene_objects import SceneMonitor, analyze_scene, scene_markers
@@ -265,11 +269,40 @@ class FirebaseManager:
 
     def update_robot_state(self, state):
         ready = state == "AT_DESTINATION"
-        self._update({
-            "RASPI/STATES/isReadyToReturn": ready,
-            f"devices/{RESET_DEVICE_ID}/status/isReadyToReturn": ready,
-            f"devices/{RESET_DEVICE_ID}/status/robotState": state,
-        }, urgent=True)
+        prefix = f"devices/{RESET_DEVICE_ID}/status/"
+        with self._status_lock:
+            self._location_robot_state = state
+            previous = getattr(self, "_route_location", "UNKNOWN")
+            point = ("POINT_B" if ready else "IN_TRANSIT"
+                     if state in ("OUTBOUND", "RETURNING", "REVERSING", "TESTING")
+                     else previous if state == "IDLE" and previous in ("POINT_A", "POINT_B")
+                     else "UNKNOWN")
+            self._update({
+                "RASPI/STATES/isReadyToReturn": ready,
+                prefix + "isReadyToReturn": ready,
+                prefix + "robotState": state,
+                **self._route_location_fields(point, "OUTBOUND_COMPLETE" if ready else ""),
+            }, urgent=True)
+
+    def _route_location_fields(self, point, source=""):
+        """Called under _status_lock. Arrival is executor telemetry, never localization."""
+        prefix = f"devices/{RESET_DEVICE_ID}/status/"
+        updates = {prefix + "location": point, prefix + "isAtStation": point == "POINT_A"}
+        if point != getattr(self, "_route_location", None):
+            now_ms = int(time.time() * 1000)
+            updates[prefix + "locationUpdatedAt"] = now_ms
+            if source:
+                updates[prefix + "lastArrival"] = {
+                    "point": point, "name": "Station" if point == "POINT_A" else "Disposal area",
+                    "confirmedAt": now_ms, "source": source,
+                }
+        self._route_location = point
+        return updates
+
+    def update_return_arrival(self):
+        with self._status_lock:
+            if getattr(self, "_location_robot_state", "UNKNOWN") == "IDLE":
+                self._update(self._route_location_fields("POINT_A", "RETURN_COMPLETE"), urgent=True)
 
     def update_mcu_states(self, is_blocked=None, is_fully_loaded=None,
                           is_sim_registered=None, is_started=None):
@@ -381,11 +414,12 @@ BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", "").strip() or None
 
 THRESHOLD_CM      = 95.0                  # straight-ahead (FRONT sector) stop distance
 BACK_THRESHOLD_CM = 35.0                  # back distance shown on the monitor
-# Every route segment drives forward and every turn spins in place under its own
-# sweep (T=), so a return behind the body never holds a forward move (owner,
-# 2026-11-14: the base spot has a wall 22.5 cm behind the LiDAR). The back group
-# still reports unavailable data, and side clearance still holds both directions.
-# Set this True only for a route with a reverse segment.
+# Every forward route segment ignores what lies behind the body, and every turn
+# spins in place under its own sweep (T=) (owner, 2026-11-14: the base spot has a
+# wall 22.5 cm behind the LiDAR). The back group still reports unavailable data,
+# and side clearance still holds both directions. Reverse parking (2026-11-16)
+# does not use this: its rear clearance goes out separately as R=, which the
+# bridge requires only while the executor backs ([BACK:START]..[BACK:END]).
 BACK_DISTANCE_HOLDS_MOTION = False
 # FRONT_LEFT/FRONT_RIGHT also see hallway walls: a wall W cm to the side reads
 # about 1.08 W, so 95 cm stopped the robot at any post narrower than 88 cm each
@@ -488,6 +522,31 @@ mq4 = mq137 = mq135 = None
 
 latest_sensor_readings = {"ultrasonic": None, "mq4": None, "mq137": None, "mq135": None}
 sensor_readings_lock = threading.Lock()
+
+# The latest rear-wall fit for the monitor's Developer tab (owner, 2026-11-16), so the
+# wall parking squares up to can be checked on the bench. Display only: the executor
+# gets the same fit as age-checked D lines, and this copy grants nothing.
+REAR_WALL_VIEW_MAX_AGE_S = 1.0
+_rear_wall_view = (None, None)
+_rear_wall_view_lock = threading.Lock()
+
+
+def publish_rear_wall_view(fit, now=None):
+    global _rear_wall_view
+    with _rear_wall_view_lock:
+        _rear_wall_view = (fit, time.monotonic() if now is None else now)
+
+
+def rear_wall_view(now=None):
+    """{"distance_cm", "angle_deg"} of a fit from the last second, else None."""
+    with _rear_wall_view_lock:
+        fit, at = _rear_wall_view
+    now = time.monotonic() if now is None else now
+    if fit is None or at is None or not 0.0 <= now - at <= REAR_WALL_VIEW_MAX_AGE_S:
+        return None
+    return {"distance_cm": fit.distance_cm, "angle_deg": fit.heading_deg}
+
+
 sensor_tracker = SensorTransitionTracker(
     stale_after_s=SENSOR_OFFLINE_DB_DELAY_S,
     live_publish_period_s=SENSOR_DB_PERIOD_S,
@@ -531,6 +590,9 @@ ble_send_queue = CoalescingBleQueue(maxlen=12)
 ble_recv_queue = queue.Queue(maxsize=100)
 
 _status_requested = threading.Event()
+# Set at the start of an orderly shutdown. The LiDAR driver is stopped first, so a
+# stale stream after this is expected: still fail-closed, but not logged as an error.
+app_shutting_down = threading.Event()
 _robot_running = threading.Event()
 _reset_completed = threading.Event()
 _reset_feedback = {}
@@ -542,8 +604,14 @@ _motion_hold = ""
 _disposal_ready_at = None
 front_disabled = threading.Event()
 back_disabled  = threading.Event()
+# Sides read-only (owner, 2026-11-16: "add read only for sides too, so that the motor can
+# be tested and run"): the side sector limits and the side bands beside the whole body
+# stop holding motion; readings, zones and steering vetoes continue. Off at every start.
+side_disabled  = threading.Event()
 manual_start = ManualStartControl()
 operator_control = OperatorControl(StopLatchStore())
+developer_tests = DeveloperTestControl(
+    store=StopLatchStore(str(operator_control.store.path) + ".developer"))
 health_reporter = HealthReporter(cloud_expected=FIREBASE_IMPORT_ERROR is None)
 
 # Module‑level ble_service placeholder – will be set after BLE connects
@@ -1081,13 +1149,44 @@ def on_demand_status_responder(lidar_node, stop_event):
     logger.info("On-demand status responder stopped.")
 
 # ═══ BLE notification handler ═══
+# The operator decides when GARBY moves (owner, 2026-11-16: "let me decide when will it
+# move such as release stop and dispose manually"). Two things used to restart motion with
+# no button pressed: a route still held from before this monitor started drove on as soon
+# as the LiDAR cleared it, and changing a LiDAR read-only group released a held route.
+# Both now latch the operator stop instead; Continue run, Reverse to start or Release stop
+# (then Manual disposal) is the operator's choice. A Bluetooth reconnect mid-route is not
+# a new monitor and changes nothing.
+_route_check_pending = True      # until the first known state of this Pi process
+_operator_pause_reason = ""
+_OPERATOR_CHOICE = "Choose Continue run, Reverse to start, or Release stop (Controls tab)."
+
+
+def pause_route_for_operator(reason):
+    """Latch the operator stop while a route runs. Returns True if it did."""
+    global _operator_pause_reason
+    if _robot_state not in ROUTE_STATES or operator_control.blocks_motion():
+        return False
+    logger.warning("Route stopped for the operator: %s", reason)
+    _request_operator_packet("ESTOP", "Pi")
+    _operator_pause_reason = reason
+    return True
+
+
+def read_operator_pause():
+    """Why the Pi itself stopped the route, while that stop is still latched, else ""."""
+    if not _operator_pause_reason or not operator_control.blocks_motion():
+        return ""
+    return f"{_operator_pause_reason[:1].upper()}{_operator_pause_reason[1:]}. {_OPERATOR_CHOICE}"
+
+
 def publish_robot_state(state: str):
-    global _robot_state, _motion_hold, _disposal_ready_at
+    global _robot_state, _motion_hold, _disposal_ready_at, _route_check_pending
     changed = state != _robot_state
     _robot_state = state
     if state == "UNKNOWN":
         _disposal_ready_at = None
         operator_control.disconnect()
+        developer_tests.disconnect()
         station_mode.invalidate()  # no controller state: back on the ordinary rules
     else:
         operator_control.note_state(state)
@@ -1100,6 +1199,10 @@ def publish_robot_state(state: str):
         manual_start.note_state(state)
     if changed:
         logger.info("Executor state: %s", state)
+    if state != "UNKNOWN" and _route_check_pending:
+        _route_check_pending = False
+        if state in ROUTE_STATES:
+            pause_route_for_operator("a route from before this monitor started was still running")
     if state == "AT_DESTINATION":
         _ready_to_return.set()
     else:
@@ -1110,6 +1213,9 @@ def publish_robot_state(state: str):
 
 
 def request_manual_start():
+    if developer_tests.busy():
+        return {"enabled": False, "pending": False,
+                "message": "Developer test pending; wait for it to finish"}
     if operator_control.blocks_motion():
         return {"enabled": False, "pending": False,
                 "message": "Emergency stop latched; release stop before starting"}
@@ -1125,12 +1231,32 @@ def request_manual_start():
     return result
 
 
+_read_only_groups = (False, False, False)
+
+
 def safety_checks_changed():
-    """Request a new path snapshot after a directional threshold bypass changes."""
+    """Request a new path snapshot after a LiDAR read-only group changes. Every change is
+    logged; one made while a route runs stops it for the operator's choice (2026-11-16)."""
+    global _read_only_groups
+    now = (front_disabled.is_set(), back_disabled.is_set(), side_disabled.is_set())
+    changes = [f"{name} {'read only' if new else 'checks on'}"
+               for name, old, new in zip(("Front", "Back", "Sides"), _read_only_groups, now)
+               if old != new]
+    _read_only_groups = now
+    if changes:
+        text = ", ".join(changes)
+        logger.warning("LiDAR read-only changed: %s", text)
+        pause_route_for_operator(f"LiDAR read-only changed ({text}) while a route was running")
     _status_requested.set()
 
 
 def _request_operator_packet(action, source="monitor"):
+    global _operator_pause_reason
+    _operator_pause_reason = ""  # the operator's own action: no Pi-made reason stands
+    if action == "ESTOP":
+        developer_tests.stopped_by_emergency()
+    elif developer_tests.busy():
+        return None
     packet = operator_control.request(action, ble_connected.is_set())
     if action == "ESTOP":
         manual_start.reset()
@@ -1158,10 +1284,17 @@ def cloud_request_operator_action(action):
 
 
 def cloud_set_read_only(group, enabled):
-    """Front/back LiDAR read-only from the phone, under the Pi's own permission."""
+    """Front/back/side LiDAR read-only from the phone, under the Pi's own permission."""
     if not ALLOW_RUNTIME_SAFETY_DISABLE:
         return False, "not_permitted"
-    event = front_disabled if group == "front" else back_disabled
+    if group == "front":
+        event = front_disabled
+    elif group == "back":
+        event = back_disabled
+    elif group == "side":
+        event = side_disabled
+    else:
+        return False, "unknown_group"
     if enabled:
         event.set()
     else:
@@ -1172,9 +1305,231 @@ def cloud_set_read_only(group, enabled):
     return True, ""
 
 
+# Phone Developer controls (2026-11-18). The same functions as the Developer window, so the
+# phone can never do what the window cannot; the outcome follows in the mirror's developer
+# fields. Remote drive from the phone is a Pi-timed nudge (owner: "Tap = short nudge"), since
+# a phone behind a once-a-second Firebase poll cannot keep saying "held".
+PHONE_TESTS = {"DEV_TEST_F": "F", "DEV_TEST_B": "B", "DEV_TEST_L": "L", "DEV_TEST_R": "R",
+               "DEV_TEST_L90": "L90", "DEV_TEST_R90": "R90", "DEV_TEST_M1": "1",
+               "DEV_TEST_M2": "2", "DEV_TEST_I": "I"}
+PHONE_NUDGES = {"DEV_HOLD_W": "W", "DEV_HOLD_S": "S", "DEV_HOLD_A": "A", "DEV_HOLD_D": "D"}
+
+
+def _developer_refusal(status):
+    return status.get("blocked") or "The robot did not take it. Try again."
+
+
+def cloud_developer_action(action, command=None):
+    """A Developer request from the phone: (taken by the Pi, plain reason when not)."""
+    command = command if isinstance(command, dict) else {}
+    if action == "DEV_CANCEL":
+        if developer_tests.stop("from the phone"):
+            logger.info("Developer test stopped from the phone")
+            _status_requested.set()
+            return True, ""
+        return False, "No test is running."
+    if action == "DEV_HOLD_STOP":
+        release_hold()  # a stop: nothing held is nothing to stop
+        return True, ""
+    if action == "DEV_RUN_START":
+        # The RunStart tab's Start run, with the phone's rows, max speed and acceleration.
+        steps = parse_run_program(command.get("program"))
+        if steps is None:
+            return False, "The step list is not valid."
+        why, _program = DeveloperTestControl.run_program(steps, command.get("speed"),
+                                                         command.get("accel"))
+        if why:
+            return False, why
+        run = developer_test_status()["run"]
+        if developer_tests.busy() or run.get("running") or run.get("waiting_release"):
+            return False, "A test or list is still running."
+        if run.get("place") == "partway":
+            # The window locks its rows here: Continue and Reverse act on the saved list.
+            return False, ("A list stands part-way. Continue run, Reverse to start or Discard "
+                           "saved first.")
+        status = request_run(steps, command["speed"], command["accel"])
+        return (True, "") if status.get("pending") else (False, _developer_refusal(status))
+    if action in ("DEV_RUN_CONTINUE", "DEV_RUN_UNDO"):
+        mode = "C" if action == "DEV_RUN_CONTINUE" else "U"
+        run = developer_test_status()["run"]
+        saved = run.get("saved")
+        if developer_tests.busy() or run.get("waiting_release"):
+            return False, "A test or list is still running."
+        if not run.get("known"):
+            return False, "The robot has not reported its saved list yet."
+        if not saved:
+            return False, "No saved RunStart list."
+        if mode == "C" and saved["place"] == "end":
+            return False, "The list already finished; nothing to continue."
+        if mode == "U" and saved["place"] == "start":
+            return False, "The list is at its start; nothing to reverse."
+        status = request_run_resume(mode)
+        if status.get("pending"):
+            return True, ""
+        return False, ("The emergency stop cannot be released now."
+                       if operator_control.blocks_motion() else _developer_refusal(status))
+    if action == "DEV_RUN_CLEAR":
+        run = developer_test_status()["run"]
+        if not ble_connected.is_set():
+            return False, "Robot not connected. Wait for the Bluetooth link."
+        if not run.get("saved"):
+            return False, "No saved RunStart list to discard."
+        if run.get("running") or run.get("waiting_release"):
+            return False, "The list is moving. Stop it first."
+        request_run_clear()
+        return True, ""
+    if action in PHONE_NUDGES:
+        if developer_tests.busy():
+            return False, "The last test is still finishing."
+        status = request_hold(PHONE_NUDGES[action], command.get("fast") is True,
+                              pulse_s=PHONE_NUDGE_S)
+        return (True, "") if status.get("pending") else (False, _developer_refusal(status))
+    test = PHONE_TESTS.get(action)
+    if test is None:
+        return False, "unknown_action"
+    sensors = command.get("sensors", 7)
+    if type(sensors) is not int or not 0 <= sensors <= 7:
+        return False, "invalid_request"
+    if developer_tests.busy():
+        return False, "The last test is still finishing."
+    if test in TURN_ACTIONS and not sensors & 2:
+        return False, "Turns need the gyro (MPU) ticked."
+    status = request_developer_test(test, sensors)
+    return (True, "") if status.get("pending") else (False, _developer_refusal(status))
+
+
 _launcher_info = {"mode": "monitor", "startedAt": int(time.time() * 1000),
                   "software": PI_SOFTWARE_ID}
 _lidar_node_ref = None
+
+
+def current_motion_hold():
+    """Explain a controller hold using current Pi evidence; telemetry only."""
+    if _motion_hold == "LiDAR obstacle" and _lidar_node_ref is not None:
+        detail = _lidar_node_ref.obstacle_hold_reason()
+        if detail:
+            return detail
+    return _motion_hold
+
+
+_DEVELOPER_STATE_BLOCKS = {
+    "UNKNOWN": "Waiting for the robot to report its state…",
+    "OUTBOUND": "A route is running. Wait for it to finish first.",
+    "RETURNING": "GARBY is returning. Wait for it to finish first.",
+    "REVERSING": "GARBY is reversing to its start. Wait for it to finish first.",
+    "AT_DESTINATION": "GARBY is parked at the destination. Send it back first (Controls tab).",
+    "FAULT": "Route fault. Press Reset on the Controls tab first.",
+    "TESTING": "The last test is still finishing…",
+}
+
+
+def developer_test_blocker():
+    """Plain reason Developer tests are unavailable, or "" when one may start."""
+    connected = ble_connected.is_set()
+    if not connected:
+        return "Robot not connected. Wait for the Bluetooth link."
+    if operator_control.blocks_motion():
+        return "Emergency stop is on. Release it on the Controls tab first."
+    if _robot_state != "IDLE":
+        return _DEVELOPER_STATE_BLOCKS.get(_robot_state, f"The robot is busy ({_robot_state}).")
+    if manual_start.status(connected)["pending"]:
+        return "A start request is still pending. Wait for it to finish."
+    if not operator_control.status(connected)["can_configure"]:
+        return "Another command is still being confirmed. Wait a moment."
+    return ""
+
+
+def developer_test_eligible():
+    return not developer_test_blocker()
+
+
+def developer_test_status():
+    blocked = developer_test_blocker()
+    return developer_tests.status(ble_connected.is_set(), not blocked, blocked=blocked)
+
+
+def request_developer_test(action, sensors):
+    packet = developer_tests.request(action, sensors, ble_connected.is_set(),
+                                     developer_test_eligible())
+    if packet:
+        # Its dedicated lane is drained after emergency-stop delivery. The
+        # writer checks readiness/age again and attempts this command once.
+        logger.warning("Developer test requested: action=%s selected gates=%s", action, sensors)
+        _status_requested.set()
+    return developer_test_status()
+
+
+def cancel_developer_test():
+    """The Developer tests window was closed: end a running test (its lease lapses)."""
+    if developer_tests.busy():
+        developer_tests.cancel("Test stopped: the Developer tests window was closed.")
+        logger.info("Developer test cancelled: its window was closed")
+    developer_tests.cancel_after_release("Continue/Reverse cancelled: the Developer window was closed.")
+    return developer_test_status()
+
+
+# RunStart (owner, 2026-11-16): the Developer window's own list of steps. No LiDAR, sonar
+# or gyro checks and no time limit, by the owner's choice; the KEEP lease (the window open,
+# the Pi and the link alive) and the emergency stop end it. The executor keeps the list's
+# exact place: Continue run finishes it, Reverse to start takes it back.
+def request_run(steps, speed, accel):
+    packet = developer_tests.request_run(steps, speed, accel, ble_connected.is_set(),
+                                         developer_test_eligible())
+    if packet:
+        logger.warning("RunStart list requested: %s; max %s steps/s, acceleration %s steps/s²; "
+                       "no sensor checks", ", ".join(f"{RUN_OPS[op]} {n}" for op, n in steps),
+                       speed, accel)
+        _status_requested.set()
+    return developer_test_status()
+
+
+def request_run_resume(mode):
+    """Continue run (C) or Reverse to start (U) of the saved list. While the emergency stop
+    is on it is released first, through the same confirmed gate as the main window."""
+    words = "Continue run" if mode == "C" else "Reverse to start"
+    if operator_control.blocks_motion():
+        if (operator_control.status(ble_connected.is_set())["can_release"]
+                and _request_operator_packet("RELEASE")):
+            developer_tests.queue_run_after_release(mode)
+            logger.warning("RunStart %s requested: releasing the emergency stop first", words)
+        return developer_test_status()
+    packet = developer_tests.request_run_resume(mode, ble_connected.is_set(),
+                                                developer_test_eligible())
+    if packet:
+        logger.warning("RunStart %s requested; no sensor checks", words)
+        _status_requested.set()
+    return developer_test_status()
+
+
+def request_run_clear():
+    if developer_tests.request_run_clear(ble_connected.is_set()):
+        logger.info("RunStart: discarding the saved list")
+    return developer_test_status()
+
+
+# Remote control (owner, 2026-11-16): the Developer window's arrows. One held arrow is
+# one finite request with no step value; the window says "still held" every 100 ms and
+# letting go sends [TEST END]. Same IDLE/readiness/emergency-stop rules as the tests.
+def request_hold(action, fast, pulse_s=None):
+    packet = developer_tests.request_hold(action, bool(fast), ble_connected.is_set(),
+                                          developer_test_eligible(), pulse_s=pulse_s)
+    if packet:
+        logger.warning("Remote control: %s %s (%s), no sensor checks",
+                       {"W": "Up/forward", "S": "Down/backward", "A": "Left", "D": "Right"}[action],
+                       "held" if pulse_s is None else f"{pulse_s:.1f} s nudge from the phone",
+                       "fast" if fast else "slow")
+        _status_requested.set()
+    return developer_test_status()
+
+
+def hold_alive():
+    developer_tests.still_held()
+
+
+def release_hold():
+    developer_tests.release()
+    logger.info("Remote control: arrow let go")
+    return developer_test_status()
 
 
 def build_operator_mirror():
@@ -1183,11 +1538,16 @@ def build_operator_mirror():
     zones = ()
     if node is not None:
         people, objects, zones = node.cloud_view()
+    status = dict(operator_control.status(ble_connected.is_set()))
+    pause = read_operator_pause()
+    if pause:
+        status["message"] = pause  # the phone shows why the Pi stopped the route
     return cloud_control.operator_mirror(
-        operator_control.status(ble_connected.is_set()), robot_state=_robot_state,
+        status, robot_state=_robot_state,
         front_read_only=front_disabled.is_set(), back_read_only=back_disabled.is_set(),
+        side_read_only=side_disabled.is_set(), developer=developer_test_status(),
         read_only_allowed=ALLOW_RUNTIME_SAFETY_DISABLE,
-        motion_hold=_motion_hold if _robot_state in ROUTE_STATES else "",
+        motion_hold=current_motion_hold() if _robot_state in ROUTE_STATES else "",
         zones=zones, route_leg=station_mode.leg().describe() if _robot_state in ROUTE_STATES else "",
         people=people, objects=objects, launcher=dict(_launcher_info))
 
@@ -1216,7 +1576,7 @@ def _write_status_file(mirror):
 def firebase_control_loop(stop_event):
     """Phone control: operator requests, the status mirror and leased map frames."""
     relay = cloud_control.OperatorRelay(cloud_request_operator_action, operator_control.outcome,
-                                        cloud_set_read_only)
+                                        cloud_set_read_only, dev_action=cloud_developer_action)
     publisher = cloud_control.MapPublisher()
     last_poll = last_mirror_at = last_file_at = last_error_log = float("-inf")
     last_mirror = None
@@ -1272,10 +1632,22 @@ def _reboot_after_controller_ack():
         operator_control.reboot_result()
 
 
+_last_run_saved = ""
+
+
 def ble_notify_handler(msg: str):
     global _last_load_cell_value, _last_load_cell_publish, _motion_hold, _disposal_ready_at
-    global _route_leg_logged
+    global _route_leg_logged, _last_run_saved
     stripped = msg.strip()
+    if developer_tests.receive(stripped):
+        if stripped.startswith(("[TEST ACK:", "[TEST DONE:", "[TEST FAILED:", "[TEST RESULT:")):
+            logger.info("%s", stripped)
+        elif stripped.startswith("[RUN SAVED:") and not developer_tests.run_active():
+            # Status replies repeat it every few seconds: log only what changed.
+            if stripped != _last_run_saved:
+                _last_run_saved = stripped
+                logger.info("%s", stripped)
+        return
     if stripped.startswith("[DRIVE:"):
         # Wheel motion for the moving-object prediction: on every change and every
         # 2 s, so it stays out of the GUI log. Telemetry only; it grants nothing.
@@ -1297,7 +1669,7 @@ def ble_notify_handler(msg: str):
         except queue.Full:
             pass
     if stripped.startswith(("[BRIDGE ", "[HEADING ", "[HEADING:START", "[ROUTE ",
-                            "[REVERSE COMPLETE")):
+                            "[REVERSE COMPLETE", "[PARK ")):
         # Firmware ID, reset cause and link timing separate a supply problem from
         # a radio drop. Headless mode would otherwise discard them with the GUI queue.
         # [HEADING ...] lines are the executor's turn, straight and wall-fusion
@@ -1339,11 +1711,19 @@ def ble_notify_handler(msg: str):
             "MOTORS_UNAVAILABLE": "Motor outputs unavailable", "ROUTE_FAULT": "Route fault",
             "STOP:TURN": "Turn sweep blocked", "STOP:TURN_UNKNOWN": "Turn sweep unknown",
             "STOP:TURN_CLEARANCE": "Confirming turn clearance",
+            # Reverse parking (2026-11-16).
+            "STOP:BACK": "Obstacle behind (backing)", "STOP:BACK_UNKNOWN": "Rear clearance unknown",
+            "STOP:BACK_CLEARANCE": "Confirming rear clearance",
+            "PARK:WAIT_REAR_WALL": "Parking: waiting for two fresh rear-wall scans",
+            "PARK:WALL_UNSTABLE": "Parking: rear-wall scans do not agree",
+            "PARK:ALIGNING": "Parking: aligning square to the rear wall",
+            "PARK:ALIGNMENT_UNCONFIRMED": "Parking: rear alignment needs checking",
+            "STOP:BACK_UNCONFIRMED": "Bridge has not confirmed rear clearance (flash bridge PARK-20261116)",
         }
         hold = holds.get(reason, reason.replace("_", " "))
         if hold != _motion_hold:
             _motion_hold = hold
-            logger.info("Executor motion: %s", hold or "clearance confirmed")
+            logger.info("Executor motion: %s", current_motion_hold() or "clearance confirmed")
         return
     if stripped.startswith("[START ") and stripped.endswith("]"):
         fields = stripped[7:-1].split(":", 2)
@@ -1372,7 +1752,7 @@ def ble_notify_handler(msg: str):
     states = {
         "[MCU READY]": "UNKNOWN", "[RUNNING]": "OUTBOUND",
         "[OUTBOUND COMPLETE]": "AT_DESTINATION", "[RETURNING]": "RETURNING",
-        "[REVERSING]": "REVERSING",
+        "[REVERSING]": "REVERSING", "[TESTING]": "TESTING",
         "[IDLE]": "IDLE", "[ROUTE FAULT]": "FAULT", "[RETURN REJECTED]": "FAULT",
     }
     if stripped == "[MCU READY]":
@@ -1380,6 +1760,12 @@ def ble_notify_handler(msg: str):
         station_mode.invalidate()
     if stripped in states:
         publish_robot_state(states[stripped])
+    if stripped == "[RETURN COMPLETE]":
+        # The executor sends IDLE first and replays both on status/reconnect.
+        # Generic IDLE, RESET ACK/DONE and a command timeout never prove arrival.
+        if _robot_state == "IDLE" and firebase:
+            firebase.update_return_arrival()
+        return
     if stripped in (REQUEST_TOKEN, "CONNECTED...", "[BLE CONNECTION ESTABLISHED]"):
         _robot_running.set()
         _status_requested.set()
@@ -1718,8 +2104,12 @@ class BleService(threading.Thread):
                 payload = msg.encode("utf-8")
             if msg.startswith("[OP") and not operator_control.can_send(msg, ble_connected.is_set()):
                 return
+            if msg.startswith(("[TEST", "[RUN")) and not developer_tests.can_send(
+                    msg, ble_connected.is_set(), developer_test_eligible(),
+                    stopped=operator_control.blocks_motion()):
+                return
             if operator_control.blocks_motion():
-                if msg.startswith(("[START", "[RESET")):
+                if msg.startswith(("[START", "[RESET", "[TEST")) and not msg.startswith("[TEST END:"):
                     return
                 if msg.startswith("P:"):
                     msg = msg.split("|", 1)[0] + "|F=S|B=S"
@@ -1759,8 +2149,10 @@ class BleService(threading.Thread):
                 manual_start.mark_sent(msg)
             if msg.startswith("[OP:"):
                 operator_control.mark_sent(msg)
+            if msg.startswith(("[TEST", "[RUN")):
+                developer_tests.mark_sent(msg)
             acknowledged = (
-                msg.startswith(("P:", "[RESET", "[START", "[OP", "[HEALTH:", "[RASPI READY]"))
+                msg.startswith(("P:", "[RESET", "[START", "[OP", "[TEST", "[RUN", "[HEALTH:", "[RASPI READY]"))
                 or len(payload) > no_response_limit
             )
             await asyncio.wait_for(
@@ -1783,6 +2175,10 @@ class BleService(threading.Thread):
                 ble_send_queue.put_nowait(query)
             msg = operator_control.next_packet(ble_connected.is_set())
             expires_at = None
+            if msg is None:
+                msg = developer_tests.next_packet(
+                    ble_connected.is_set(), developer_test_eligible(),
+                    stopped=operator_control.blocks_motion())
             if msg is None:
                 try:
                     msg, expires_at = ble_send_queue.get_entry_nowait()
@@ -1875,12 +2271,16 @@ def init_gui():
     def read_health():
         cloud = firebase.cloud_health() if firebase else {"online": False, "state": "Unavailable"}
         start_status = manual_start.status(ble_connected.is_set())
+        hold = current_motion_hold() if _robot_state in ROUTE_STATES else ""
+        developer_status = developer_test_status()
+        if developer_status["pending"]:
+            start_status = {"enabled": False, "pending": False,
+                            "message": "Developer test pending; wait for it to finish"}
         if operator_control.blocks_motion():
             start_status = {"enabled": False, "pending": False,
                             "message": "Emergency stop latched; explicit release required"}
-        if (not start_status["pending"] and _robot_state in ROUTE_STATES
-                and _motion_hold):
-            start_status["message"] = f"Motors held: {_motion_hold}"
+        if not start_status["pending"] and hold:
+            start_status["message"] = f"Motors held: {hold}"
         return {
             "lidar": lidar_healthy.is_set(),
             "lidar_stream": lidar_streaming.is_set(),
@@ -1889,6 +2289,10 @@ def init_gui():
             "firebase": cloud["online"],
             "firebase_status": cloud["state"],
             "robot_state": _robot_state,
+            "motion_hold": hold,
+            "operator_pause": read_operator_pause(),
+            "developer_tests": developer_status,
+            "rear_wall": rear_wall_view(),
             "route_leg": station_mode.leg().describe() if _robot_state in ROUTE_STATES else "",
             "manual_start": start_status,
             "operator_controls": operator_control.status(ble_connected.is_set()),
@@ -1900,9 +2304,15 @@ def init_gui():
                 root, data_queue, recv_queue,
                 read_sensors=read_sensors, read_health=read_health,
                 front_disabled=front_disabled, back_disabled=back_disabled,
+                side_disabled=side_disabled,
                 allow_safety_disable=ALLOW_RUNTIME_SAFETY_DISABLE,
                 on_checks_changed=safety_checks_changed,
                 request_start=request_manual_start,
+                request_developer_test=request_developer_test,
+                request_developer_cancel=cancel_developer_test,
+                request_hold=request_hold, hold_alive=hold_alive, release_hold=release_hold,
+                request_run=request_run, request_run_resume=request_run_resume,
+                request_run_clear=request_run_clear,
                 request_emergency_stop=lambda: request_operator_action("ESTOP"),
                 request_release_stop=lambda: request_operator_action("RELEASE"),
                 request_continue_run=lambda: request_operator_action("CONTINUE"),
@@ -1959,6 +2369,12 @@ def start_headless_key_listener():
                         continue
                     if back_disabled.is_set(): back_disabled.clear(); logger.info("BACK re-enabled.")
                     else: back_disabled.set(); logger.info("BACK disabled.")
+                    safety_checks_changed()
+                elif ch == 'l':
+                    if not ALLOW_RUNTIME_SAFETY_DISABLE:
+                        continue
+                    if side_disabled.is_set(): side_disabled.clear(); logger.info("SIDES re-enabled.")
+                    else: side_disabled.set(); logger.info("SIDES set to read-only.")
                     safety_checks_changed()
                 elif ch == 's':
                     logger.info("Manual disposal: are you sure? Press y within 10 seconds; any other key cancels.")
@@ -2080,11 +2496,15 @@ def start_lidar_driver(stop_event=None, ros_node=None):
     proc = subprocess.Popen(
         command,
         stdout=subprocess.DEVNULL if suppress_driver_logs else None,
-        # Keep failures visible even when verbose SDK stdout is suppressed.
-        stderr=None,
+        # Keep failures visible even when verbose SDK stdout is suppressed: in the
+        # log (window and file), not the terminal (owner, 2026-11-16). A repeated
+        # line is counted, so an SDK error storm cannot flood the window.
+        stderr=subprocess.PIPE,
         env=os.environ.copy(),
         start_new_session=(os.name == "posix"),
     )
+    if getattr(proc, "stderr", None) is not None:
+        log_support.start_line_logger(proc.stderr, logger, "LiDAR driver: ")
     if os.name == "posix":
         proc.garby_process_group = proc.pid
     try:
@@ -2275,6 +2695,7 @@ class LidarDistanceReader(Node):
         self._sector_data_valid = {side: False for side in self.SIDES}
         # Zones and wall fits of the current acquisition only (None = unknown).
         self._hallway = None
+        self._rear_wall = None  # unmasked rear wall; parking orientation only
         # Moving-object prediction (motion_tracker.py). It only adds STOP/SLOW
         # evidence; its failure leaves the sector and zone limits in charge.
         self._tracker = MotionTracker(CHASSIS)
@@ -2295,6 +2716,7 @@ class LidarDistanceReader(Node):
         self._cloud_frame = None        # this scan, before any station wall is taken out
         self._last_path_codes = ""
         self._prev_turn_blocked = False
+        self._prev_rear_blocked = False
         self._zone_log = ZoneLogLimiter()
         self._first_scan_received = False
         self._front_data_valid = False
@@ -2311,10 +2733,8 @@ class LidarDistanceReader(Node):
         scan_qos = copy(qos_profile_sensor_data)
         scan_qos.depth = 1
         self.create_subscription(LaserScan, '/scan', self.scan_callback, scan_qos)
-        self.get_logger().info(
-            f'Lidar Distance Reader started '
-            f'(fail-closed, yaw offset {LIDAR_YAW_OFFSET_DEG:.1f} deg)'
-        )
+        logger.info("Lidar Distance Reader started (fail-closed, yaw offset %.1f deg)",
+                    LIDAR_YAW_OFFSET_DEG)
 
     def _next_path_seq(self):
         with self._path_seq_lock:
@@ -2338,15 +2758,17 @@ class LidarDistanceReader(Node):
         if self._lidar_stale_announced:
             return
         self._lidar_stale_announced = True
-        if not self._first_scan_received:
+        if app_shutting_down.is_set():
+            # Orderly shutdown stopped the driver on purpose. The STOP below is
+            # still sent; this is not a sensor fault, so it is not an ERROR.
+            logger.info("LiDAR driver stopped for shutdown; holding fail-closed STOP")
+        elif not self._first_scan_received:
             # Nothing has been received yet, so nothing has gone stale: the driver
             # is still being found or started. The STOP below is sent either way.
-            self.get_logger().info(
-                "Waiting for the first LiDAR scan; holding fail-closed STOP")
+            logger.info("Waiting for the first LiDAR scan; holding fail-closed STOP")
         else:
-            self.get_logger().error(
-                f"LiDAR stream stale for > {LIDAR_STALE_TIMEOUT_S:.1f} s; issuing fail-closed STOP"
-            )
+            logger.error("LiDAR stream stale for > %.1f s; issuing fail-closed STOP",
+                         LIDAR_STALE_TIMEOUT_S)
         seq = self._next_path_seq()
         path_msg = f"P:{seq}|F=S|B=S"
         if not self._dispatch_urgent_path(path_msg):
@@ -2433,9 +2855,14 @@ class LidarDistanceReader(Node):
     def _front_bypassed(self):
         return ALLOW_RUNTIME_SAFETY_DISABLE and front_disabled.is_set()
 
+    def _sides_bypassed(self):
+        return ALLOW_RUNTIME_SAFETY_DISABLE and side_disabled.is_set()
+
     ZONE_NAMES = (("FRONT_BOX", "front_stop"), ("SLOW", "front_slow"),
                   ("LEFT_BAND", "side_left"), ("RIGHT_BAND", "side_right"),
                   ("TURN_FRONT", "turn_front"), ("TURN_BACK", "turn_back"))
+    REAR_ZONE_NAMES = (("REAR_BOX", "rear_stop"), ("LEFT_BAND_REAR", "rear_side_left"),
+                       ("RIGHT_BAND_REAR", "rear_side_right"))
 
     def _active_zones(self):
         """Chassis zones holding a return in the current scan, for the log and GUI."""
@@ -2450,6 +2877,10 @@ class LidarDistanceReader(Node):
             zones.append("MOVING_SLOW")
         if self._motion.turn_stop:
             zones.append("MOVING_TURN")
+        if station_mode.leg().backing:
+            # Reverse parking: the zones that hold the backing move. Shown only then,
+            # since the parking spot keeps a wall behind the robot at every start.
+            zones.extend(name for name, zone in self.REAR_ZONE_NAMES if self._zone(zone))
         return zones
 
     def _front_status(self):
@@ -2464,7 +2895,11 @@ class LidarDistanceReader(Node):
         return blocked, status
 
     def _side_status(self):
-        """Radial side limit, plus a return within side_margin of the body."""
+        """Radial side limit, plus a return within side_margin of the body. The operator's
+        sides read-only bypasses both (missing or stale scans are handled before this and
+        stay unknown); the zones are still listed and drawn."""
+        if self._sides_bypassed():
+            return False, "CLEAR"
         blocked, status = self._get_side_obstacle_status()
         if not blocked:
             names = [name for name, zone in (("LEFT_BAND", "side_left"),
@@ -2473,6 +2908,55 @@ class LidarDistanceReader(Node):
             if names:
                 return True, "BLOCKED{" + ",".join(names) + "}"
         return blocked, status
+
+    def _rear_travel_status(self, side_blocked):
+        """Reverse parking (2026-11-16): clearance for driving backwards, sent as R=.
+
+        (None = unknown, never clear | True | False, status text). Computed for every
+        scan whatever the robot is doing: the bridge needs R=C while the executor
+        backs, so a lost route-step notice can never leave a backing move without
+        it. Holds: the box behind the rear edge and a mover predicted to reach the
+        body; the bands beside the rear half and side clearance are never bypassed.
+        A read-only back group bypasses the box and the mover, as it bypasses every
+        other back-group threshold. The back sectors' 35 cm limit is not used: it is
+        measured from the LiDAR, so it adds nothing outside the body that the box
+        misses, but does see the robot's own frame inside the (unmeasured) outline.
+        """
+        if self._hallway is None or not self._back_data_valid:
+            return None, "LIDAR_UNAVAILABLE"
+        if side_blocked:
+            return True, "BLOCKED{SIDE}"
+        bands = [] if self._sides_bypassed() else [
+            name for name, zone in self.REAR_ZONE_NAMES[1:] if self._zone(zone)]
+        if bands:
+            return True, "BLOCKED{" + ",".join(bands) + "}"
+        if ALLOW_RUNTIME_SAFETY_DISABLE and back_disabled.is_set():
+            return False, "CLEAR"
+        if self._zone("rear_stop"):
+            return True, "BLOCKED{REAR_BOX}"
+        if self._motion.stop:
+            return True, "BLOCKED{MOVING}"
+        return False, "CLEAR"
+
+    def obstacle_hold_reason(self):
+        """Name the selected clearance gate, excluding bypassed/stale evidence."""
+        with self._history_lock:
+            if self._lidar_is_stale():
+                return ""
+            side = self._side_status()
+            backing = station_mode.leg().backing
+            for group, allowed, result in (
+                ("Side", True, side),
+                ("Front", self._front_data_valid and not self._front_bypassed() and not backing,
+                 self._front_status()),
+                ("Rear", self._back_data_valid and not (
+                    ALLOW_RUNTIME_SAFETY_DISABLE and back_disabled.is_set()), self._back_status()),
+                ("Rear travel", backing, self._rear_travel_status(side[0])),
+            ):
+                blocked, status = result
+                if allowed and blocked:
+                    return f"{group} clearance blocked ({status[8:-1]})"
+            return ""
 
     def _turn_blocked(self, side_blocked):
         """Spin-in-place sweep. Unknown evidence is never a clear sweep."""
@@ -2631,6 +3115,8 @@ class LidarDistanceReader(Node):
         self._front_data_valid = self._back_data_valid = False
         self._sector_data_valid = {side: False for side in self.SIDES}
         self._hallway = None
+        self._rear_wall = None
+        publish_rear_wall_view(None)
         self._tracker.reset()
         self._motion = MotionAssessment()
         self._scene.reset()
@@ -2764,6 +3250,10 @@ class LidarDistanceReader(Node):
             ranges, angle_min=angle_min, angle_increment=angle_inc,
             range_min=minimum_range, range_max=maximum_range, lidar_y_cm=CHASSIS.lidar_y_cm)
         self._cloud_frame = frame   # the phone map draws every return, like the monitor's
+        # Station walls may be ignored for clearance, but the parking wall must
+        # remain available for alignment. Measure the original acquisition first.
+        self._rear_wall = fit_rear_wall(frame, CHASSIS)
+        publish_rear_wall_view(self._rear_wall)
         # On a station step the station's own walls are taken out first, so
         # every consumer below sees the same scan.
         ranges, frame = self._apply_station_mode(ranges, frame)
@@ -2912,6 +3402,7 @@ class LidarDistanceReader(Node):
             back_blocked, _ = self._back_status()
             side_blocked, _ = self._side_status()
             turn_blocked = bool(self._turn_blocked(side_blocked))
+            rear_blocked = bool(self._rear_travel_status(side_blocked)[0])
             # Side obstacles are direction-independent: the robot must not
             # resume in reverse while the same lateral object is still close.
             reported_front_blocked = front_blocked or side_blocked
@@ -2931,7 +3422,8 @@ class LidarDistanceReader(Node):
                     or reported_back_blocked != self._prev_back_blocked
                     or side_blocked != self._prev_side_blocked
                 )
-            ) or (turn_blocked and not self._prev_turn_blocked)
+            ) or (turn_blocked and not self._prev_turn_blocked) or (
+                rear_blocked and not self._prev_rear_blocked)
             if (
                 quality_degraded
                 or (changed_to_blocked
@@ -2944,6 +3436,7 @@ class LidarDistanceReader(Node):
             self._prev_back_blocked = reported_back_blocked
             self._prev_side_blocked = side_blocked
             self._prev_turn_blocked = turn_blocked
+            self._prev_rear_blocked = rear_blocked
             # The eight sector readings cannot show a chassis-zone block, so a
             # change is logged: otherwise a held robot has no visible reason.
             zones = self._active_zones()
@@ -3004,12 +3497,14 @@ class LidarDistanceReader(Node):
             if side_blocked:
                 # This override is intentionally after the manual front/back
                 # bypass checks: side collision protection is never disabled
-                # by a directional GUI toggle.
+                # by a front/back toggle, only by its own sides read-only.
                 front_blocked, front_status = True, side_status
                 back_blocked, back_status = True, side_status
 
             turn_blocked = self._turn_blocked(side_blocked)
             turn_code = "S" if turn_blocked is None else ("O" if turn_blocked else "C")
+            rear_blocked, _ = self._rear_travel_status(side_blocked)
+            rear_code = "S" if rear_blocked is None else ("O" if rear_blocked else "C")
             front_code = self._status_code(front_status)
             # W = clear to the 95 cm stop but something in the swept corridor
             # within front_slow_cm, a closing mover, or (2026-11-14) an object
@@ -3032,7 +3527,7 @@ class LidarDistanceReader(Node):
             scan_age_ms = max(0, round((time.monotonic() - self._last_scan_time) * 1000.0))
 
         path_msg = (f"P:{seq}|F={front_code}"
-                    f"|B={self._status_code(back_status)}|T={turn_code}")
+                    f"|B={self._status_code(back_status)}|T={turn_code}|R={rear_code}")
         self._last_path_codes = path_msg.split("|", 1)[1]
 
         key_map = {
@@ -3061,6 +3556,9 @@ class LidarDistanceReader(Node):
             if hallway.heading_deg is not None:
                 # Less the LiDAR mounting error learned from drift (zero until learned).
                 sides_parts.append(f"H={wall_heading_offset.correct(hallway.heading_deg):.2f}")
+        if self._rear_wall is not None:
+            sides_parts.append(f"RD={self._rear_wall.distance_cm:.1f}")
+            sides_parts.append(f"RH={self._rear_wall.heading_deg:.2f}")
         sides_parts.append(f"G={scan_age_ms}")
 
         fl, fr = med.get("FRONT_LEFT"), med.get("FRONT_RIGHT")
@@ -3101,18 +3599,30 @@ class LidarDistanceReader(Node):
 # ═══ Main ═══
 def enable_file_log(directory):
     """A floor run used to leave no log unless the console was captured."""
-    from logging.handlers import TimedRotatingFileHandler
+    return log_support.enable_file_log(directory)
+
+
+def terminal_note(text):
+    """One line for the ssh terminal; a closed terminal must not stop the monitor."""
     try:
-        directory = os.path.expanduser(directory)
-        os.makedirs(directory, exist_ok=True)
-        handler = TimedRotatingFileHandler(os.path.join(directory, "bridge.log"),
-                                           when="midnight", backupCount=14, encoding="utf-8")
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-        logging.getLogger().addHandler(handler)
-        logger.info("Logging to %s (daily files, 14 days kept)", handler.baseFilename)
-    except OSError as exc:
-        logger.warning("File log unavailable (%s); console only", exc)
+        print(text, file=sys.__stdout__, flush=True)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def show_log_in_window(gui, window_log, log_dir):
+    """Monitor mode (owner, 2026-11-16): the log goes to the window's Log tab and a daily
+    file; the terminal (the ssh session) gets one line saying where."""
+    path = log_support.enable_file_log(log_dir or log_support.DEFAULT_LOG_DIR)
+    log_support.move_console_to_window(window_log)
+    logging.captureWarnings(True)
+    threading.excepthook = lambda hook: logger.error(
+        "Thread %s failed", getattr(hook.thread, "name", "?"),
+        exc_info=(hook.exc_type, hook.exc_value, hook.exc_traceback))
+    gui.attach_log(window_log, path)
+    terminal_note(f"GARBY monitor {PI_SOFTWARE_ID} is running in its window. The log is on its "
+                  "Log tab" + (f" and in {path}" if path else "") + ".")
+    return path
 
 
 def main():
@@ -3131,6 +3641,9 @@ def main():
 
 def _run_application(args):
     global firebase, ser, ble_service, _lidar_node_ref
+    # Buffer from the start, so the Log tab also shows how this run began.
+    window_log = log_support.WindowLogHandler()
+    logging.getLogger().addHandler(window_log)
     gui_root = create_gui_root(args.headless)
     headless = gui_root is None
     _launcher_info.update(mode="headless" if headless else "monitor",
@@ -3139,11 +3652,15 @@ def _run_application(args):
     serial_stop.clear()
     data_queue = None if headless else queue.Queue(maxsize=5)
     gui = None
+    log_path = None
     if gui_root is not None:
         gui = init_gui()(gui_root, data_queue, ble_recv_queue)
+        log_path = show_log_in_window(gui, window_log, getattr(args, "log_dir", ""))
         # Map the complete monitor before initializing peripherals. A missing
         # sensor board or slow ROS discovery must not leave a blank window.
         gui_root.update_idletasks()
+    else:
+        logging.getLogger().removeHandler(window_log)  # headless: the console stays
 
     def ble_cb_status(text, color):
         if gui is not None:
@@ -3224,6 +3741,7 @@ def _run_application(args):
         if shutdown_started.is_set():
             return
         shutdown_started.set()
+        app_shutting_down.set()
         logger.info("Shutting down...")
 
         # Watchdog: guarantees the process actually exits even if a step
@@ -3279,6 +3797,8 @@ def _run_application(args):
             logger.error("Firebase shutdown error: %s", e)
 
         logger.info("Shutdown complete.")
+        if gui is not None:
+            terminal_note("GARBY monitor stopped." + (f" Log: {log_path}" if log_path else ""))
         os._exit(0)
 
     signal.signal(signal.SIGINT,  lambda s, f: shutdown())

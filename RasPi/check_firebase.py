@@ -28,6 +28,7 @@ def anonymous_probe(url):
             json.loads(response.read(4096))
         print('REACHABLE: HTTPS read succeeded; data omitted. Admin authentication remains unverified.')
     except HTTPError as error:
+        error.close()  # it still holds the HTTP response
         if error.code in (401, 403):
             print(f'REACHABLE: Firebase returned HTTP {error.code}; this anonymous read is denied.')
         else:

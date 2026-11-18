@@ -57,7 +57,7 @@ centring, not MPU heading hold; malformed values and missing CF/CL/CR withdraw a
 permission. One bad MPU read is skipped, and the 100 ms gap budget stays the hard
 limit. `[MCU ALIVE]` is a recovery ping that changes nothing; `[MCU READY]` means a
 controller restart; neither re-zeroes the bridge heading. No motion without heading
-feedback. Use `tools/firmware_tests/test_navigation.cpp` (kinematic hallway) for
+feedback. Use `tests/firmware/test_navigation.cpp` (kinematic hallway) for
 tuning, and do not infer physical settling, slip or straightness from it. Check the
 production Pi obstacle envelope (sectors plus chassis zones) when choosing corridor
 test geometry; direct bridge fixtures can be unreachable behind PATH STOP.

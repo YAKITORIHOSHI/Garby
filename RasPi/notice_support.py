@@ -29,7 +29,9 @@ def probe_internet(*, opener=None):
                     if any(line.startswith("ip=") for line in lines) and any(
                             line.startswith("colo=") for line in lines):
                         return True
-        except (OSError, HTTPError, URLError, ValueError):
+        except HTTPError as error:
+            error.close()  # an error status still holds the HTTP response
+        except (OSError, URLError, ValueError):
             continue
     return False
 

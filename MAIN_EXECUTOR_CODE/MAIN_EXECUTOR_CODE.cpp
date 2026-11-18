@@ -52,6 +52,8 @@ GarbyState garbyState  = GarbyState::IDLE;
 bool       resetQueued = false;
 bool       routeFaultLatched = false;
 bool       outboundComplete = false;
+// Completion telemetry survives status queries/reconnect, but never a new motion or reboot.
+bool       returnComplete = false;
 static String resetRequestId;
 enum class ResetOutcome { NONE, ACTIVE, DONE, FAILED };
 static ResetOutcome resetOutcome = ResetOutcome::NONE;
@@ -87,6 +89,96 @@ static unsigned long lastStatusRequestMs = 0;
 static unsigned long lastReadyRecoveryMs = 0;
 static uint32_t motionBaseSpeed = MAX_SPEED;
 
+// Owner-requested bench controls (2026-11-15). No persistent/global bypass:
+// each finite request carries its selected gates and needs a live Pi lease.
+// Owner (2026-11-16): minimum developer speed setting 30 cm/s. Nominal geometry:
+// ceil(30 * 1600 / (pi * 6.5)) = 2351 steps/s. Ramps and turn braking can be slower.
+static constexpr uint32_t DEVELOPER_MIN_SPEED_HZ = 2351;
+static constexpr uint32_t TEST_LEASE_MS = 800, TEST_LIMIT_MS = 8000, TEST_SPEED_HZ = DEVELOPER_MIN_SPEED_HZ;
+static constexpr uint32_t TEST_TURN90_LIMIT_MS = 30000;
+static constexpr uint8_t TEST_LIDAR = 1, TEST_MPU = 2, TEST_SONAR = 4;
+// Remote control (owner, 2026-11-16): the Developer window's arrows drive only while
+// held. W forward, S backward, A spin left, D spin right; the amount is the speed
+// (2351 Slow or 4702 Fast steps/s, nominal 30/60 cm/s). No step value, no time limit, no sensor gates: the
+// owner's hand is the stop ([TEST END:id]), backed by a short KEEP lease and the
+// emergency stop. It never starts or resumes a route.
+// The Pi renews a held drive every 120 ms; 500 ms rides out a few late BLE writes.
+static constexpr uint32_t HOLD_LEASE_MS = 500, HOLD_MAX_SPEED_HZ = 2 * DEVELOPER_MIN_SPEED_HZ;
+static bool developerHoldEnded = false;
+static bool isHoldAction(char action) {
+  return action == 'W' || action == 'S' || action == 'A' || action == 'D';
+}
+static String developerId, developerPacket, developerOutcome, developerFailure;
+static uint64_t developerLastNumber = 0;
+static bool developerQueued = false, developerExecuting = false;
+static char developerAction = 'I';
+static bool developerHold() { return isHoldAction(developerAction); }
+static uint32_t developerLeaseMs() { return developerHold() ? HOLD_LEASE_MS : TEST_LEASE_MS; }
+static uint16_t developerAmount = 0;
+static uint32_t developerLimitMs() {
+  return (developerAction == 'L' || developerAction == 'R') && developerAmount == 90
+      ? TEST_TURN90_LIMIT_MS : TEST_LIMIT_MS;
+}
+static uint8_t developerSensors = 7;
+static uint32_t developerLeaseAt = 0, developerStartedAt = 0;
+static long developerStart1 = 0, developerStart2 = 0;
+// RunStart (owner, 2026-11-16): the Developer window's own list of steps, e.g. forward
+// 10000 then turn left 980. No LiDAR, sonar or gyro check and no time limit, by the
+// owner's choice; the 800 ms KEEP lease and the emergency stop still end it. Action P
+// starts a new list, C continues a stopped one to its end, U drives it back to where it
+// started (the steps undone in reverse order, the same wheel steps the other way). The
+// wheel targets of every step are fixed when the list starts, so wherever it stops
+// there is an exact place to continue or undo from. Any other motion forgets it.
+static constexpr uint8_t RUN_MAX_STEPS = 20;
+static constexpr uint32_t RUN_MAX_STEP = 100000, RUN_BUMP_STEPS = 100;
+// Up to 8000 steps/s (owner, 2026-11-16), the Calib floor-test speed; routes keep MAX_SPEED.
+static constexpr uint32_t RUN_MIN_SPEED_HZ = DEVELOPER_MIN_SPEED_HZ, RUN_MAX_SPEED_HZ = 8000;
+static constexpr uint32_t RUN_MIN_ACCEL = 100, RUN_MAX_ACCEL = 20000;
+static constexpr uint32_t RUN_STEP_PAUSE_MS = 250, RUN_BUMP_PAUSE_MS = 300, RUN_REPORT_MS = 250;
+// op: F forward, B backward, L/R spin left/right in place, C calibration bumps (forward
+// in moves of RUN_BUMP_STEPS). d1/d2: each motor's signed travel, fixed at the start.
+struct RunStep { char op; int32_t steps, d1, d2; };
+static RunStep runSteps[RUN_MAX_STEPS];
+static uint8_t runCount = 0, runIndex = 0;
+static uint32_t runSpeedHz = RUN_MIN_SPEED_HZ, runAccel = RUN_MIN_ACCEL;
+static long runOrigin1 = 0, runOrigin2 = 0;
+static String runProgram, runSavedId;
+static bool runSaved = false;
+static uint32_t runReportedAt = 0;
+static bool isRunAction(char action) { return action == 'P' || action == 'C' || action == 'U'; }
+static bool developerRun() { return isRunAction(developerAction); }
+static void sendDeveloperOutcome();
+static void serviceDeveloperWatchdog();
+static const char* developerHoldCode(const char* fallback);
+// True once this test's wheels have left their starting positions.
+static bool developerTestMoved() {
+  return developerExecuting && stepper1 && stepper2 &&
+         (stepper1->getCurrentPosition() != developerStart1 ||
+          stepper2->getCurrentPosition() != developerStart2);
+}
+// A bench test never restarts its wheels after a hold (owner, 2026-11-15: a lifted
+// turn with every sensor selected stop-started loudly on flickering clearance). The
+// test ends and names the hold instead. Routes keep their hold-and-resume rule.
+static bool developerEndsOnHold(const char* fallback) {
+  if (!developerExecuting) return false;
+  if (!developerFailure.length()) developerFailure = developerHoldCode(fallback);
+  return true;
+}
+static bool testBypassesPath() { return developerExecuting && !(developerSensors & TEST_LIDAR); }
+static bool testBypassesSonar() { return developerExecuting && !(developerSensors & TEST_SONAR); }
+static bool headingFeedbackRequired() { return !developerExecuting || (developerSensors & TEST_MPU); }
+static uint32_t limitedTestSpeed(uint32_t speed) {
+  if (!developerExecuting) return speed;
+  if (developerRun()) return min(speed, runSpeedHz);
+  return min(speed, developerHold() ? min((uint32_t)developerAmount, HOLD_MAX_SPEED_HZ) : TEST_SPEED_HZ);
+}
+static void abortDeveloperTest(const char* reason) {
+  if (!developerExecuting && !developerQueued) return;
+  if (!developerFailure.length()) developerFailure = reason;
+  resetQueued = true;
+  emergencyStopMotors();
+}
+
 static portMUX_TYPE ultrasonicMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool ultrasonicAwaitingEcho = false;
 static volatile bool ultrasonicEchoRiseSeen = false;
@@ -116,6 +208,14 @@ static int ultrasonicPingCommand = DEFAULT_VIEW;    // servo command the ping in
 static unsigned long ultrasonicEchoHighSinceMs = 0;
 static bool spinInProgress = false;                 // spinning in place: forward-only pings
 static bool spinSonarCheck = false;                 // inside a turn: floor-level spin clearance applies
+// Reverse parking (2026-11-16): between [BACK:START] and [BACK:END] the robot drives
+// backwards. The sonar faces away from that travel: it neither holds nor slows it.
+static bool backingActive = false;
+static unsigned long backingStartedMs = 0;
+static const char* parkingHoldReason = nullptr;
+// A plain GO can already be on its way when backing starts. Only one still arriving
+// this long after [BACK:START] means a bridge without the backing rule.
+#define BACKING_GO_GRACE_MS 1000UL
 // Station steps and the [LEG:..] notice (2026-11-14, RouteResume.h STEP_*). Set
 // by the route runner for the step in progress, cleared when the route ends.
 static bool stationStep = false;                    // LiDAR walls are the station's: no wall alignment
@@ -157,11 +257,21 @@ static void cancelUltrasonicPing();
 static void sendOperatorStatus();
 static void serviceOperatorReboot();
 
+static void serviceDeveloperWatchdog() {
+  if (!developerQueued && !developerExecuting) return;
+  const uint32_t now = millis();
+  if (operatorEmergencyLatched) abortDeveloperTest("EMERGENCY_STOP");
+  else if (now - developerLeaseAt > developerLeaseMs()) abortDeveloperTest("LEASE_EXPIRED");
+  else if (!developerHold() && !developerRun() && now - developerStartedAt >= developerLimitMs())
+    // Never moved: say what held it rather than only that time ran out.
+    abortDeveloperTest(developerExecuting && !developerTestMoved()
+                           ? developerHoldCode("TEST_TIMEOUT") : "TEST_TIMEOUT");
+}
+
 // Defined with the ultrasonic/servo implementation below. These declarations
 // let every motor loop service safety sensing without blocking on pulseIn().
 static void commandServoTracked(int angle);
 static bool servoSettled();
-static void cancelActiveNudge(bool addSettleTime);
 
 static volatile bool smsWorkerBusy = false;
 static volatile bool modemServiceBusy = false;
@@ -766,10 +876,14 @@ static void resetGoEvidence() {
 static String motionHoldReason(const char* linkReason) {
   if (lastStopReason.indexOf("MPU") >= 0) return "MPU:HEADING_UNAVAILABLE (bridge MPU recovering)";
   if (lastStopReason.indexOf("TURN") >= 0) return "PATH:TURN_CLEARANCE from LiDAR";
+  if (lastStopReason.indexOf("BACK_UNCONFIRMED") >= 0)
+    return "LINK:BACKING_NOT_CONFIRMED (bridge firmware without reverse parking?)";
+  if (lastStopReason.indexOf("BACK") >= 0) return "PATH:BACK_CLEARANCE from LiDAR (rear)";
   return linkFaultActive ? linkReason : "PATH:BLOCKED from LiDAR";
 }
 
 static void latchUartFault() {
+  abortDeveloperTest("UART_FAULT");
   // Parser context only invalidates permission. The motion loop owns braking,
   // avoiding recursive pollESP() calls from controlledStopMotors().
   shouldStop = true;
@@ -789,6 +903,7 @@ static void noteBridgeRx() {
 }
 
 bool pathCommandFresh() {
+  if (testBypassesPath()) return !developerFailure.length() && millis() - developerLeaseAt <= developerLeaseMs();
   return pathCommandSeen &&
          (millis() - lastPathCommandMs <= PATH_COMMAND_TIMEOUT_MS);
 }
@@ -831,10 +946,12 @@ static void reportMotionStatus(bool force) {
   if (operatorEmergencyLatched) reason = "EMERGENCY_STOP";
   else if (routeFaultLatched) reason = "ROUTE_FAULT";
   else if (!stepper1 || !stepper2) reason = "MOTORS_UNAVAILABLE";
+  else if (developerExecuting && headingFeedbackRequired() && !heading.headingReady(millis())) reason = "STOP:MPU";
   else if (!pathCommandFresh()) reason = "WAITING_FOR_PATH";
   else if (shouldStop) reason = lastStopReason.length() ? lastStopReason : String("WAITING_FOR_PATH");
   else if (frontObstacleDetected() || (haltWaitingForClearance && haltRequiresLocal)) reason = "LOCAL_OBSTACLE";
   else if (haltWaitingForClearance) reason = "CONFIRMING_CLEARANCE";
+  else if (parkingHoldReason) reason = parkingHoldReason;
   else reason = "CLEAR";
   if (force || reason != lastReportedMotion) {
     lastReportedMotion = reason;
@@ -842,10 +959,55 @@ static void reportMotionStatus(bool force) {
   }
 }
 
+// Which selected sensor is holding a developer test, as an [A-Z_] wire code for the
+// Pi's plain-language message. Telemetry only: the gates themselves are unchanged.
+static const char* developerHoldCode(const char* fallback) {
+  if (testBypassesPath() && !pathCommandFresh()) return "LEASE_EXPIRED";
+  if (headingFeedbackRequired() && !heading.headingReady((uint32_t)millis())) return "HELD_MPU";
+  if (shouldStop && lastStopReason.indexOf("MPU") >= 0) return "HELD_MPU";
+  if (frontObstacleDetected() || (haltWaitingForClearance && haltRequiresLocal)) return "HELD_SONAR";
+  // The backward test's own rear check (the bridge's R=C, the Pi's rear box and bands).
+  if (backingActive && (shouldStop || !pathCommandFresh()) && lastStopReason.startsWith("STOP:BACK"))
+    return "HELD_REAR";
+  if (shouldStop || !pathCommandFresh()) return "HELD_LIDAR";
+  return fallback;
+}
+
+// RunStart: wheel positions at the start of step k (k == runCount: the end of the list).
+static void runBoundary(uint8_t k, long* b1, long* b2) {
+  long p1 = runOrigin1, p2 = runOrigin2;
+  for (uint8_t i = 0; i < k && i < runCount; ++i) { p1 += runSteps[i].d1; p2 += runSteps[i].d2; }
+  *b1 = p1; *b2 = p2;
+}
+// Steps of step runIndex already travelled (both wheels move equally far in every step).
+static int32_t runDoneInStep() {
+  if (!stepper1 || !stepper2 || runIndex >= runCount) return 0;
+  long b1 = 0, b2 = 0;
+  runBoundary(runIndex, &b1, &b2);
+  const long done = (labs(stepper1->getCurrentPosition() - b1) + labs(stepper2->getCurrentPosition() - b2) + 1) / 2;
+  return (int32_t)min(done, (long)runSteps[runIndex].steps);
+}
+// The saved list, wherever it ended or stopped, so a Pi that restarted can show it and
+// offer Continue run / Reverse to start. [RUN SAVED:0]: nothing saved.
+static void reportRunSaved() {
+  if (!runSaved) { ESP_Serial.println("[RUN SAVED:0]"); return; }
+  ESP_Serial.printf("[RUN SAVED:%s:%u:%ld:%lu:%lu:%s]\n", runSavedId.c_str(), (unsigned)runIndex,
+                    (long)runDoneInStep(), (unsigned long)runSpeedHz, (unsigned long)runAccel,
+                    runProgram.c_str());
+}
+// Any other motion (a route, a bench test, the remote) moves the wheels away from the
+// saved place, so the list could no longer be continued or undone exactly.
+void discardRunCheckpoint() {
+  runSaved = false;
+  runSavedId = "";
+}
+
 static void reportRobotStatus() {
   // Replay the whole turn scope, including holds, before announcing readiness.
   // A restarted bridge has no RAM history of the original TURN:START notice.
   ESP_Serial.println(spinSonarCheck ? "[TURN:START]" : "[TURN:END]");
+  // The backing scope too (2026-11-16): the bridge needs R=C inside it.
+  ESP_Serial.println(backingActive ? "[BACK:START]" : "[BACK:END]");
   // This capability/heartbeat crosses both UART directions and BLE. It
   // never waits for a load-cell, bin sensor, modem, or cloud reading.
   if (manualStartConnectionReady()) {
@@ -856,12 +1018,25 @@ static void reportRobotStatus() {
         !routeFaultLatched && !resetQueued && !operatorEmergencyLatched &&
         stepper1 && stepper2) ESP_Serial.println("[DISPOSAL READY:1]");
   }
-  if (routeFaultLatched) ESP_Serial.println("[ROUTE FAULT]");
+  if (manualStartConnectionReady() && garbyState == GarbyState::IDLE &&
+      !operatorEmergencyLatched && !routeFaultLatched && !resetQueued &&
+      !outboundComplete && stepper1 && stepper2) ESP_Serial.println("[TEST READY:1]");
+  float rawWall = 0.0f;
+  const bool walls = heading.wallMeasurement(millis(), &rawWall);
+  ESP_Serial.printf("[TEST DATA:M=%d:Y=%ld:W=%d:H=%ld]\n",
+                    heading.headingReady(millis()) ? 1 : 0, lroundf(heading.heading() * 100.0f),
+                    walls ? 1 : 0, lroundf(rawWall * 100.0f));
+  reportRunSaved();
+  if (garbyState == GarbyState::TESTING) ESP_Serial.println("[TESTING]");
+  else if (routeFaultLatched) ESP_Serial.println("[ROUTE FAULT]");
   else if (outboundComplete) ESP_Serial.println("[OUTBOUND COMPLETE]");
   else if (garbyState == GarbyState::RETURNING) ESP_Serial.println("[RETURNING]");
   else if (garbyState == GarbyState::REVERSING) ESP_Serial.println("[REVERSING]");
   else if (garbyState == GarbyState::RUNNING) ESP_Serial.println("[RUNNING]");
-  else ESP_Serial.println("[IDLE]");
+  else {
+    ESP_Serial.println("[IDLE]");
+    if (returnComplete) ESP_Serial.println("[RETURN COMPLETE]");
+  }
   reportMotionStatus(true);
   sendOperatorStatus();
 }
@@ -869,7 +1044,14 @@ static void reportRobotStatus() {
 bool serviceOperatorStop() {
   if (!operatorEmergencyLatched) return false;
   emergencyStopMotors();
+  if (developerQueued && !developerExecuting) {
+    developerFailure = "EMERGENCY_STOP";
+    developerOutcome = "FAILED";
+    developerQueued = false;
+    sendDeveloperOutcome();
+  }
   const bool changed = garbyState != GarbyState::IDLE || outboundComplete;
+  if (changed) returnComplete = false;
   garbyState = GarbyState::IDLE;
   outboundComplete = false;
   resetQueued = false;
@@ -882,6 +1064,170 @@ bool serviceOperatorStop() {
 static void sendStartOutcome() {
   if (startAccepted) ESP_Serial.println("[START ACK:" + startRequestId + "]");
   else ESP_Serial.println("[START FAILED:" + startRequestId + ":" + startFailure + "]");
+}
+
+static bool testNumber(const String& value, uint64_t* out, bool zero = false) {
+  if (!value.length() || value.length() > 16 || (value.length() > 1 && value.charAt(0) == '0')) return false;
+  uint64_t number = 0;
+  for (unsigned i = 0; i < value.length(); ++i) {
+    const char c = value.charAt(i);
+    if (c < '0' || c > '9') return false;
+    number = number * 10 + (unsigned)(c - '0');
+  }
+  if (!zero && !number) return false;
+  *out = number;
+  return true;
+}
+static void sendDeveloperOutcome() {
+  ESP_Serial.println("[TEST " + developerOutcome + ":" + developerId +
+                     (developerOutcome == "FAILED" ? ":" + developerFailure : String("")) + "]");
+}
+// RunStart requests: [TEST:<id>:P:<speed>:<accel>:<op><steps>,...] (op F, B, L, R or C,
+// 1..RUN_MAX_STEP steps, 1..RUN_MAX_STEPS of them), or [TEST:<id>:C:<run>] / [TEST:<id>:U:<run>]
+// to continue or undo the saved list <run>. Returns nullptr when well formed.
+struct RunPlan {
+  uint8_t count = 0;
+  RunStep steps[RUN_MAX_STEPS];
+  uint32_t speed = 0, accel = 0;
+  String program, from;
+};
+static const char* parseRunCommand(const String& message, int fieldsAt, char action, RunPlan* plan) {
+  const String fields = message.substring(fieldsAt + 1, message.length() - 1);
+  uint64_t value = 0;
+  if (action != 'P') {
+    if (fields.indexOf(':') >= 0 || !testNumber(fields, &value)) return "INVALID_RUN";
+    plan->from = fields;
+    return nullptr;
+  }
+  const int s = fields.indexOf(':'), t = fields.indexOf(':', s + 1);
+  if (s < 0 || t < 0 || fields.indexOf(':', t + 1) >= 0) return "INVALID_RUN";
+  if (!testNumber(fields.substring(0, s), &value) || value < RUN_MIN_SPEED_HZ || value > RUN_MAX_SPEED_HZ)
+    return "INVALID_RUN";
+  plan->speed = (uint32_t)value;
+  if (!testNumber(fields.substring(s + 1, t), &value) || value < RUN_MIN_ACCEL || value > RUN_MAX_ACCEL)
+    return "INVALID_RUN";
+  plan->accel = (uint32_t)value;
+  plan->program = fields.substring(t + 1);
+  int at = 0;
+  while (true) {
+    if (plan->count >= RUN_MAX_STEPS) return "INVALID_RUN";
+    const int comma = plan->program.indexOf(',', at);
+    const String item = plan->program.substring(at, comma < 0 ? plan->program.length() : comma);
+    if (item.length() < 2 || String("FBLRC").indexOf(item.charAt(0)) < 0 ||
+        !testNumber(item.substring(1), &value) || value > RUN_MAX_STEP) return "INVALID_RUN";
+    const int32_t n = (int32_t)value;
+    RunStep& step = plan->steps[plan->count++];
+    step.op = item.charAt(0);
+    step.steps = n;
+    // Spins use the current guess of which motor is the left wheel, as the remote does.
+    const int32_t left = step.op == 'L' ? -n : step.op == 'R' ? n : step.op == 'B' ? -n : n;
+    const int32_t right = step.op == 'L' ? n : step.op == 'R' ? -n : left;
+    step.d1 = heading.motor1IsLeft() ? left : right;
+    step.d2 = heading.motor1IsLeft() ? right : left;
+    if (comma < 0) break;
+    at = comma + 1;
+  }
+  return nullptr;
+}
+static bool processDeveloperCommand(const String& message) {
+  if (message.startsWith("[RUN CLEAR:") && message.endsWith("]")) {
+    // RunStart's Discard: forget the saved list. Never while one is running.
+    const String id = message.substring(11, message.length() - 1);
+    if (runSaved && id == runSavedId && !developerQueued && !developerExecuting) discardRunCheckpoint();
+    reportRunSaved();
+    noteBridgeRx();
+    ESP_Serial.println(ACK_MSG);
+    return true;
+  }
+  if (message.startsWith("[TEST KEEP:") && message.endsWith("]")) {
+    const String id = message.substring(11, message.length() - 1);
+    if (id == developerId && (developerQueued || developerExecuting) &&
+        !developerFailure.length() && millis() - developerLeaseAt <= developerLeaseMs()) {
+      developerLeaseAt = millis();
+      noteBridgeRx();
+    }
+    ESP_Serial.println(ACK_MSG);
+    return true;
+  }
+  if (message.startsWith("[TEST END:") && message.endsWith("]")) {
+    // The arrow was let go. Only the running held drive's own ID ends it.
+    const String id = message.substring(10, message.length() - 1);
+    if (id == developerId && (developerQueued || developerExecuting) && developerHold())
+      developerHoldEnded = true;
+    noteBridgeRx();
+    ESP_Serial.println(ACK_MSG);
+    return true;
+  }
+  if (!message.startsWith("[TEST:")) return false;
+  if (!message.endsWith("]")) return true;
+  const int a = message.indexOf(':', 6);
+  if (a < 0) return true;
+  const String id = message.substring(6, a);
+  uint64_t number = 0, amount = 0, sensors = 0;
+  if (!testNumber(id, &number)) return true;
+  auto reject = [&](const char* reason) {
+    ESP_Serial.println("[TEST FAILED:" + id + ":" + reason + "]");
+    ESP_Serial.println(ACK_MSG);
+  };
+  if (id == developerId) {
+    if (message == developerPacket) sendDeveloperOutcome();
+    else reject("ID_REUSED");
+    return true;
+  }
+  if (number <= developerLastNumber) { reject("STALE_REQUEST"); return true; }
+  developerLastNumber = number;
+  const int b = message.indexOf(':', a + 1), c = message.indexOf(':', b + 1);
+  const char action = b == a + 2 ? message.charAt(a + 1) : '\0';
+  RunPlan plan;
+  if (isRunAction(action)) {
+    // A RunStart list carries no sensor gates: nothing is checked but the lease.
+    const char* invalid = parseRunCommand(message, b, action, &plan);
+    if (invalid) { reject(invalid); return true; }
+  } else {
+    if (b != a + 2 || c < 0) { reject("INVALID_TEST"); return true; }
+    if (!testNumber(message.substring(b + 1, c), &amount, true) ||
+        !testNumber(message.substring(c + 1, message.length() - 1), &sensors, true) || sensors > 7 ||
+        !(((action == 'F' || action == 'B') && amount >= 1 && amount <= 400) ||
+          ((action == '1' || action == '2') && amount >= 1 && amount <= 100) ||
+          ((action == 'L' || action == 'R') && ((amount >= 1 && amount <= 15) || amount == 90) &&
+           (sensors & TEST_MPU)) ||
+          (isHoldAction(action) && amount >= DEVELOPER_MIN_SPEED_HZ && amount <= HOLD_MAX_SPEED_HZ && sensors == 0) ||
+          (action == 'I' && amount == 0))) { reject("INVALID_TEST"); return true; }
+  }
+  if (operatorEmergencyLatched) { reject("EMERGENCY_STOP"); return true; }
+  if (!manualStartConnectionReady()) { reject("NOT_READY"); return true; }
+  if (developerExecuting || developerQueued || garbyState != GarbyState::IDLE || outboundComplete || motorsRunning()) {
+    reject("NOT_IDLE"); return true;
+  }
+  if (routeFaultLatched || resetQueued || operatorRebootScheduled) { reject("ROUTE_FAULT"); return true; }
+  if (!stepper1 || !stepper2) { reject("MOTORS_UNAVAILABLE"); return true; }
+  if ((action == 'C' || action == 'U') && (!runSaved || plan.from != runSavedId)) {
+    reject("NO_RUN"); return true;  // nothing saved, or another list than the Pi's
+  }
+  if (action == 'P') {
+    // A new list starts here; the wheel targets of every step are fixed now.
+    runCount = plan.count;
+    for (uint8_t i = 0; i < plan.count; ++i) runSteps[i] = plan.steps[i];
+    runSpeedHz = plan.speed; runAccel = plan.accel; runProgram = plan.program;
+    runOrigin1 = stepper1->getCurrentPosition(); runOrigin2 = stepper2->getCurrentPosition();
+    runIndex = 0;
+    runSaved = true;
+    runSavedId = id;
+  } else if (isRunAction(action)) {
+    runSavedId = id;  // this request now owns the list: the next Continue/Reverse names it
+  } else {
+    discardRunCheckpoint();  // a bench test or the remote moves the wheels elsewhere
+  }
+  developerId = id; developerPacket = message; developerOutcome = "ACK"; developerFailure = "";
+  developerAction = action; developerAmount = (uint16_t)amount; developerSensors = (uint8_t)sensors;
+  developerHoldEnded = false;
+  developerLeaseAt = developerStartedAt = millis(); developerQueued = true;
+  operatorManualStartRequired = true;
+  routeResume.endRoute(); routeResume.discard();
+  garbyState = GarbyState::TESTING;
+  returnComplete = false;
+  sendDeveloperOutcome(); reportRobotStatus(); ESP_Serial.println(ACK_MSG);
+  return true;
 }
 
 static bool validOperatorId(const String& id) {
@@ -1001,6 +1347,7 @@ static void processOperatorCommand(const String& espMsg) {
         routeResume.armReverse();
         outboundComplete = false;
         garbyState = GarbyState::REVERSING;
+        returnComplete = false;
         queueSMSNotice(SmsNoticeKind::EMERGENCY,
             "GARBY: Emergency stop released; the operator sent the robot back to the route start. Motion awaits safety clearance.", 'U');
       } else if (continuing) {
@@ -1008,6 +1355,7 @@ static void processOperatorCommand(const String& espMsg) {
         routeResume.arm();
         outboundComplete = false;
         garbyState = continuedRoute == RouteResume::RETURN ? GarbyState::RETURNING : GarbyState::RUNNING;
+        returnComplete = false;
         queueSMSNotice(SmsNoticeKind::EMERGENCY,
             "GARBY: Emergency stop released; the operator continued the route. Motion awaits safety clearance.", 'U');
       } else {
@@ -1064,6 +1412,7 @@ static void processESPMessage(const String& espMsg) {
     // The 50 Hz MPU stream is heading evidence only: no ACK, no link or path
     // freshness, and it can never release a STOP.
     if (heading.handleLine(espMsg.c_str(), (uint32_t)millis())) return;
+    if (processDeveloperCommand(espMsg)) return;
     if (espMsg.startsWith("[HEALTH:")) {
       // Operational telemetry is ACKed for bridge flow control, but never
       // counts as path evidence, a startup handshake, or bridge readiness.
@@ -1080,6 +1429,10 @@ static void processESPMessage(const String& espMsg) {
       return;
     }
     if (espMsg == "[BLE CONNECTION ESTABLISHED]") {
+      abortDeveloperTest("SESSION_CHANGED");
+      // A new Pi process restarts A at zero. Only rear evidence is reset; the
+      // continuous gyro frame and route/checkpoint remain intact.
+      heading.resetRearEvidence();
       noteBridgeRx();
       bridgeLinkObserved = bridgeLinkUp = true;
       observeNotice(linkMonitor, 'U', (uint32_t)millis());
@@ -1146,6 +1499,7 @@ static void processESPMessage(const String& espMsg) {
         // path freshness, and local obstacle sensing in charge of the wheels.
         outboundComplete = false;
         garbyState = GarbyState::RUNNING;
+        returnComplete = false;
         routeResume.discard();
         startAccepted = true;
         operatorManualStartRequired = false;
@@ -1177,6 +1531,14 @@ static void processESPMessage(const String& espMsg) {
           ESP_Serial.println(ACK_MSG);
           return;
         }
+      }
+      if (developerQueued || developerExecuting) {
+        // A return/reset cannot tear down a live test's scope while its motor
+        // stack is still running. Abort it, then unwind through its own cleanup.
+        abortDeveloperTest("RESET_REQUESTED");
+        if (correlated) sendResetOutcome(id, ResetOutcome::FAILED);
+        ESP_Serial.println(ACK_MSG);
+        return;
       }
       if (operatorEmergencyLatched) {
         if (correlated) sendResetOutcome(id, ResetOutcome::FAILED);
@@ -1222,6 +1584,16 @@ static void processESPMessage(const String& espMsg) {
     }
 
     if (espMsg.startsWith("STOP")) {
+      if (espMsg.indexOf("LINK") >= 0 || espMsg.indexOf("PROTOCOL") >= 0 ||
+          espMsg.indexOf("OPERATOR") >= 0 || espMsg.indexOf("SEQUENCE") >= 0)
+        // The bridge relays the operator's stop just before its [OP:..:ESTOP] line: name it.
+        abortDeveloperTest(espMsg.indexOf("OPERATOR") >= 0 ? "EMERGENCY_STOP" : "LINK_OR_STOP");
+      else if (developerExecuting && (testBypassesPath() ||
+               (!headingFeedbackRequired() && espMsg == "STOP:MPU"))) {
+        // Explicit per-test selection only. The lease and emergency stop remain.
+        ESP_Serial.println(ACK_MSG);
+        return;
+      }
       noteBridgeRx();
       if (espMsg.indexOf("LINK") >= 0 && bridgeLinkObserved) {
         bridgeLinkUp = false;
@@ -1246,7 +1618,36 @@ static void processESPMessage(const String& espMsg) {
       return;
     }
 
-    if (espMsg == "GO" || espMsg == "GO:SLOW") {
+    // Reverse parking (2026-11-16): inside the backing scope only GO:BACK, which the
+    // bridge sends once the Pi's rear-travel clearance R=C is in, permits motion.
+    // A plain GO there (a bridge without that rule) and a GO:BACK outside it (the
+    // front was not checked) are fresh link evidence but never permission.
+    const bool backGo = espMsg == "GO:BACK";
+    if ((espMsg == "GO" || espMsg == "GO:SLOW" || backGo) && backGo != backingActive) {
+      noteBridgeRx();
+      if (testBypassesPath()) {
+        // A test with LiDAR explicitly deselected: STOP is ignored above and only the
+        // lease counts, so a GO of the wrong kind must not become a hold either.
+        ESP_Serial.println(ACK_MSG);
+        return;
+      }
+      pathCommandSeen = true;
+      lastPathCommandMs = millis();
+      resetGoEvidence();
+      shouldStop = true;
+      // One already in flight as the scope began or ended is ordinary; only a plain GO
+      // that keeps coming a second into backing names the bridge as the cause.
+      const bool unconfirmed = backingActive && millis() - backingStartedMs >= BACKING_GO_GRACE_MS;
+      const char* reason = unconfirmed ? "STOP:BACK_UNCONFIRMED"
+                                       : (backingActive ? "STOP:BACK_CLEARANCE" : "STOP:CLEARING");
+      if (unconfirmed && lastStopReason != reason)
+        Serial.println("[STOP] Backing needs GO:BACK: the bridge has not confirmed the rear clearance");
+      lastStopReason = reason;
+      reportMotionStatus();
+      ESP_Serial.println(ACK_MSG);
+      return;
+    }
+    if (espMsg == "GO" || espMsg == "GO:SLOW" || backGo) {
       noteBridgeRx();
       if (espMsg == "GO:SLOW") {
         lidarSlowActive = true;
@@ -1299,6 +1700,7 @@ static void processESPMessage(const String& espMsg) {
 }
 
 void pollESP() {
+  serviceDeveloperWatchdog();
   serviceOperatorReboot();
   // Wheel positions bridge the gaps between MPU samples.
   if (stepper1 && stepper2) heading.attach(stepper1, stepper2);
@@ -1387,6 +1789,8 @@ class ClearanceWaitNotice {
 // clear distance and no side bearing blocking. Inside a turn: nothing inside the
 // circle the base sweeps (frontObstacleDetected() checks exactly that there).
 static bool sonarClearForResume() {
+  if (testBypassesSonar()) return true;
+  if (backingActive) return true;  // it faces away from a backing move
   if (!operatorSonarEnabled) return true;
   if (frontObstacleDetected()) return false;
   if (spinSonarCheck) return true;
@@ -1455,7 +1859,7 @@ void haltAndWait(const String& reason) {
     // Return to the common motion gate even while STOP/sonar still holds us.
     // It owns heading recovery and its deadline; this clearance-only wait must
     // never hide an MPU outage or resume the wheels by itself.
-    if (!heading.headingReady((uint32_t)millis())) return;
+    if (headingFeedbackRequired() && !heading.headingReady((uint32_t)millis())) return;
 
     bool newClearanceEvidence = false;
     bool localClear = true;
@@ -1538,13 +1942,15 @@ static String holdReasonNow(const char* where) {
 // failed segment, which latched a route fault and kept the robot stopped for good.
 static bool waitUntilMotionPermitted(const char* where) {
   while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
-    if (!heading.headingReady((uint32_t)millis())) {
+    if (headingFeedbackRequired() && !heading.headingReady((uint32_t)millis())) {
       activeBrakeStopMotors();
       movingForward = false;
+      if (developerTestMoved() && developerEndsOnHold("HELD_MPU")) return false;
       if (!holdForHeading()) return false;
       continue;
     }
     if (motionPermitted()) return true;
+    if (developerTestMoved() && developerEndsOnHold("TEST_TIMEOUT")) return false;
     haltAndWait(holdReasonNow(where));
   }
   return false;
@@ -1573,7 +1979,7 @@ bool movementGate(bool isNudgeEnabled) {
   // is the only sensor below the LiDAR plane. No echo counts as a sample, so
   // this only waits for a ping that is already due.
   const unsigned long sampleWaitStarted = millis();
-  while (operatorSonarEnabled && !frontDistanceFresh() &&
+  while (operatorSonarEnabled && !testBypassesSonar() && !frontDistanceFresh() &&
          millis() - sampleWaitStarted < ULTRASONIC_SAMPLE_MAX_AGE_MS) {
     pollESP();
     serviceUltrasonic();
@@ -1589,15 +1995,18 @@ bool safeMoveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
   return moveDistance(steps, isADJ, isNudgeEnabled);
 }
 
-bool safeTurnLeft(float degrees) {
-  return turnLeft(degrees);  // the turn waits for its own fresh clearance
+bool safeTurnLeft(float degrees, bool alignAfter) {
+  return turnLeft(degrees, alignAfter);  // the turn waits for its own fresh clearance
 }
 
-bool safeTurnRight(float degrees) {
-  return turnRight(degrees);
+bool safeTurnRight(float degrees, bool alignAfter) {
+  return turnRight(degrees, alignAfter);
 }
 
-void fullReset() {
+void fullReset(bool returnSucceeded) {
+  const bool arrived = returnSucceeded && garbyState == GarbyState::RETURNING &&
+      !operatorEmergencyLatched && !routeFaultLatched && !resetQueued;
+  developerQueued = developerExecuting = false;
   const bool clearedRouteFault = routeFaultNoticeRaised && !operatorEmergencyLatched;
   shouldStop = true;
   lidarSlowActive = false;
@@ -1615,11 +2024,13 @@ void fullReset() {
   routeFaultLatched = false;
   routeFaultNoticeRaised = false;
   outboundComplete = false;
+  returnComplete = arrived;
   garbyState = GarbyState::IDLE;
   routeResume.endRoute();
   routeResume.discard();
   Serial.println("[RESET] State cleared -- IDLE and fail-closed");
   ESP_Serial.println("[IDLE]");
+  if (returnComplete) ESP_Serial.println("[RETURN COMPLETE]");
   if (resetOutcome == ResetOutcome::ACTIVE) {
     resetOutcome = ResetOutcome::DONE;
     sendResetOutcome(resetRequestId, resetOutcome);
@@ -1704,6 +2115,10 @@ static bool serviceMotionProgress() {
 }
 
 static bool commandWheelTargets(long target1, long target2) {
+  if (developerExecuting) {
+    serviceDeveloperWatchdog();
+    if (resetQueued || developerFailure.length() || operatorEmergencyLatched) return false;
+  }
   // A live steering retarget must not refresh a stalled wheel's deadline.
   if (!motorsRunning()) resetMotionProgress();
   const auto result1 = stepper1->moveTo(target1);
@@ -1732,7 +2147,7 @@ class TurnSegmentNotice {
   TurnSegmentNotice() {
     ESP_Serial.println("[TURN:START]");
     if (!shouldStop) lastStopReason = "STOP:TURN_CLEARANCE";
-    shouldStop = true;
+    shouldStop = !testBypassesPath();
     resetGoEvidence();
     // A turn moves no part of the base forward: from here the sonar evidence is
     // the circle the base sweeps, at floor level (the LiDAR's sweep is above it).
@@ -1756,7 +2171,7 @@ struct SpinInProgress {
 // follow keeps surveying).
 #define SPIN_SURVEY_WAIT_MS 2500UL
 static void waitForSpinSurvey() {
-  if (!operatorSonarEnabled || operatorEmergencyLatched || stationWallAhead) return;
+  if (!operatorSonarEnabled || testBypassesSonar() || operatorEmergencyLatched || stationWallAhead) return;
   const uint32_t since = (uint32_t)millis();
   while (sonarSweep.spinClearance(since, (uint32_t)millis()) == SonarSweep::Spin::UNKNOWN &&
          (uint32_t)millis() - since < SPIN_SURVEY_WAIT_MS) {
@@ -1782,6 +2197,11 @@ static bool turnMustHalt() {
 }
 
 static bool setSpinSpeed(uint32_t speedHz) {
+  if (developerExecuting) {
+    serviceDeveloperWatchdog();
+    if (resetQueued || developerFailure.length() || operatorEmergencyLatched) return false;
+  }
+  speedHz = limitedTestSpeed(speedHz);
   if (stepper1->setSpeedInHz(speedHz) != 0 || stepper2->setSpeedInHz(speedHz) != 0)
     return false;
   stepper1->setAcceleration(ACCELERATION);
@@ -1833,6 +2253,7 @@ static SpinResult spinToward(float targetDeg, uint32_t maxSpeedHz) {
   }
 
   SpinResult result = SpinResult::REACHED;
+  uint32_t profileAt = (uint32_t)millis();
   while (true) {
     if (!serviceMotionProgress()) return SpinResult::FAILED;
     serviceTurnSafety();
@@ -1853,6 +2274,15 @@ static SpinResult spinToward(float targetDeg, uint32_t maxSpeedHz) {
     const float spunSteps = 0.5f * (
         fabsf((float)(stepper1->getCurrentPosition() - start1)) +
         fabsf((float)(stepper2->getCurrentPosition() - start2)));
+    // A 90-degree floor test must rotate the chassis. End a lifted/stalled test
+    // promptly instead of running it to the larger angle's full step limit.
+    if (developerExecuting && (developerAction == 'L' || developerAction == 'R') &&
+        developerAmount == 90 && fabsf(turned) < 0.5f &&
+        spunSteps > HeadingControl::TURN_WRONG_WAY_DEG * heading.stepsPerDeg() + 300.0f) {
+      developerFailure = "NO_ROTATION";
+      emergencyStopMotors();
+      return SpinResult::FAILED;
+    }
     if (spunSteps > stepLimit) {
       result = SpinResult::STEP_LIMIT;
       break;
@@ -1865,20 +2295,68 @@ static SpinResult spinToward(float targetDeg, uint32_t maxSpeedHz) {
                               turned < HeadingControl::TURN_WRONG_WAY_DEG;
     const uint32_t wanted = heading.turnProfileSpeed(remainingDeg,
         sideUnproven ? HeadingControl::TURN_CORRECTION_SPEED_HZ : maxSpeedHz, ACCELERATION);
-    if (wanted != speed) {
-      if (!setSpinSpeed(wanted)) {
+    // The faster developer setting uses the approach profile too. Bound its
+    // updates to 50 Hz instead of repeatedly rebuilding both stepper ramps.
+    // Heading/stop/lease checks above still run on every loop iteration.
+    if (wanted != speed && (!developerExecuting || now - profileAt >= 20U)) {
+      // A bench test caps both values at its test speed: re-sending an unchanged
+      // profile to both drivers several times a second only re-plans their ramps.
+      if (limitedTestSpeed(wanted) != limitedTestSpeed(speed) && !setSpinSpeed(wanted)) {
         emergencyStopMotors();
         return SpinResult::FAILED;
       }
       speed = wanted;
+      profileAt = now;
     }
     delay(1);
   }
-  stepper1->stopMove();
-  stepper2->stopMove();
-  if (!waitSpinStopped()) return SpinResult::FAILED;
+  if (result == SpinResult::REACHED) {
+    // The target heading has been reached: discard queued pulses now instead
+    // of adding a deceleration tail beyond it. This helper only stops the
+    // motors; a successful turn must not latch the operator emergency stop.
+    emergencyStopMotors();
+  } else {
+    stepper1->stopMove();
+    stepper2->stopMove();
+    if (!waitSpinStopped()) return SpinResult::FAILED;
+  }
   if (turnMustHalt()) return SpinResult::HALTED;
   return result;
+}
+
+// After aborting the wheel queues, keep observing fresh MPU samples. A fixed
+// delay can declare DONE while the chassis is still rotating. Only developer
+// measured turns use this extra check; it does not change the route hold rules.
+static bool settleDeveloperTurn() {
+  const uint32_t started = millis(), anchors = heading.reanchors();
+  uint32_t accepted = heading.accepted(), quietAt = 0;
+  float quietHeading = heading.heading();
+  while ((uint32_t)millis() - started < 1500U) {
+    serviceTurnSafety();
+    if (turnMustHalt()) {
+      developerEndsOnHold("TEST_TIMEOUT");
+      return false;
+    }
+    const uint32_t now = millis();
+    if (!heading.sampleFresh(now, HeadingControl::TURN_DATA_TIMEOUT_MS) ||
+        heading.reanchors() != anchors) {
+      if (!developerFailure.length()) developerFailure = "MPU_DATA_LOST";
+      return false;
+    }
+    if (heading.accepted() != accepted) {
+      accepted = heading.accepted();
+      if (fabsf(heading.latestRate()) > 1.0f) quietAt = 0;
+      else if (!quietAt || fabsf(heading.heading() - quietHeading) > 0.2f) {
+        quietAt = now;
+        quietHeading = heading.heading();
+      } else if (now - quietAt >= 200U && now - started >= HeadingControl::TURN_SETTLE_MS) {
+        return true;
+      }
+    }
+    delay(1);
+  }
+  if (!developerFailure.length()) developerFailure = "TURN_UNSETTLED";
+  return false;
 }
 
 static bool waitForTurnHeading(uint32_t timeoutMs) {
@@ -2082,17 +2560,25 @@ static bool rotateToHeading(float targetDeg, float commandedDeg, bool alignAfter
     }
     const float error = targetDeg - heading.heading();
     if (fabsf(error) <= HeadingControl::TURN_TOLERANCE_DEG) break;
-    const uint32_t maxSpeed = (passes == 0 || fabsf(error) > 10.0f)
+    const uint32_t maxSpeed = developerExecuting ? TEST_SPEED_HZ : (passes == 0 || fabsf(error) > 10.0f)
         ? HeadingControl::TURN_MAX_SPEED_HZ : HeadingControl::TURN_CORRECTION_SPEED_HZ;
     ++spins;
     const SpinResult result = spinToward(targetDeg, maxSpeed);
-    if (result == SpinResult::HALTED) continue;  // the hold above owns the wait
+    if (result == SpinResult::HALTED) {
+      if (developerEndsOnHold("TEST_TIMEOUT")) return false;  // a test never re-spins
+      continue;  // the hold above owns the wait
+    }
     if (result == SpinResult::FAILED) return false;
     ++passes;
+    if (result == SpinResult::DATA_LOST && developerExecuting) {
+      if (!developerFailure.length()) developerFailure = "MPU_DATA_LOST";
+      return false;
+    }
     if (result == SpinResult::WRONG_WAY) {
       // The motor-side guess was wrong; swap it once and retry.
       if (flipped || heading.turnSideConfirmed()) {
         Serial.println("[HEADING] TURN went the wrong way twice; route fault");
+        if (developerExecuting && !developerFailure.length()) developerFailure = "WRONG_WAY";
         return false;
       }
       heading.swapTurnSides();
@@ -2105,11 +2591,15 @@ static bool rotateToHeading(float targetDeg, float commandedDeg, bool alignAfter
       // 1.5x the expected steps without reaching the heading: slipping or lifted
       // wheels. The robot's direction is unknown, so never continue the route.
       Serial.println("[HEADING] TURN step limit: wheels slipping or not rotating the chassis");
+      // Lifted wheels: the gyro never sees the chassis rotate.
+      if (developerExecuting && !developerFailure.length()) developerFailure = "NO_ROTATION";
       return false;
     }
     if (result == SpinResult::REACHED) heading.confirmTurnSides();
     else clean = false;  // DATA_LOST: the next pass re-reads the heading
-    responsiveDelay(HeadingControl::TURN_SETTLE_MS);
+    if (developerExecuting) {
+      if (!settleDeveloperTurn()) return false;
+    } else responsiveDelay(HeadingControl::TURN_SETTLE_MS);
   }
   movingForward = false;
   const float finalError = heading.heading() - targetDeg;
@@ -2123,8 +2613,10 @@ static bool rotateToHeading(float targetDeg, float commandedDeg, bool alignAfter
     Serial.printf("[HEADING] first spin went the wrong way; set MOTOR1_IS_LEFT_GUESS = %s\n",
                   heading.motor1IsLeft() ? "true" : "false");
   }
-  if (fabsf(finalError) > 5.0f) {
-    Serial.println("[HEADING] TURN ended over 5 degrees from its target; route fault");
+  const float finalTolerance = developerExecuting ? HeadingControl::TURN_TOLERANCE_DEG : 5.0f;
+  if (fabsf(finalError) > finalTolerance) {
+    if (developerExecuting && !developerFailure.length()) developerFailure = "TURN_ACCURACY";
+    Serial.println("[HEADING] TURN ended outside its final heading tolerance");
     ESP_Serial.printf("[HEADING TURN cmd=%+.1f gyro=%+.1f err=%+.2f align=NONE fault=1]\n",
                       commandedDeg, gyroTurned, finalError);
     return false;
@@ -2151,22 +2643,22 @@ static bool rotateToHeading(float targetDeg, float commandedDeg, bool alignAfter
   return align != AlignResult::FAILED && !resetQueued && !routeFaultLatched;
 }
 
-bool turnLeft(float degrees) {
+bool turnLeft(float degrees, bool alignAfter) {
   if (!stepper1 || !stepper2 || !(degrees > 0.0f)) return false;
   TurnSegmentNotice notice;
   if (!movementGate(false)) return false;
   heading.addTurn(degrees);
   routeResume.commitTurn();
-  return rotateToHeading(heading.routeTarget(), degrees, !stationStep);
+  return rotateToHeading(heading.routeTarget(), degrees, alignAfter && !stationStep);
 }
 
-bool turnRight(float degrees) {
+bool turnRight(float degrees, bool alignAfter) {
   if (!stepper1 || !stepper2 || !(degrees > 0.0f)) return false;
   TurnSegmentNotice notice;
   if (!movementGate(false)) return false;
   heading.addTurn(-degrees);
   routeResume.commitTurn();
-  return rotateToHeading(heading.routeTarget(), -degrees, !stationStep);
+  return rotateToHeading(heading.routeTarget(), -degrees, alignAfter && !stationStep);
 }
 
 // A spin to an absolute heading that is not a route turn (pre-run centring). The
@@ -2269,13 +2761,13 @@ bool resumeRouteHeading(uint32_t reanchorsAtStop) {
 
 // A route turn interrupted after its angle entered the route frame: spin to that
 // target (the remaining angle), then align to the walls as every turn does.
-bool resumeRouteTurn() {
+bool resumeRouteTurn(bool alignAfter) {
   if (!stepper1 || !stepper2) return false;
   TurnSegmentNotice notice;
   if (!movementGate(false)) return false;
   routeResume.commitTurn();
   const float target = heading.routeTarget();
-  return rotateToHeading(target, HeadingControl::wrap180(target - heading.heading()), !stationStep);
+  return rotateToHeading(target, HeadingControl::wrap180(target - heading.heading()), alignAfter && !stationStep);
 }
 
 // ============================================================
@@ -2283,14 +2775,15 @@ bool resumeRouteTurn() {
 // ============================================================
 // [LEG:<O|R><F|B>:<step>/<count>:<op>:<flags>] names the route step in progress
 // (O outbound, R return; F forward, B the way back of a reverse run; op B bumps,
-// S straight, H long hallway, L/R turn; flags = RouteStep STEP_* bits). It is
+// S straight, H long hallway, L/R turn, K backing into the parking spot; flags =
+// RouteStep STEP_* bits). It is
 // sent when a step begins and every 2 s while it lasts; [LEG:0] ends it. The Pi
 // uses the STATION bit, while fresh, to leave the station's walls out of its
 // LiDAR holds. It is telemetry: it grants nothing, and when it stops arriving
 // the Pi is back on its ordinary rules.
 void routeLegBegin(uint8_t route, bool reverse, uint8_t index, uint8_t count, RouteOp op,
                    uint8_t flags, int32_t wallAheadStepsBeyond) {
-  static const char OPS[] = {'B', 'S', 'H', 'L', 'R'};
+  static const char OPS[] = {'B', 'S', 'H', 'L', 'R', 'K'};  // K = backing (reverse parking)
   stationStep = (flags & STEP_STATION) != 0;
   stationWallAhead = (flags & (reverse ? STEP_WALL_AHEAD_REV : STEP_WALL_AHEAD_FWD)) != 0;
   stationStepsBeyondLeg = wallAheadStepsBeyond > 0 ? wallAheadStepsBeyond : 0;
@@ -2506,6 +2999,22 @@ void activeBrakeStopMotors() {
   controlledStopMotors(SAFETY_STOP_DECEL, 650UL);
 }
 
+static bool setMoveSpeeds(uint32_t speed1, uint32_t speed2) {
+  // Enforce the bench cap after trims, and never reuse an earlier faster
+  // profile when a speed setter rejects this request.
+  const int8_t result1 = stepper1->setSpeedInHz(limitedTestSpeed(speed1));
+  const int8_t result2 = stepper2->setSpeedInHz(limitedTestSpeed(speed2));
+  if (result1 != 0 || result2 != 0) {
+    emergencyStopMotors();
+    if (developerExecuting && !developerFailure.length()) developerFailure = "SPEED_REJECTED";
+    Serial.println("[MOTOR] Speed profile rejected; both wheels stopped");
+    return false;
+  }
+  stepper1->setAcceleration(ACCELERATION);
+  stepper2->setAcceleration(ACCELERATION);
+  return true;
+}
+
 void startStraight() {
   enforcePathWatchdog();
   if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return;
@@ -2514,10 +3023,7 @@ void startStraight() {
     (1.0f + constrain(MOTOR1_TRIM_PCT, -10.0f, 10.0f) / 100.0f));
   const uint32_t motor2Speed = (uint32_t)(motionBaseSpeed *
     (1.0f + constrain(MOTOR2_TRIM_PCT, -10.0f, 10.0f) / 100.0f));
-  stepper1->setSpeedInHz(motor1Speed);
-  stepper1->setAcceleration(ACCELERATION);
-  stepper2->setSpeedInHz(motor2Speed);
-  stepper2->setAcceleration(ACCELERATION);
+  if (!setMoveSpeeds(motor1Speed, motor2Speed)) return;
   const auto result1 = stepper1->runForward();
   const auto result2 = stepper2->runForward();
   if (result1 != MOVE_OK || result2 != MOVE_OK) {
@@ -2528,18 +3034,15 @@ void startStraight() {
   movingForward = true;
 }
 
-static bool startTargetMove(long target1, long target2) {
+static bool startTargetMove(long target1, long target2, uint32_t speed = MAX_SPEED) {
   enforcePathWatchdog();
   if (!stepper1 || !stepper2 || shouldStop || !pathCommandFresh()) return false;
-  motionBaseSpeed = MAX_SPEED;
+  motionBaseSpeed = limitedTestSpeed(speed);
   const uint32_t motor1Speed = (uint32_t)(motionBaseSpeed *
     (1.0f + constrain(MOTOR1_TRIM_PCT, -10.0f, 10.0f) / 100.0f));
   const uint32_t motor2Speed = (uint32_t)(motionBaseSpeed *
     (1.0f + constrain(MOTOR2_TRIM_PCT, -10.0f, 10.0f) / 100.0f));
-  stepper1->setSpeedInHz(motor1Speed);
-  stepper1->setAcceleration(ACCELERATION);
-  stepper2->setSpeedInHz(motor2Speed);
-  stepper2->setAcceleration(ACCELERATION);
+  if (!setMoveSpeeds(motor1Speed, motor2Speed)) return false;
   if (!commandWheelTargets(target1, target2)) return false;
   movingForward = true;
   return true;
@@ -2704,11 +3207,12 @@ static SonarSweep::Pattern sonarPatternNow(bool* parked) {
     *parked = true;
     return SonarSweep::Pattern::FORWARD;
   }
-  if (spinInProgress) return SonarSweep::Pattern::FORWARD;
+  if (spinInProgress || backingActive) return SonarSweep::Pattern::FORWARD;
   if (movingForward) return SonarSweep::Pattern::CRUISE;
   const bool routeActive = !routeFaultLatched &&
       ((garbyState == GarbyState::RUNNING && !outboundComplete) ||
-       garbyState == GarbyState::RETURNING || garbyState == GarbyState::REVERSING);
+       garbyState == GarbyState::RETURNING || garbyState == GarbyState::REVERSING ||
+       garbyState == GarbyState::TESTING);
   if (!routeActive) {
     // Idle at base or parked at the destination: no reason to wear the servo.
     *parked = true;
@@ -2761,6 +3265,7 @@ static void sonarSampleDone(int command, bool echo, float cm, SonarSweep::Patter
 }
 
 void serviceUltrasonic() {
+  if (testBypassesSonar()) return;
   if (!operatorSonarEnabled) return;
   bool echoReady = false;
   uint32_t echoWidthUs = 0;
@@ -2826,6 +3331,10 @@ void serviceUltrasonic() {
 }
 
 bool frontObstacleDetected() {
+  if (testBypassesSonar()) return false;
+  // Backing (reverse parking): the sonar looks the other way from the travel, so
+  // nothing it sees can be driven into. The Pi's rear clearance holds the move.
+  if (backingActive) return false;
   if (!operatorSonarEnabled) return false;
   const uint32_t now = (uint32_t)millis();
   // A station step that faces the station wall (2026-11-14): the wall's own echo
@@ -2852,6 +3361,8 @@ bool frontObstacleDetected() {
 }
 
 bool frontEmergencyObstacleDetected() {
+  if (testBypassesSonar()) return false;
+  if (backingActive) return false;
   if (stationWallAhead) return frontEmergencyActive && frontObstacleDetected();
   return operatorSonarEnabled && frontEmergencyActive;
 }
@@ -2888,15 +3399,13 @@ class HeadingSegmentNotice {
   bool enabled_;
 };
 
-// Short, reverse and calibration moves: one plain ramp, both wheels the same
+// Short, backing and calibration moves: one plain ramp, both wheels the same
 // step count, no steering. Every obstacle/stop hold still applies.
-static bool movePlain(long target1, long target2, const char* label) {
+static bool movePlain(long target1, long target2, const char* label,
+                      uint32_t speed = MAX_SPEED) {
   HeadingSegmentNotice headingNotice(false);
   commandServoTracked(DEFAULT_VIEW);
-  stepper1->setSpeedInHz(MAX_SPEED);
-  stepper1->setAcceleration(ACCELERATION);
-  stepper2->setSpeedInHz(MAX_SPEED);
-  stepper2->setAcceleration(ACCELERATION);
+  if (!setMoveSpeeds(speed, speed)) return false;
   if (!commandWheelTargets(target1, target2)) return false;
   movingForward = true;
   // Resume after a hold: wait for permission, restart toward the same targets. A
@@ -2905,7 +3414,7 @@ static bool movePlain(long target1, long target2, const char* label) {
   auto resume = [&]() -> bool {
     while (true) {
       if (!waitUntilMotionPermitted(label)) return false;
-      if (startTargetMove(target1, target2)) return true;
+      if (startTargetMove(target1, target2, speed)) return true;
       if (motionPermitted()) return false;  // permitted, yet the wheels refused
     }
   };
@@ -2920,8 +3429,9 @@ static bool movePlain(long target1, long target2, const char* label) {
       return false;
     }
     if (shouldStop || frontObstacleDetected() ||
-        !heading.sampleFresh((uint32_t)millis(), HeadingControl::HEADING_LOSS_HALT_MS)) {
+        (headingFeedbackRequired() && !heading.sampleFresh((uint32_t)millis(), HeadingControl::HEADING_LOSS_HALT_MS))) {
       activeBrakeStopMotors();
+      if (developerEndsOnHold("MPU_DATA_LOST")) return false;  // a test never restarts
       if (!resume()) return false;
       continue;
     }
@@ -3128,6 +3638,221 @@ static bool driveStraight(int32_t steps, bool centering) {
   return left == 0;
 }
 
+// ============================================================
+// REVERSE PARKING (owner, 2026-11-16)
+// ============================================================
+// "Add backwards movement for parking purposes", for both routes: each route's
+// last step backs the robot into its parking spot (pointsRun.ino, RouteOp::BACKING)
+// instead of driving at it and spinning round beside it.
+//
+// Behind the robot only the LiDAR sees. Between [BACK:START] and [BACK:END] the
+// bridge grants GO only on the Pi's rear-travel clearance (R=C: a box behind the
+// rear edge, the bands beside the rear half, side clearance and any mover
+// predicted to reach the body) with the back group clear. A Pi or a scan without
+// R holds the robot. The forward evidence (front LiDAR group and the sonar) faces
+// away from this travel and does not hold it, as nothing beside the rear half
+// holds a forward move. Nothing below the LiDAR plane behind the robot is seen.
+//
+// Rear LiDAR determines the parking normal from two fresh agreeing D scans.
+// Corrections use full turn clearance and MPU-measured rotation, then new rear
+// scans confirm the result. Both wheels reverse at BACKING_SPEED for the
+// calibrated mean travel. Lost rear evidence or >2 degree drift brakes and
+// remeasures; obstacle/heading holds retain the remaining travel. No final
+// MPU-only square-up is performed beside the parking wall.
+class BackingSegmentNotice {
+ public:
+  BackingSegmentNotice() {
+    backingActive = true;
+    backingStartedMs = millis();
+    ESP_Serial.println("[BACK:START]");
+    // GO evidence from before this notice did not include the rear clearance.
+    if (!shouldStop) lastStopReason = "STOP:BACK_CLEARANCE";
+    shouldStop = true;
+    resetGoEvidence();
+    reportMotionStatus();
+  }
+  ~BackingSegmentNotice() {
+    backingActive = false;
+    ESP_Serial.println("[BACK:END]");
+  }
+};
+
+static void parkingHold(const char* reason) {
+  parkingHoldReason = reason;
+  reportMotionStatus();
+}
+
+// Standing still: two independent acquisitions of the same rear surface, both
+// acquired after since. Gyro history only transports the measured rear normal
+// to the present instant; neither the route target nor a side wall chooses it.
+static bool measureRearPair(uint32_t since, HeadingControl::RearView* result) {
+  HeadingControl::RearView first;
+  bool haveFirst = false;
+  uint32_t anchors = heading.reanchors();
+  uint32_t rearGeneration = heading.rearGeneration();
+  uint32_t lastEvidence = (uint32_t)millis();
+  parkingHold("PARK:WAIT_REAR_WALL");
+  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
+    requestStatus();
+    serviceTurnSafety();
+    if (!heading.headingReady((uint32_t)millis())) {
+      if (!holdForHeading(false)) return false;
+      since = (uint32_t)millis();
+      haveFirst = false;
+    }
+    const uint32_t now = (uint32_t)millis();
+    if (heading.rearGeneration() != rearGeneration) {
+      rearGeneration = heading.rearGeneration();
+      haveFirst = false;
+    }
+    if (heading.reanchors() != anchors) {
+      anchors = heading.reanchors();
+      since = now;
+      haveFirst = false;
+    }
+    HeadingControl::RearView view;
+    if (!heading.rearViewSince(since, now, &view)) {
+      haveFirst = false;
+      parkingHold("PARK:WAIT_REAR_WALL");
+    } else if (!haveFirst || now - first.scanMs > HeadingControl::WALL_MAX_AGE_MS) {
+      first = view;
+      haveFirst = true;
+      lastEvidence = now;
+    } else if (view.acquisition != first.acquisition) {
+      if (fabsf(HeadingControl::wrap180(view.axisDeg - first.axisDeg)) <= HeadingControl::PARK_SCAN_AGREE_DEG &&
+          fabsf(view.distanceCm - first.distanceCm) <= HeadingControl::PARK_DISTANCE_AGREE_CM) {
+        *result = view;
+        result->axisDeg = first.axisDeg + 0.5f * HeadingControl::wrap180(view.axisDeg - first.axisDeg);
+        return true;
+      }
+      first = view;
+      parkingHold("PARK:WALL_UNSTABLE");
+    }
+    if (now - lastEvidence >= LOW_POWER_AFTER_MS) enterLowPower("rear wall alignment");
+    vTaskDelay(pdMS_TO_TICKS(lowPowerActive ? 20 : 2));
+  }
+  return false;
+}
+
+static bool alignRearForParking() {
+  uint8_t corrections = 0;
+  bool flipped = false;
+  const uint32_t started = (uint32_t)millis();
+  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
+    HeadingControl::RearView rear;
+    if (!measureRearPair((uint32_t)millis(), &rear)) return false;
+    const float error = HeadingControl::wrap180(heading.heading() - rear.axisDeg);
+    if (fabsf(error) <= HeadingControl::PARK_ALIGN_DEG) {
+      exitLowPower();
+      heading.setRouteTarget(rear.axisDeg);
+      parkingHold(nullptr);
+      ESP_Serial.printf("[PARK rear=ALIGNED err=%+.2f distance=%.1f]\n", error, rear.distanceCm);
+      return true;
+    }
+    if (fabsf(error) > HeadingControl::PARK_MAX_CORRECTION_DEG ||
+        corrections >= HeadingControl::ALIGN_MAX_PASSES) {
+      parkingHold("PARK:ALIGNMENT_UNCONFIRMED");
+      if ((uint32_t)millis() - started >= LOW_POWER_AFTER_MS) enterLowPower("rear alignment unconfirmed");
+      responsiveDelay(250);  // hold, never invent an alignment or spin repeatedly
+      continue;
+    }
+    parkingHold("PARK:ALIGNING");
+    ESP_Serial.printf("[PARK rear=CORRECTING err=%+.2f]\n", error);
+    // The sweep/obstacle gate may hold for minutes. Acquire another pair AFTER
+    // that gate; a pre-hold gyro-frame target must never drive a later spin.
+    {
+      TurnSegmentNotice turn;
+      waitForSpinSurvey();
+      if (!movementGate(false)) return false;
+      if (!measureRearPair((uint32_t)millis(), &rear)) return false;
+      const float freshError = HeadingControl::wrap180(heading.heading() - rear.axisDeg);
+      if (fabsf(freshError) <= HeadingControl::PARK_ALIGN_DEG ||
+          fabsf(freshError) > HeadingControl::PARK_MAX_CORRECTION_DEG) continue;
+      serviceTurnSafety();
+      if (turnMustHalt() || !heading.sampleFresh((uint32_t)millis(), HeadingControl::TURN_DATA_TIMEOUT_MS)) continue;
+      exitLowPower();
+      parkingHold("PARK:ALIGNING");
+      const SpinResult result = spinToward(rear.axisDeg, HeadingControl::TURN_CORRECTION_SPEED_HZ);
+      if (result == SpinResult::HALTED || result == SpinResult::DATA_LOST) continue;
+      if (result == SpinResult::WRONG_WAY) {
+        if (flipped || heading.turnSideConfirmed()) return false;
+        heading.swapTurnSides();
+        flipped = true;
+      } else if (result != SpinResult::REACHED) {
+        return false;
+      } else {
+        heading.confirmTurnSides();
+        ++corrections;
+      }
+    }
+    responsiveDelay(HeadingControl::TURN_SETTLE_MS);
+  }
+  return false;
+}
+
+bool backIntoPlace(int32_t steps) {
+  if (!stepper1 || !stepper2) return false;
+  if (steps <= 0) return true;
+  struct ParkingScope {
+    LowPowerScope power;
+    ~ParkingScope() { parkingHold(nullptr); }
+  } parkingScope;
+  const long start1 = stepper1->getCurrentPosition(), start2 = stepper2->getCurrentPosition();
+  auto remaining = [&]() -> int32_t {
+    const int64_t moved = ((int64_t)stepper1->getCurrentPosition() - start1 +
+                           (int64_t)stepper2->getCurrentPosition() - start2) / 2;
+    return (int32_t)((int64_t)steps + moved);
+  };
+  while (remaining() > 0) {
+    if (!alignRearForParking()) return false;
+    BackingSegmentNotice notice;
+    if (!movementGate(false)) return false;
+    HeadingControl::RearView rear;
+    // Clearance may have taken seconds to return. Re-measure while held, rather
+    // than spending an old alignment when GO:BACK finally arrives.
+    if (!measureRearPair((uint32_t)millis(), &rear)) return false;
+    if (fabsf(HeadingControl::wrap180(heading.heading() - rear.axisDeg)) > HeadingControl::PARK_ALIGN_DEG) continue;
+    parkingHold(nullptr);
+    exitLowPower();
+    const int32_t left = remaining();
+    const long target1 = stepper1->getCurrentPosition() - left;
+    const long target2 = stepper2->getCurrentPosition() - left;
+    if (!startTargetMove(target1, target2, BACKING_SPEED)) {
+      if (motionPermitted()) return false;
+      continue;
+    }
+    movingForward = true;  // existing motion telemetry derives direction from wheel speeds
+    while (motorsRunning()) {
+      if (!serviceMotionProgress()) return false;
+      serviceTurnSafety();
+      if (resetQueued || routeFaultLatched || operatorEmergencyLatched) {
+        activeBrakeStopMotors();
+        return false;
+      }
+      HeadingControl::RearView current;
+      const uint32_t now = (uint32_t)millis();
+      const bool rearFresh = heading.rearViewSince(now - HeadingControl::WALL_MAX_AGE_MS, now, &current);
+      if (shouldStop || !pathCommandFresh() ||
+          !heading.sampleFresh(now, HeadingControl::HEADING_LOSS_HALT_MS) || !rearFresh ||
+          (rearFresh && fabsf(HeadingControl::wrap180(heading.heading() - current.axisDeg)) > HeadingControl::PARK_DRIFT_DEG)) {
+        activeBrakeStopMotors();
+        movingForward = false;
+        parkingHold("PARK:WAIT_REAR_WALL");
+        // Unwind BACK before any correction: a spin must not inherit the sonar
+        // bypass for rear travel. Remaining MEAN steps exclude in-place spins.
+        break;
+      }
+      delay(1);
+    }
+    movingForward = false;
+  }
+  // No post-parking MPU-only square-up. The rear wall controlled alignment
+  // before travel and monitored it throughout the approach.
+  ESP_Serial.printf("[HEADING BACK steps=%ld err=%+.1f mpu=%d rear=1]\n", (long)steps,
+                    heading.routeError(), heading.headingReady((uint32_t)millis()) ? 1 : 0);
+  return !resetQueued && !routeFaultLatched && !operatorEmergencyLatched;
+}
+
 bool moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
   if (!stepper1 || !stepper2) return false;
   if (!waitUntilMotionPermitted("before motion")) return false;
@@ -3144,6 +3869,210 @@ bool moveDistance(int32_t steps, bool isADJ, bool isNudgeEnabled) {
   long t1 = stepper1->getCurrentPosition() + steps;
   long t2 = stepper2->getCurrentPosition() + steps;
   return moveToTarget(t1, t2, isADJ, isNudgeEnabled);
+}
+
+// Remote control: drive while held. Speed and direction are fixed for one press.
+static bool runHeldDrive() {
+  if (developerHoldEnded) return true;  // let go before the drive could start
+  heading.attach(stepper1, stepper2);
+  const uint32_t speed = limitedTestSpeed(HOLD_MAX_SPEED_HZ);
+  if (stepper1->setSpeedInHz(speed) != 0 || stepper2->setSpeedInHz(speed) != 0) {
+    developerFailure = "SPEED_REJECTED";
+    return false;
+  }
+  stepper1->setAcceleration(ACCELERATION);
+  stepper2->setAcceleration(ACCELERATION);
+  resetMotionProgress();
+  // Left/right use the current guess of which motor is the left wheel (the first
+  // MPU-measured turn confirms or swaps it); a held spin measures nothing.
+  FastAccelStepper* left = heading.leftMotor();
+  FastAccelStepper* right = heading.rightMotor();
+  MoveResultCode first = MOVE_OK, second = MOVE_OK;
+  switch (developerAction) {
+    case 'W': first = stepper1->runForward(); second = stepper2->runForward(); break;
+    case 'S': first = stepper1->runBackward(); second = stepper2->runBackward(); break;
+    case 'A': first = left->runBackward(); second = right->runForward(); break;
+    default:  first = left->runForward(); second = right->runBackward(); break;
+  }
+  if (first != MOVE_OK || second != MOVE_OK) {
+    emergencyStopMotors();
+    Serial.println("[MOTOR] Held drive command rejected; both wheels stopped");
+    return false;
+  }
+  while (!developerHoldEnded) {
+    if (!serviceMotionProgress()) return false;
+    pollESP();
+    serviceDeveloperWatchdog();
+    if (resetQueued || developerFailure.length() || operatorEmergencyLatched) {
+      emergencyStopMotors();
+      return false;
+    }
+    delay(1);
+  }
+  activeBrakeStopMotors();  // let go: the quick controlled stop, no jerk
+  return true;
+}
+
+// ── RunStart (owner, 2026-11-16) ────────────────────────────────────────────
+// Progress for the Developer window: [RUN AT:<id>:<step>:<steps done in it>].
+static void reportRunAt(bool force) {
+  const uint32_t now = (uint32_t)millis();
+  if (!force && now - runReportedAt < RUN_REPORT_MS) return;
+  runReportedAt = now;
+  ESP_Serial.printf("[RUN AT:%s:%u:%ld]\n", developerId.c_str(), (unsigned)runIndex, (long)runDoneInStep());
+}
+// Only the lease, the emergency stop and a reset end a list: no sensor is consulted.
+static bool runInterrupted() {
+  serviceDeveloperWatchdog();
+  return resetQueued || developerFailure.length() || operatorEmergencyLatched;
+}
+// Standing still between steps or bumps; the lease and the stop still apply.
+static bool runPause(uint32_t durationMs) {
+  const uint32_t started = (uint32_t)millis();
+  while ((uint32_t)millis() - started < durationMs) {
+    pollESP();
+    if (runInterrupted()) return false;
+    delay(1);
+  }
+  return true;
+}
+// One move of both wheels to absolute targets at the list's own speed and acceleration.
+// An interruption stops both at once (force stop) and leaves their exact positions.
+static bool runMoveTo(long target1, long target2) {
+  if (stepper1->getCurrentPosition() == target1 && stepper2->getCurrentPosition() == target2) return true;
+  if (stepper1->setSpeedInHz(runSpeedHz) != 0 || stepper2->setSpeedInHz(runSpeedHz) != 0) {
+    emergencyStopMotors();
+    if (!developerFailure.length()) developerFailure = "SPEED_REJECTED";
+    return false;
+  }
+  stepper1->setAcceleration(runAccel);
+  stepper2->setAcceleration(runAccel);
+  if (!commandWheelTargets(target1, target2)) {
+    if (!developerFailure.length()) developerFailure = "MOTION_REJECTED";
+    return false;
+  }
+  while (motorsRunning()) {
+    if (!serviceMotionProgress()) return false;
+    pollESP();
+    if (runInterrupted()) {
+      emergencyStopMotors();
+      return false;
+    }
+    reportRunAt(false);
+    delay(1);
+  }
+  return stepper1->getCurrentPosition() == target1 && stepper2->getCurrentPosition() == target2;
+}
+static long runBumpPart(long left) {
+  const long bump = (long)RUN_BUMP_STEPS;
+  return left > bump ? bump : left < -bump ? -bump : left;
+}
+// Bump calibrate: forward in short moves with a pause between, as the routes' first step.
+static bool runBumpsTo(long target1, long target2) {
+  while (true) {
+    const long p1 = stepper1->getCurrentPosition(), p2 = stepper2->getCurrentPosition();
+    if (p1 == target1 && p2 == target2) return true;
+    const long next1 = p1 + runBumpPart(target1 - p1), next2 = p2 + runBumpPart(target2 - p2);
+    if (!runMoveTo(next1, next2)) return false;
+    if ((next1 != target1 || next2 != target2) && !runPause(RUN_BUMP_PAUSE_MS)) return false;
+  }
+}
+// P and C run the list from where the wheels are to its end; U drives back to its start
+// (the current step undone first, then each earlier step, each the same wheel steps the
+// other way; bumps are undone in one plain move). Returns true at the end or start.
+static bool runProgramSteps() {
+  if (developerAction == 'U') {
+    while (true) {
+      long t1 = 0, t2 = 0;
+      runBoundary(runIndex, &t1, &t2);
+      reportRunAt(true);
+      if (!runMoveTo(t1, t2)) return false;
+      if (runIndex == 0) { reportRunAt(true); return true; }
+      --runIndex;
+      if (!runPause(RUN_STEP_PAUSE_MS)) return false;
+    }
+  }
+  while (runIndex < runCount) {
+    long t1 = 0, t2 = 0;
+    runBoundary(runIndex + 1, &t1, &t2);
+    reportRunAt(true);
+    if (!(runSteps[runIndex].op == 'C' ? runBumpsTo(t1, t2) : runMoveTo(t1, t2))) return false;
+    if (runIndex + 1 >= runCount) { reportRunAt(true); return true; }
+    ++runIndex;
+    if (!runPause(RUN_STEP_PAUSE_MS)) return false;
+  }
+  return true;
+}
+
+void runDeveloperTest() {
+  if (!developerQueued) { garbyState = GarbyState::IDLE; return; }
+  developerQueued = false; developerExecuting = true;
+  serviceDeveloperWatchdog();
+  if (testBypassesPath()) shouldStop = false;
+  commandServoTracked(DEFAULT_VIEW);
+  const long p1 = stepper1->getCurrentPosition(), p2 = stepper2->getCurrentPosition();
+  developerStart1 = p1; developerStart2 = p2;
+  const float yaw = heading.heading();
+  const bool measuredAtStart = heading.headingReady(millis());
+  const uint32_t anchorsAtStart = heading.reanchors();
+  const bool sonarBypassed = testBypassesSonar();
+  if (sonarBypassed) cancelUltrasonicPing();
+  reportMotionStatus(true);
+  const bool ok = [&]() {
+    if (resetQueued || developerFailure.length() || operatorEmergencyLatched) return false;
+    if (developerAction == 'I') { responsiveDelay(400); return !resetQueued; }
+    if (developerHold()) return runHeldDrive();
+    if (developerRun()) return runProgramSteps();
+    if (headingFeedbackRequired() && !beginRouteHeading()) return false;
+    if (developerAction == 'F') return safeMoveDistance(developerAmount, true, false);
+    if (developerAction == 'B') {
+      // Backward (owner, 2026-11-16): the parking step's wheel direction and rear
+      // gate on the bench, where a lifted route faults at its first turn. Same
+      // scope as backIntoPlace: with LiDAR selected only GO:BACK (the Pi's R=C and
+      // B=C) moves it, and the forward sonar, facing away, does not hold it. No
+      // rear-wall alignment: that needs spins the gyro cannot see with the wheels up.
+      BackingSegmentNotice notice;
+      if (testBypassesPath()) shouldStop = false;  // the notice's hold is LiDAR evidence
+      if (!movementGate(false)) return false;
+      return movePlain(p1 - developerAmount, p2 - developerAmount, "backward test", TEST_SPEED_HZ);
+    }
+    if (developerAction == '1' || developerAction == '2') {
+      if (!movementGate(false)) return false;
+      return moveToTarget(p1 + (developerAction == '1' ? developerAmount : 0),
+                          p2 + (developerAction == '2' ? developerAmount : 0), true, false);
+    }
+    TurnSegmentNotice notice;
+    if (!movementGate(false)) return false;
+    const float angle = (developerAction == 'L' ? 1.0f : -1.0f) * developerAmount;
+    heading.addTurn(angle);
+    // A measured gyro turn (10° or the explicit 90° test), without wall alignment.
+    return rotateToHeading(heading.routeTarget(), angle, false);
+  }();
+  emergencyStopMotors();
+  ESP_Serial.printf("[TEST RESULT:%s:D1=%ld:D2=%ld:M=%d:Y=%ld]\n", developerId.c_str(),
+                    stepper1->getCurrentPosition() - p1, stepper2->getCurrentPosition() - p2,
+                    measuredAtStart && heading.headingReady(millis()) && heading.reanchors() == anchorsAtStart ? 1 : 0,
+                    lroundf((heading.heading() - yaw) * 100.0f));
+  const bool fault = routeFaultLatched && !operatorEmergencyLatched;
+  developerOutcome = ok && !developerFailure.length() && !operatorEmergencyLatched ? "DONE" : "FAILED";
+  if (developerOutcome == "FAILED" && !developerFailure.length())
+    developerFailure = operatorEmergencyLatched ? "EMERGENCY_STOP" : "MOTION_REJECTED";
+  sendDeveloperOutcome();
+  fullReset();
+  operatorManualStartRequired = true;
+  if (sonarBypassed) {
+    cancelUltrasonicPing();
+    digitalWrite(TRIG_PIN, LOW);
+    latestFrontSampleValid = false;
+    lastFrontSampleMs = 0;
+    frontFilterCount = frontFilterIndex = 0;
+    ultrasonicClearCount = ultrasonicBlockedCount = 0;
+    frontObstacleLatched = operatorSonarEnabled;
+    frontEmergencyActive = false;
+    sonarSweep.reset();
+  }
+  if (fault) { routeFaultLatched = true; reportRouteFault(); }
+  reportRobotStatus();
 }
 
 // ============================================================

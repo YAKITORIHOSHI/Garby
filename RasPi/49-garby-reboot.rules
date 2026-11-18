@@ -1,0 +1,13 @@
+// GARBY (owner, 2026-11-16): the monitor's "Restart Pi + bridge + executor" reboots the
+// Pi with `systemctl --no-ask-password reboot`. Ubuntu allows that without a password
+// only for the user at the Pi's own screen; the owner runs the monitor over ssh -Y.
+// This lets the robot account `garby`, and only it, reboot from any session.
+// Install once:  sudo install -m 644 RasPi/49-garby-reboot.rules /etc/polkit-1/rules.d/
+// Remove:        sudo rm /etc/polkit-1/rules.d/49-garby-reboot.rules
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions") &&
+        subject.user == "garby") {
+        return polkit.Result.YES;
+    }
+});

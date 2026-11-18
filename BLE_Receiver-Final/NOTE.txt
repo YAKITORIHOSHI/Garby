@@ -1,3 +1,24 @@
+2026-11-17: MPU turn correction and developer speed (TURNSCALE-20261116)
+
+MPU scale is provisionally 100/90 from the owner's approximate floor estimate;
+targets remain 90 degrees. Developer turns require fresh stationary MPU samples
+after braking and a final 1-degree tolerance. Developer speed settings start at
+2351 steps/s (nominal 30 cm/s); remote Slow/Fast are 2351/4702, and RunStart
+accepts 2351..8000, default 2351. Ramps, short moves, motor-side checks and turn
+braking can be slower. Selected gates and live leases retain their scope.
+
+Upload BOTH complete sketches and deploy the entire RasPi/ directory, including
+the map-sidebar changes and Developer button. Installed versions/floor angles
+are unverified. Details: docs/developer-turn-speed-2026-11-17.md (system root).
+
+2026-11-16: Developer 90-degree floor turns (TURNTEST-20261116)
+
+L/R developer requests now also accept exactly 90 degrees with MPU selected.
+Only this amount uses a 30 s absolute test scope; small tests retain 8 s. The
+800 ms KEEP lease, session/ACK/ID gates and ordinary MPU supervision remain.
+Upload both whole sketches and deploy the whole RasPi/ directory together.
+Details: docs/developer-90-turns-2026-11-16.md (system root).
+
 ESP32-S3 BLE bridge with calibrated MPU heading (current: NAV-20261111, 2026-11-11)
 
 Design, calibration and bench steps: docs/navigation-2026-11-11.md (system root).
@@ -42,6 +63,10 @@ a side with CL, L, FL or BL (CR, R, FR, BR) <= 40 cm -> no steering toward it, a
 Malformed or out-of-order frames withdraw permission; a repeated A refreshes
 nothing. STOP, operator stop and turns withdraw permission. P frames: F=W gives
 GO:SLOW; T= must be C between [TURN:START] and [TURN:END] (STOP:TURN otherwise).
+Reverse parking (2026-11-16, PARK-20261116): between [BACK:START] and [BACK:END]
+GO needs R=C and B=C (F is not consulted) and is sent as GO:BACK; STOP:BACK or
+STOP:BACK_UNKNOWN otherwise. The scope is unknown after a bridge reboot until the
+executor replays it. Flash together with executor PARK-20261116.
 
 CONSOLE (USB 115200): H prints heading, rate, bias, tilt and epoch (yaw-sign bench
 check: turn the robot left by hand, heading must rise). R requests a new reference
@@ -110,5 +135,5 @@ Reboot button. See docs/ble-nudge-review-2026-11-04.md.
 Replaces the N: tap steering and the per-segment FRONT reference with a continuous
 heading stream and forwarded wall fits; adds tilt compensation, GYRO_SCALE, bias
 refresh while held, the spin-sweep gate, GO:SLOW and the H console command. Source
-implemented, host tested (tools/firmware_tests) and compiled for ESP32-S3; not
+implemented, host tested (tests/firmware) and compiled for ESP32-S3; not
 uploaded or floor tested. See docs/navigation-2026-11-11.md.

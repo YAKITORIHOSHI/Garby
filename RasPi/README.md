@@ -95,7 +95,7 @@ Preview the interface with simulated readings, without ROS, Bluetooth, serial
 hardware, or Firebase:
 
 ```bash
-python3 RasPi/preview_ui.py
+python3 tools/preview_ui.py
 ```
 
 The preview requires only Python and Tk support and does not send robot commands.
@@ -145,8 +145,9 @@ model results: `docs/obstacle-sweep-hold-2026-11-12.md`.
 
 ## Operator controls
 
-The monitor has three tabs: **LiDAR readings**, **BLE status & messages**, and
-**Controls**. The emergency-stop button stays visible on every tab. Controls
+The monitor has four tabs: **LiDAR readings**, **BLE status & messages**,
+**Controls**, and **Log**. **Developer** opens the separate Developer tests window.
+The emergency-stop button stays visible on every tab. Controls
 contains manual start, LiDAR read-only threshold bypasses, obstacle-sonar enable/disable,
 stop release, and coordinated restart. Pending actions and unknown controller
 states are shown explicitly; a BLE connection alone does not confirm a setting.
@@ -157,6 +158,26 @@ not change when focused. Mouse tab selection still works.
 The BLE tab's **Clear logs** button clears displayed messages. Incoming messages
 continue to appear, and the saved runtime log remains available for diagnosis.
 The display keeps the newest 250 lines, dropping older lines as new messages arrive.
+
+The **Developer** window offers independent gyro/wall readings, 400-step forward/backward
+tests (about 5 cm with nominal wheel geometry), 100 steps on either motor, and MPU turns
+of 10° or 90°. Finite tests use a 2351 steps/s speed setting, about 30 cm/s; ramps, short
+moves, initial motor-side checks and turn braking may be slower. Select LiDAR, MPU and
+obstacle sonar for **that test only**; all start enabled. Turns require MPU, floor contact
+and fresh, steady readings after braking, with no hallway-wall alignment. Ordinary tests
+have eight seconds and 90° has thirty; both require the 800 ms lease. Remote control
+uses held arrows at about 30/60 cm/s without sensor gates, under a 500 ms lease. RunStart
+uses its own list at 2351..8000 steps/s, default 2351, under the 800 ms lease.
+Completion restores route gates and requires another deliberate start. Deploy matching
+`TURNSCALE-20261116` Pi/bridge/executor sources. The provisional MPU correction uses the
+owner's approximate 100° physical / 90° reported observation. See
+[`developer turn/speed changes`](../docs/developer-turn-speed-2026-11-17.md).
+
+An active route can be waiting with stopped wheels. On the map, its hold, robot state,
+scan status, range, caption, hit count and zone details appear in the scrollable right
+sidebar with the bin sensors, leaving the map its full panel. Other tabs keep state and
+holds in their header. A generic LiDAR hold is expanded to the current selected gate, such as
+`Side clearance blocked (LEFT_BAND)`; bypassed zones are excluded from that explanation.
 
 LiDAR read-only switches keep measurements visible and bypass only the selected
 front or rear distance thresholds. Either or both may be selected without

@@ -890,11 +890,13 @@ class CoalescingBleQueue:
                 # Recognize only ordinary all-clear here, not the complete wire
                 # grammar. Blocked, stale or malformed bodies need prompt bridge
                 # validation/STOP; a periodic replacement must not demote them.
-                # The optional T= turn-sweep token is part of all-clear only
-                # when it is itself C; slow (F=W) keeps STOP-class priority.
+                # The optional T= turn-sweep and R= rear-travel tokens are part
+                # of all-clear only when they are C; slow (F=W) keeps STOP-class
+                # priority.
                 tokens = msg.partition("|")[2].split("|")
                 urgent = urgent or sorted(tokens) not in (
-                    ["B=C", "F=C"], ["B=C", "F=C", "T=C"])
+                    ["B=C", "F=C"], ["B=C", "F=C", "T=C"], ["B=C", "F=C", "R=C"],
+                    ["B=C", "F=C", "R=C", "T=C"])
             if kind != "CONTROL":
                 retained = deque()
                 for item in self._items:

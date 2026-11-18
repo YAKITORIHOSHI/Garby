@@ -14,6 +14,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <atomic>
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_system.h>
 #endif
@@ -42,6 +43,11 @@ static bool straightRunActive = false;
 static bool turnActive = false;
 // Unknown after bridge boot until the executor reports its current turn scope.
 static bool turnStateKnown = false;
+// Reverse parking (2026-11-16): between [BACK:START] and [BACK:END] the executor
+// drives backwards and GO needs the Pi's rear-travel clearance R=C. Unknown, like
+// the turn scope, until the executor reports it.
+static bool backingActive = false;
+static bool backStateKnown = false;
 static bool haveSteeringAcquisition = false;
 static uint32_t lastSteeringAcquisition = 0;
 static uint8_t steeringAllow = 0;               // STEER_ALLOW_* of the newest acquisition
@@ -95,7 +101,7 @@ static uint32_t executorStateAtMs = 0;
 #define TRANSPORT_STATS_INTERVAL_MS   10000UL
 #define BRIDGE_CPU_FREQUENCY_MHZ         160
 #define BRIDGE_TX_POWER_DBM                9
-#define BRIDGE_FIRMWARE_ID       "REVERSE-20261114"
+#define BRIDGE_FIRMWARE_ID       "TURNSCALE-20261116"
 
 // Steering is continuous in the executor (HeadingControl.h). Bridge steering
 // tunables, the permission rules and the W line format are in SteeringAssist.h.
@@ -158,16 +164,20 @@ static QueueHandle_t sidesQueue   = nullptr;
 static QueueHandle_t sensorQueue  = nullptr;
 static QueueHandle_t healthQueue  = nullptr;
 
-static volatile uint32_t connectionSession       = 0;
-static volatile uint32_t ingressFaultCount       = 0;
-static volatile uint32_t controlOverflowCount    = 0;
-static volatile uint32_t oversizeFrameCount      = 0;
-static volatile uint32_t unknownFrameCount       = 0;
-static volatile uint32_t replacedSidesCount      = 0;
-static volatile uint32_t replacedSensorCount     = 0;
-static volatile uint32_t mcuLineOverflowCount    = 0;
-static volatile uint32_t mcuBackpressureCount    = 0;
-static volatile uint32_t invalidSteeringFieldCount = 0;
+// Counted in the NimBLE host task (callbacks); the session number and the
+// oversize count also in loop(). "++" on a volatile is a separate load and store,
+// so two tasks can lose a count, and C++20 deprecates it. std::atomic cannot.
+static std::atomic<uint32_t> connectionSession{0};
+static std::atomic<uint32_t> ingressFaultCount{0};
+static std::atomic<uint32_t> controlOverflowCount{0};
+static std::atomic<uint32_t> oversizeFrameCount{0};
+static std::atomic<uint32_t> unknownFrameCount{0};
+static std::atomic<uint32_t> replacedSidesCount{0};
+static std::atomic<uint32_t> replacedSensorCount{0};
+// Counted in loop() only.
+static uint32_t mcuLineOverflowCount             = 0;
+static uint32_t mcuBackpressureCount             = 0;
+static uint32_t invalidSteeringFieldCount        = 0;
 static uint32_t notificationFailureCount         = 0;
 // Field diagnostics. The USB console is normally unattended on the robot, so the
 // facts that separate a power reset from a radio drop must reach the Pi's log.
@@ -185,11 +195,12 @@ static uint32_t handledIngressFaultCount         = 0;
 // ── Controller UART delivery health ─────────────────────────
 // The executor already returns the legacy generic [ESP RECEIVED] ACK. We use
 // it only as a liveness signal; no new UART or BLE protocol field is required.
-static volatile bool mcuAckPending       = false;
-static volatile bool mcuAckFault         = false;
-static volatile bool mcuBackpressureStopPending = false;
-static volatile uint8_t mcuUnackedCommands = 0;
-static volatile unsigned long mcuAckPendingSince = 0;
+// loop() owns this state: the BLE callbacks never write the UART.
+static bool mcuAckPending       = false;
+static bool mcuAckFault         = false;
+static bool mcuBackpressureStopPending = false;
+static uint8_t mcuUnackedCommands = 0;
+static unsigned long mcuAckPendingSince = 0;
 static StaticSemaphore_t mcuTxMutexState;
 static SemaphoreHandle_t mcuTxMutex = nullptr;
 
@@ -221,10 +232,83 @@ static bool operatorRebootScheduled = false;
 static unsigned long operatorRebootAtMs = 0;
 static unsigned long pendingRebootSentAtMs = 0;
 
+// Developer tests are finite executor actions with a separate live-Pi lease.
+// The bridge only relaxes its MPU gate after the executor accepted this exact
+// packet. LiDAR/sonar selections are enforced by the executor's test scope.
+struct DeveloperTestCommand {
+  char id[17];
+  char action;
+  uint16_t amount;
+  uint8_t sensors;
+};
+static constexpr uint32_t DEVELOPER_LEASE_MS = 800, DEVELOPER_LIMIT_MS = 8000;
+static constexpr uint32_t DEVELOPER_TURN90_LIMIT_MS = 30000;
+static uint32_t developerTestLimitMs = DEVELOPER_LIMIT_MS;
+static constexpr uint32_t DEVELOPER_KEEP_AGE_MS = 300;
+static char developerTestId[17] = {};
+// RunStart lists (2026-11-16) are up to a whole BLE frame long.
+static char developerTestPacket[BLE_FRAME_MAX_BYTES + 1U] = {};
+static uint8_t developerTestSensors = 7;
+// Remote control (owner, 2026-11-16): W/S/A/D drive only while the arrow is held, at
+// the requested 1..2000 steps/s, with no sensor gates and no time limit. Its lease
+// (KEEP) and the Pi's [TEST END] (the arrow let go) bound it; the executor enforces both.
+static bool developerTestHold = false;
+// The last held drive's ID outlives the bridge's own record (a latched stop or a late
+// KEEP clears that), so letting go still reaches the executor at once.
+static char developerLastHoldId[17] = {};
+static bool developerHoldAction(char action) {
+  return action == 'W' || action == 'S' || action == 'A' || action == 'D';
+}
+// RunStart (owner, 2026-11-16): the Developer window's step list. P starts one, C
+// continues a stopped one, U drives it back to its start. No sensor gates and no time
+// limit; the KEEP lease and the emergency stop bound it, as for the remote control.
+static bool developerTestRun = false;
+static bool developerRunAction(char action) { return action == 'P' || action == 'C' || action == 'U'; }
+static uint32_t developerTestSession = 0, developerTestStopGeneration = 0;
+static uint32_t developerTestStartedMs = 0, developerTestKeepMs = 0;
+static bool developerTestAcknowledged = false, developerTestKeepSeen = false;
+
 // Keep sketch types above the first function: Arduino inserts auto-prototypes
 // there, including declarations of functions whose parameters use BleFrame.
+static bool developerTestPending() { return developerTestPacket[0] != '\0'; }
+
+static bool developerTestFresh(uint32_t now) {
+  return developerTestPending() && deviceConnected && piReady && mcuReady && bleBridgeSignalSent &&
+         !operatorStopLatched && !operatorRebootScheduled && !mcuAckFault && !mcuBackpressureStopPending &&
+         developerTestSession == connectionSession && developerTestStopGeneration == operatorStopGeneration &&
+         (developerTestHold || developerTestRun || now - developerTestStartedMs < developerTestLimitMs) &&
+         now - developerTestKeepMs <= DEVELOPER_LEASE_MS;
+}
+
+static bool developerMpuBypassed() {
+  return developerTestAcknowledged && developerTestKeepSeen && !(developerTestSensors & 2U) &&
+         developerTestFresh((uint32_t)millis());
+}
+
+static void clearDeveloperTest() {
+  if (!developerTestPending()) return;
+  developerTestId[0] = developerTestPacket[0] = '\0';
+  developerTestAcknowledged = developerTestKeepSeen = false;
+  developerTestSensors = 7;
+  developerTestHold = false;
+  developerTestRun = false;
+  developerTestLimitMs = DEVELOPER_LIMIT_MS;
+  // An ignored LiDAR STOP was never evidence that the test wheels were held.
+  // Start the stationary dwell again before any gyro-bias refresh can run.
+  stopLatched = true;
+  clearConfirmCount = 0;
+  stopLatchSeen = false;
+  stopLatchedSinceMs = millis();
+  executorParked = false;
+}
+
+static void expireDeveloperTest(uint32_t now) {
+  if (developerTestPending() && !developerTestFresh(now)) clearDeveloperTest();
+}
+
 static bool lineIsGo(const char* line) {
-  return strcmp(line, "GO") == 0 || strcmp(line, "GO:SLOW") == 0;
+  return strcmp(line, "GO") == 0 || strcmp(line, "GO:SLOW") == 0 ||
+         strcmp(line, "GO:BACK") == 0;
 }
 
 static void noteMcuCommandQueued(uint8_t count) {
@@ -241,6 +325,7 @@ static bool commandRequiresLiveBle(const char* line) {
   if (lineIsGo(line)) return true;
   if (strncmp(line, "[START:", 7) == 0) return true;
   if (strncmp(line, "[START STATUS:", 14) == 0) return true;
+  if (strncmp(line, "[TEST:", 6) == 0 || strncmp(line, "[TEST KEEP:", 11) == 0) return true;
   return strncmp(line, "[OP:", 4) == 0 && strstr(line, ":ESTOP]") == nullptr;
 }
 
@@ -260,7 +345,15 @@ static bool sendMcuLine(const char* line, bool expectsAck) {
     return false;
   }
   if (operatorStopLatched && (lineIsGo(line) ||
-      strncmp(line, "[START:", 7) == 0 || strncmp(line, "[RESET", 6) == 0)) {
+      strncmp(line, "[START:", 7) == 0 || strncmp(line, "[RESET", 6) == 0 ||
+      strncmp(line, "[TEST:", 6) == 0 || strncmp(line, "[TEST KEEP:", 11) == 0)) {
+    if (mcuTxMutex != nullptr) xSemaphoreGive(mcuTxMutex);
+    return false;
+  }
+  if ((strncmp(line, "[TEST:", 6) == 0 || strncmp(line, "[TEST KEEP:", 11) == 0) &&
+      (!developerTestFresh((uint32_t)millis()) ||
+       (uint32_t)millis() - currentFrameReceivedAtMs >
+           (strncmp(line, "[TEST KEEP:", 11) == 0 ? DEVELOPER_KEEP_AGE_MS : PATH_FRAME_MAX_AGE_MS))) {
     if (mcuTxMutex != nullptr) xSemaphoreGive(mcuTxMutex);
     return false;
   }
@@ -297,6 +390,7 @@ static void sendMcuStop(const char* reason) {
 static void relayStop(const char* reason);
 
 static void resetNavigationState() {
+  clearDeveloperTest();
   stopLatched            = true;
   clearConfirmCount      = 0;
   pathStreamSeen         = false;
@@ -582,6 +676,9 @@ static void evaluateSteeringFrame(const String& sidesVal) {
   f.headingKnown = heading == FieldParseStatus::VALID;
   f.ageKnown = ageStatus == FieldParseStatus::VALID;
   f.ageMs = f.ageKnown ? (uint32_t)lroundf(age) : 0U;
+  // Rear orientation is independent of the hallway fit and of GO permission.
+  f.rearWallKnown = extractField(sidesVal, "RD=", f.rearDistance) == FieldParseStatus::VALID &&
+      extractField(sidesVal, "RH=", f.rearHeading) == FieldParseStatus::VALID;
   f.clearanceValid =
     extractField(sidesVal, "CF=", f.clearFront) == FieldParseStatus::VALID &&
     extractField(sidesVal, "CL=", f.clearLeft) == FieldParseStatus::VALID &&
@@ -601,6 +698,12 @@ static void evaluateSteeringFrame(const String& sidesVal) {
   steeringAllow = f.ageKnown && totalAgeMs <= STEERING_MAX_AGE_MS ? steeringAllowMask(f) : 0;
   steeringAllowAtMs = nowMs - totalAgeMs;
 
+  if (f.ageKnown) {
+    char line[96];
+    if (formatRearWallLine(line, sizeof(line), acquisition, totalAgeMs, f))
+      sendMcuLine(line, false);
+  }
+
   // The wall fit is measurement only. It is forwarded with its total age so the
   // executor can line it up with the gyro heading at the moment of the scan.
   if (ENABLE_LIDAR_CENTERING && f.ageKnown) {
@@ -614,7 +717,7 @@ static void evaluateSteeringFrame(const String& sidesVal) {
 
 // Permission expires with its acquisition, and STOP always withdraws it.
 static uint8_t currentSteeringAllow(uint32_t nowMs) {
-  if (stopLatched || operatorStopLatched || turnActive) return 0;
+  if (stopLatched || operatorStopLatched || turnActive || backingActive) return 0;
   if (nowMs - steeringAllowAtMs > STEERING_MAX_AGE_MS) return 0;
   return steeringAllow;
 }
@@ -651,12 +754,15 @@ static void startHeadingReference() {
 // SAFETY-FIRST COMPACT TRANSPORT
 // ============================================================
 // Pi -> bridge:
-//   P:<seq>|F=<C|W|O|H|S>|B=<C|O|H|S>[|T=<C|O|S>]  (path; acknowledged write)
+//   P:<seq>|F=<C|W|O|H|S>|B=<C|O|H|S>[|T=<C|O|S>][|R=<C|O|S>]  (path; acknowledged write)
 //       W = clear to the stop distance, caution zone ahead -> GO:SLOW
 //       T = spin-sweep clearance; required to be C between [TURN:START]/[TURN:END]
+//       R = rear-travel clearance (reverse parking, 2026-11-16); between
+//           [BACK:START]/[BACK:END] GO needs R=C and B=C, and F is not consulted
 //   S:<seq>|L=..|R=..|F=..|...|CF=..|CL=..|CR=..|A=<acq>[|WL=..][|WR=..][|H=..]|G=<ms>
 //       (steering; latest value). CF/CL/CR give the steering permission bits;
 //       WL/WR/H (wall line fit) and G (scan age) become the executor's W line.
+//       RD/RH (unmasked rear-wall distance/heading) and G become its D line.
 //   SENSOR:...                         (telemetry only; never changes path)
 //   [HEALTH:1:UUUUU]                   (Internet/cloud/LiDAR/sensor UART/thermal;
 //                                       U=up, D=down, X=unknown; telemetry only)
@@ -711,6 +817,8 @@ static String extractSegment(const String& raw, const char* prefix) {
 }
 
 static void relayStop(const char* reason) {
+  if (strstr(reason, "LINK") || strstr(reason, "OPERATOR") ||
+      strstr(reason, "PROTOCOL") || strstr(reason, "SEQUENCE")) clearDeveloperTest();
   stopLatched = true;
   clearConfirmCount = 0;
   sendMcuStop(reason);
@@ -722,14 +830,18 @@ static bool validPathCode(const String& code) {
 
 // F may also be W: clear to the stop distance, but something in the swept
 // corridor ahead, so drive at caution speed. T is the spin-sweep clearance and
-// is optional; it only matters between [TURN:START] and [TURN:END].
+// is optional; it only matters between [TURN:START] and [TURN:END]. R, the
+// rear-travel clearance, is optional too and matters only between [BACK:START]
+// and [BACK:END]; a missing R is never a clear rear.
 static bool parsePathBody(const String& body, String& frontCode, String& backCode,
-                          String& turnCode) {
+                          String& turnCode, String& rearCode) {
   if (body.endsWith("|")) return false;
   bool haveFront = false;
   bool haveBack = false;
   bool haveTurn = false;
+  bool haveRear = false;
   turnCode = "";
+  rearCode = "";
   int start = 0;
   while (start < body.length()) {
     int end = body.indexOf('|', start);
@@ -748,6 +860,10 @@ static bool parsePathBody(const String& body, String& frontCode, String& backCod
       if (haveTurn || token.length() != 3) return false;
       turnCode = token.substring(2);
       haveTurn = true;
+    } else if (token.startsWith("R=")) {
+      if (haveRear || token.length() != 3) return false;
+      rearCode = token.substring(2);
+      haveRear = true;
     } else {
       return false;
     }
@@ -755,7 +871,8 @@ static bool parsePathBody(const String& body, String& frontCode, String& backCod
   }
   return haveFront && haveBack &&
          (validPathCode(frontCode) || frontCode == "W") && validPathCode(backCode) &&
-         (!haveTurn || turnCode == "C" || turnCode == "O" || turnCode == "S");
+         (!haveTurn || turnCode == "C" || turnCode == "O" || turnCode == "S") &&
+         (!haveRear || rearCode == "C" || rearCode == "O" || rearCode == "S");
 }
 
 static void handlePathPacket(const String& raw) {
@@ -774,7 +891,8 @@ static void handlePathPacket(const String& raw) {
   String frontCode;
   String backCode;
   String turnCode;
-  if (!parsePathBody(body, frontCode, backCode, turnCode)) {
+  String rearCode;
+  if (!parsePathBody(body, frontCode, backCode, turnCode, rearCode)) {
     relayStop("STOP:PROTOCOL");
     return;
   }
@@ -789,12 +907,17 @@ static void handlePathPacket(const String& raw) {
     return;
   }
 
-  const bool slow = frontCode == "W";
-  const bool blocked = (frontCode != "C" && !slow) || (backCode != "C");
+  // Backing (reverse parking): the front group faces away from the travel and is
+  // not consulted, as the back group is not for a forward move; B still carries
+  // side clearance and missing back data, and R below the rear travel itself.
+  const bool frontCounts = !backingActive;
+  const bool slow = frontCounts && frontCode == "W";
+  const bool blocked = (frontCounts && frontCode != "C" && frontCode != "W") ||
+                       (backCode != "C");
   // H changes only the diagnostic STOP reason. Generic O has identical motion
   // safety behavior and is the expected production LiDAR blockage code.
-  const bool human = (frontCode == "H") || (backCode == "H");
-  const bool stale = (frontCode == "S") || (backCode == "S");
+  const bool human = (frontCounts && frontCode == "H") || (backCode == "H");
+  const bool stale = (frontCounts && frontCode == "S") || (backCode == "S");
 
   if (blocked) {
     if (stale) relayStop("STOP:STALE");
@@ -813,11 +936,22 @@ static void handlePathPacket(const String& raw) {
     relayStop(turnCode == "O" ? "STOP:TURN" : "STOP:TURN_UNKNOWN");
     return;
   }
+  // Between [BACK:START] and [BACK:END] the rear travel must be clear. A Pi that
+  // sends no R, or an unknown rear, is never a clear rear.
+  if (!backStateKnown) {
+    relayStop("STOP:BACK_UNKNOWN");
+    return;
+  }
+  if (backingActive && rearCode != "C") {
+    relayStop(rearCode == "O" ? "STOP:BACK" : "STOP:BACK_UNKNOWN");
+    return;
+  }
 
   // Every motion needs heading feedback: straights hold it and turns are
   // measured by it. The heading is continuous from boot, so only a bounded
   // reference request after recovery may briefly lack a sample.
-  if (!mpuHeading.ready() || (!mpuHeading.valid() && !mpuHeading.referenceSettling())) {
+  if (!developerMpuBypassed() &&
+      (!mpuHeading.ready() || (!mpuHeading.valid() && !mpuHeading.referenceSettling()))) {
     relayStop("STOP:MPU");
     return;
   }
@@ -838,7 +972,9 @@ static void handlePathPacket(const String& raw) {
     stopLatched = false;
     clearConfirmCount = 0;
   }
-  sendMcuLine(slow ? "GO:SLOW" : "GO", true);
+  // GO:BACK tells the executor this permission covered the rear travel: it
+  // backs only on GO:BACK, so a bridge without this rule can never let it.
+  sendMcuLine(backingActive ? "GO:BACK" : (slow ? "GO:SLOW" : "GO"), true);
 }
 
 static void handleSidesPacket(const String& raw) {
@@ -920,7 +1056,7 @@ static void latchOperatorStop() {
   operatorStopMarker = OPERATOR_STOP_MARKER;
   operatorStopLatched = true;
   operatorExecutorStopped = false;
-  operatorStopGeneration++;
+  operatorStopGeneration = operatorStopGeneration + 1;  // operatorMux serialises the writers
   portEXIT_CRITICAL(&operatorMux);
 }
 
@@ -942,6 +1078,7 @@ static bool processOperatorCommand(const String& raw) {
   if (!parseOperatorCommand(raw.c_str(), id, action)) return true;
   if (strcmp(action, "ESTOP") == 0) {
     latchOperatorStop();
+    clearDeveloperTest();
     pendingEmergencyId = id;
     pendingEmergencyGeneration = operatorStopGeneration;
     pendingReleaseId = "";
@@ -996,6 +1133,155 @@ static bool isHealthPacket(const char* bytes, size_t length) {
   return true;
 }
 
+static bool developerDecimal(const String& value, uint64_t* out, bool zero = false) {
+  if (!value.length() || value.length() > 16 || (value.length() > 1 && value.charAt(0) == '0')) return false;
+  uint64_t number = 0;
+  for (unsigned i = 0; i < value.length(); ++i) {
+    const char c = value.charAt(i);
+    if (c < '0' || c > '9') return false;
+    number = number * 10U + (unsigned)(c - '0');
+  }
+  if (!zero && !number) return false;
+  *out = number;
+  return true;
+}
+
+// Minimum developer speed: ceil(30 cm/s * 1600 / (pi * 6.5)) = 2351 steps/s.
+static constexpr uint32_t DEVELOPER_MIN_SPEED_HZ = 2351;
+static constexpr uint32_t DEVELOPER_HOLD_MAX_SPEED_HZ = 2 * DEVELOPER_MIN_SPEED_HZ;
+// RunStart: [TEST:<id>:P:<speed 2351..8000>:<accel 100..20000>:<op><1..100000>,...], 1..20
+// steps with op F, B, L, R or C, or [TEST:<id>:C|U:<saved list id>]. The executor checks
+// the same bounds again and owns the saved list.
+static bool validRunFields(const String& fields, char action) {
+  uint64_t value = 0;
+  if (action != 'P') return fields.indexOf(':') < 0 && developerDecimal(fields, &value);
+  const int s = fields.indexOf(':'), t = fields.indexOf(':', s + 1);
+  if (s < 0 || t < 0 || fields.indexOf(':', t + 1) >= 0) return false;
+  if (!developerDecimal(fields.substring(0, s), &value) || value < DEVELOPER_MIN_SPEED_HZ || value > 8000U) return false;
+  if (!developerDecimal(fields.substring(s + 1, t), &value) || value < 100U || value > 20000U) return false;
+  int at = t + 1, count = 0;
+  while (true) {
+    if (++count > 20) return false;
+    const int comma = fields.indexOf(',', at);
+    const String item = fields.substring(at, comma < 0 ? (int)fields.length() : comma);
+    if (item.length() < 2 || String("FBLRC").indexOf(item.charAt(0)) < 0 ||
+        !developerDecimal(item.substring(1), &value) || value > 100000U) return false;
+    if (comma < 0) return true;
+    at = comma + 1;
+  }
+}
+
+static bool parseDeveloperTest(const String& raw, DeveloperTestCommand* command) {
+  if (!raw.startsWith("[TEST:") || !raw.endsWith("]") || raw.length() >= sizeof(developerTestPacket)) return false;
+  const int a = raw.indexOf(':', 6), b = raw.indexOf(':', a + 1), c = raw.indexOf(':', b + 1);
+  if (a < 0 || b != a + 2) return false;
+  if (developerRunAction(raw.charAt(a + 1))) {
+    uint64_t number = 0;
+    if (!developerDecimal(raw.substring(6, a), &number) ||
+        !validRunFields(raw.substring(b + 1, raw.length() - 1), raw.charAt(a + 1))) return false;
+    snprintf(command->id, sizeof(command->id), "%s", raw.substring(6, a).c_str());
+    command->action = raw.charAt(a + 1);
+    command->amount = 0;
+    command->sensors = 0;  // a list has no sensor gates
+    return true;
+  }
+  if (c < 0) return false;
+  const String id = raw.substring(6, a);
+  uint64_t number = 0, amount = 0, sensors = 0;
+  if (!developerDecimal(id, &number) ||
+      !developerDecimal(raw.substring(b + 1, c), &amount, true) ||
+      !developerDecimal(raw.substring(c + 1, raw.length() - 1), &sensors, true) || sensors > 7) return false;
+  const char action = raw.charAt(a + 1);
+  // B: backward (owner, 2026-11-16), the same bound as forward; the executor runs it
+  // inside the rear scope, so GO:BACK below still needs the Pi's R=C and B=C.
+  if (!(((action == 'F' || action == 'B') && amount >= 1 && amount <= 400) ||
+        ((action == '1' || action == '2') && amount >= 1 && amount <= 100) ||
+        ((action == 'L' || action == 'R') && ((amount >= 1 && amount <= 15) || amount == 90) &&
+         (sensors & 2U)) ||
+        (developerHoldAction(action) && amount >= DEVELOPER_MIN_SPEED_HZ &&
+         amount <= DEVELOPER_HOLD_MAX_SPEED_HZ && sensors == 0) ||
+        (action == 'I' && amount == 0))) return false;
+  snprintf(command->id, sizeof(command->id), "%s", id.c_str());
+  command->action = action;
+  command->amount = (uint16_t)amount;
+  command->sensors = (uint8_t)sensors;
+  return true;
+}
+
+static void developerFailure(const char* id, const char* reason) {
+  sendNotification((String("[TEST FAILED:") + id + ":" + reason + "]").c_str());
+}
+
+static bool processDeveloperTest(const String& raw) {
+  const uint32_t now = millis();
+  expireDeveloperTest(now);
+  if (raw.startsWith("[RUN CLEAR:")) {
+    // RunStart's Discard only forgets the executor's saved list; it never moves anything.
+    uint64_t number = 0;
+    if (raw.endsWith("]") && developerDecimal(raw.substring(11, raw.length() - 1), &number) && mcuReady)
+      sendMcuLine(raw, true);
+    return true;
+  }
+  if (raw.startsWith("[TEST KEEP:")) {
+    if (!raw.endsWith("]")) return true;
+    const String id = raw.substring(11, raw.length() - 1);
+    uint64_t number = 0;
+    if (!developerDecimal(id, &number) || id != developerTestId || !developerTestFresh(now) ||
+        now - currentFrameReceivedAtMs > DEVELOPER_KEEP_AGE_MS) return true;
+    if (sendMcuLine(raw, true)) {
+      developerTestKeepMs = currentFrameReceivedAtMs;
+      developerTestKeepSeen = true;
+    } else {
+      // A lost KEEP is not a rejection of an already accepted motor action.
+      // End only the bridge override; the executor's short lease brakes it.
+      clearDeveloperTest();
+    }
+    return true;
+  }
+  if (raw.startsWith("[TEST END:")) {
+    // The arrow was let go. It can only stop the wheels, so it is relayed whatever
+    // the lease, a latched stop or the frame's age; only the held drive's own ID.
+    const String id = raw.substring(10, raw.length() - 1);
+    if (raw.endsWith("]") && developerLastHoldId[0] != '\0' && id == developerLastHoldId)
+      sendMcuLine(raw.c_str(), true);
+    return true;
+  }
+  if (!raw.startsWith("[TEST:")) return false;
+  DeveloperTestCommand command = {};
+  if (!parseDeveloperTest(raw, &command)) return true;
+  if (operatorStopLatched) { developerFailure(command.id, "EMERGENCY_STOP"); return true; }
+  if (operatorRebootScheduled || pendingRebootId.length()) { developerFailure(command.id, "REBOOT_PENDING"); return true; }
+  if (!deviceConnected || !piReady || !mcuReady || !bleBridgeSignalSent || mcuAckFault || mcuBackpressureStopPending) {
+    developerFailure(command.id, "NOT_READY"); return true;
+  }
+  if (developerTestPending()) {
+    if (raw == developerTestPacket) {
+      if (developerTestAcknowledged)
+        sendNotification((String("[TEST ACK:") + developerTestId + "]").c_str());
+    } else {
+      developerFailure(command.id, strcmp(command.id, developerTestId) == 0 ? "ID_REUSED" : "NOT_IDLE");
+    }
+    return true;
+  }
+  snprintf(developerTestId, sizeof(developerTestId), "%s", command.id);
+  snprintf(developerTestPacket, sizeof(developerTestPacket), "%s", raw.c_str());
+  developerTestSensors = command.sensors;
+  developerTestHold = developerHoldAction(command.action);
+  developerTestRun = developerRunAction(command.action);
+  developerTestLimitMs = (command.action == 'L' || command.action == 'R') && command.amount == 90
+      ? DEVELOPER_TURN90_LIMIT_MS : DEVELOPER_LIMIT_MS;
+  snprintf(developerLastHoldId, sizeof(developerLastHoldId), "%s", developerTestHold ? command.id : "");
+  developerTestSession = connectionSession;
+  developerTestStopGeneration = operatorStopGeneration;
+  developerTestStartedMs = developerTestKeepMs = now;
+  developerTestAcknowledged = developerTestKeepSeen = false;
+  if (!sendMcuLine(raw, true)) {
+    clearDeveloperTest();
+    developerFailure(command.id, "UART_BUSY");
+  }
+  return true;
+}
+
 static void processAndRelayMessage(const char* incoming) {
   if (incoming == nullptr) return;
   String raw(incoming);
@@ -1011,6 +1297,7 @@ static void processAndRelayMessage(const char* incoming) {
     return;
   }
   if (processOperatorCommand(raw)) return;
+  if (processDeveloperTest(raw)) return;
 
   const bool startQuery = raw.startsWith("[START STATUS:");
   if (raw.startsWith("[START:") || startQuery) {
@@ -1022,6 +1309,10 @@ static void processAndRelayMessage(const char* incoming) {
     }
     if (!startQuery && operatorStopLatched) {
       sendNotification(("[START FAILED:" + id + ":EMERGENCY_STOP]").c_str());
+      return;
+    }
+    if (!startQuery && developerTestPending()) {
+      sendNotification(("[START FAILED:" + id + ":NOT_IDLE]").c_str());
       return;
     }
     if (!deviceConnected || !piReady || !mcuReady || !bleBridgeSignalSent ||
@@ -1044,6 +1335,17 @@ static void processAndRelayMessage(const char* incoming) {
     return;
   }
   if (raw == "[RESET]" || raw.startsWith("[RESET:")) {
+    if (developerTestPending()) {
+      // RESET is return/recovery, not the developer stop control. Do not let
+      // it retire test state while its bounded motion stack is still active.
+      if (raw.startsWith("[RESET:") && raw.endsWith("]")) {
+        const String id = raw.substring(7, raw.length() - 1);
+        uint64_t number = 0;
+        if (developerDecimal(id, &number))
+          sendNotification((String("[RESET FAILED:") + id + "]").c_str());
+      }
+      return;
+    }
     // The controller owns reset idempotency and brakes before a new return.
     // Repeated delivery must not STOP an already-running return every 3 s.
     sendMcuLine(raw, true);
@@ -1157,6 +1459,10 @@ static void enqueueBleWrite(const char* bytes, size_t length) {
                          frameStartsWith(frame, "[RESET") ||
                          frameStartsWith(frame, "[START:") ||
                          frameStartsWith(frame, "[START STATUS:") ||
+                         frameStartsWith(frame, "[TEST:") ||
+                         frameStartsWith(frame, "[TEST KEEP:") ||
+                         frameStartsWith(frame, "[TEST END:") ||
+                         frameStartsWith(frame, "[RUN CLEAR:") ||
                          frameStartsWith(frame, "[OP:") ||
                          strcmp(frame.payload, "[OP STATUS]") == 0 ||
                          strstr(frame.payload, "PATH:") != nullptr;
@@ -1246,7 +1552,9 @@ static void processBleIngress() {
          xQueueReceive(controlQueue, &frame, 0) == pdPASS) {
     processedControls++;
     if (!deviceConnected || frame.session != connectionSession) continue;
-    if (!frameIsCurrent(frame, ingressWindowMs)) {
+    // A release ([TEST END]) is never stale: delivered late it still only stops.
+    if (!frameStartsWith(frame, "[TEST END:") &&
+        !frameIsCurrent(frame, frameStartsWith(frame, "[TEST KEEP:") ? DEVELOPER_KEEP_AGE_MS : ingressWindowMs)) {
       if (mcuReady) relayStop("STOP:STALE");
       continue;
     }
@@ -1474,6 +1782,34 @@ static void handleMcuLine(const char* mcuMsg) {
   if (mcuMsg == nullptr || mcuMsg[0] == '\0') return;
 
   const String operatorMessage(mcuMsg);
+  expireDeveloperTest((uint32_t)millis());
+  if ((operatorMessage.startsWith("[TEST ACK:") || operatorMessage.startsWith("[TEST DONE:") ||
+       operatorMessage.startsWith("[TEST FAILED:")) && operatorMessage.endsWith("]")) {
+    const int first = operatorMessage.indexOf(':') + 1;
+    int end = operatorMessage.indexOf(':', first);
+    if (end < 0) end = operatorMessage.length() - 1;
+    const String id = operatorMessage.substring(first, end);
+    const bool failed = operatorMessage.startsWith("[TEST FAILED:");
+    uint64_t number = 0;
+    bool valid = developerDecimal(id, &number) &&
+        (failed ? end < (int)operatorMessage.length() - 2 : end == (int)operatorMessage.length() - 1);
+    if (failed) {
+      for (int i = end + 1; i < (int)operatorMessage.length() - 1; ++i) {
+        const char c = operatorMessage.charAt(i);
+        if (!((c >= 'A' && c <= 'Z') || c == '_')) valid = false;
+      }
+    }
+    if (valid && id == developerTestId && developerTestFresh((uint32_t)millis())) {
+      if (operatorMessage.startsWith("[TEST ACK:")) {
+        developerTestAcknowledged = true;
+        executorParked = false;
+      } else {
+        clearDeveloperTest();
+      }
+    }
+    sendNotification(mcuMsg);
+    return;
+  }
   if (operatorMessage.startsWith("[OP ACK:") && operatorMessage.endsWith("]")) {
     const int split = operatorMessage.indexOf(':', 8);
     if (split > 8) {
@@ -1501,6 +1837,8 @@ static void handleMcuLine(const char* mcuMsg) {
           pendingEmergencyId = "";
           turnActive = false;
           turnStateKnown = true; // RELEASE/CONTINUE/REVERSE is acknowledged only after route unwind to IDLE.
+          backingActive = false;
+          backStateKnown = true;
           resetNavigationState();
           relayStop("STOP:WAITING_DATA");
         }
@@ -1530,7 +1868,7 @@ static void handleMcuLine(const char* mcuMsg) {
     if (!operatorStopLatched) {
       operatorStopMarker = OPERATOR_STOP_MARKER;
       operatorStopLatched = true;
-      operatorStopGeneration++;
+      operatorStopGeneration = operatorStopGeneration + 1;
     }
     // At software boot the original request ID is gone. An explicit executor
     // status recovers stop evidence. During an in-flight ESTOP only its ACK
@@ -1567,6 +1905,22 @@ static void handleMcuLine(const char* mcuMsg) {
     turnStateKnown = true;
     return;
   }
+  if (strcmp(mcuMsg, "[BACK:START]") == 0) {
+    // GO evidence from before ignored the rear travel. Confirm afresh; a status
+    // replay of a scope already known must not restart the confirmations.
+    if (!backStateKnown || !backingActive) {
+      stopLatched = true;
+      clearConfirmCount = 0;
+    }
+    backingActive = true;
+    backStateKnown = true;
+    return;
+  }
+  if (strcmp(mcuMsg, "[BACK:END]") == 0) {
+    backingActive = false;
+    backStateKnown = true;
+    return;
+  }
 
   // During a route the controller sends [MCU ALIVE] when it has heard nothing for
   // a while, which includes every BLE outage of more than 3 s. That is not a
@@ -1584,9 +1938,11 @@ static void handleMcuLine(const char* mcuMsg) {
     // until its next state line.
     straightRunActive = false;
     turnActive = false;
-    // READY is an executor restart at idle; ALIVE can be an interrupted spin.
-    // The latter needs its status replay before any new path can grant GO.
+    backingActive = false;
+    // READY is an executor restart at idle; ALIVE can be an interrupted spin or
+    // backing move. Those need their status replay before a path can grant GO.
     turnStateKnown = !recoveryPing;
+    backStateKnown = !recoveryPing;
     executorParked = false;
     // Treat every READY as a controller boot epoch, even if BLE stayed up.
     // This fixes the case where a rebooted executor waits forever because the
@@ -1633,19 +1989,25 @@ static void handleMcuLine(const char* mcuMsg) {
   }
   if (strcmp(mcuMsg, "[IDLE]") == 0 || strcmp(mcuMsg, "[OUTBOUND COMPLETE]") == 0 ||
       strcmp(mcuMsg, "[ROUTE FAULT]") == 0) {
+    // A status reply already queued before TEST may precede its ACK. It cannot
+    // cancel that pending correlation; IDLE after acceptance ends its scope.
+    if (developerTestAcknowledged) clearDeveloperTest();
     if (!executorParked) executorParkedSinceMs = (uint32_t)millis();
     executorParked = true;
     executorStateAtMs = (uint32_t)millis();
   } else if (strcmp(mcuMsg, "[RUNNING]") == 0 || strcmp(mcuMsg, "[RETURNING]") == 0 ||
-             strcmp(mcuMsg, "[REVERSING]") == 0) {
+             strcmp(mcuMsg, "[REVERSING]") == 0 || strcmp(mcuMsg, "[TESTING]") == 0) {
+    if (strcmp(mcuMsg, "[TESTING]") != 0) clearDeveloperTest();
     // Sent before the route's first step; the bias window ends here.
     executorParked = false;
     executorStateAtMs = (uint32_t)millis();
   }
-  if ((strcmp(mcuMsg, "[SYSTEM READY]") == 0 || strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0) &&
+  if ((strcmp(mcuMsg, "[SYSTEM READY]") == 0 || strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0 ||
+       strcmp(mcuMsg, "[TEST READY:1]") == 0) &&
       (!deviceConnected || !piReady || !mcuReady || !bleBridgeSignalSent || mcuAckFault ||
        mcuBackpressureStopPending ||
-       (strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0 && operatorStopLatched))) {
+       ((strcmp(mcuMsg, "[DISPOSAL READY:1]") == 0 || strcmp(mcuMsg, "[TEST READY:1]") == 0) &&
+        (operatorStopLatched || developerTestPending())))) {
     return;
   }
   if (VERBOSE_PROTOCOL_LOGS) {
@@ -1835,6 +2197,7 @@ void loop() {
     sendBridgeMpuLine();
   }
   pollMcuUart();
+  expireDeveloperTest((uint32_t)millis());
   // Bias refresh needs the wheels held: a STOP latched for a while, or the
   // executor reporting a parked state for a while, and never inside a turn.
   {
@@ -1844,12 +2207,12 @@ void loop() {
     if (executorParked && nowMs - executorStateAtMs > EXECUTOR_STATE_MAX_AGE_MS) executorParked = false;
     const bool heldByStop = stopLatched && nowMs - stopLatchedSinceMs >= STILL_BIAS_SETTLE_MS;
     const bool parked = executorParked && nowMs - executorParkedSinceMs >= STILL_BIAS_SETTLE_MS;
-    mpuHeading.setStill(!turnActive && (heldByStop || parked));
+    mpuHeading.setStill(!developerTestPending() && !turnActive && (heldByStop || parked));
   }
   const MpuHeading::Sample mpuSample = mpuHeading.poll();
   if (mpuSample == MpuHeading::Sample::FAULT) {
     mpuFaultCount++;
-    if (mcuReady) relayStop("STOP:MPU");
+    if (mcuReady && !developerMpuBypassed()) relayStop("STOP:MPU");
     Serial.printf("[MPU] MPU FAULT %s; holding STOP, then recovering.\n",
                   mpuHeading.lastFault());
     mpuHeading.beginRecovery();
@@ -1857,7 +2220,7 @@ void loop() {
   }
   // STOP:MPU holds the robot throughout, so this measures a stationary sensor. On
   // battery there is no console: without this, one bad moment needs a board reset.
-  if (!mpuHeading.ready()) {
+  if (!developerTestPending() && !mpuHeading.ready()) {
     const char* const previousProblem = mpuHeading.problem();
     if (mpuHeading.serviceRecovery()) {
       // A warm recovery within 500 ms keeps the reference and its epoch. Any
@@ -1873,7 +2236,7 @@ void loop() {
   serviceHeadingStream((uint32_t)millis());
   while (Serial.available()) {
     const char command = (char)Serial.read();
-    if ((command == 'R' || command == 'r') && stopLatched && mpuHeading.ready()) {
+    if ((command == 'R' || command == 'r') && stopLatched && mpuHeading.ready() && !developerTestPending()) {
       startHeadingReference();
       Serial.println("[MPU] Operator requested a new heading reference while stopped.");
     }

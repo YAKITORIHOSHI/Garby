@@ -26,7 +26,10 @@
 // target) to the heading the route started with.
 #include <stdint.h>
 
-enum class RouteOp : uint8_t { BUMPS, STRAIGHT, LONG_HALLWAY, TURN_LEFT, TURN_RIGHT };
+// BACKING (owner, 2026-11-16, reverse parking): drive the step's wheel steps
+// BACKWARDS into the parking spot at the end of a route (backIntoPlace). Its leg
+// travel counts the steps driven backwards, so Continue resumes it the same way.
+enum class RouteOp : uint8_t { BUMPS, STRAIGHT, LONG_HALLWAY, TURN_LEFT, TURN_RIGHT, BACKING };
 
 // Station steps (owner, 2026-11-14: "Don't be bothered with walls during the
 // first and parking, garby's station can be found at the side of hallways").
@@ -96,12 +99,14 @@ class RouteResume {
     live_.stepTurn = 0.0f;
   }
   // The straight travel of the current step starts here (after any pre-run
-  // centring, whose sidesteps are not route travel).
-  void beginLeg(int32_t steps, long position1, long position2) {
+  // centring, whose sidesteps are not route travel). backward: the leg is driven
+  // backwards (a BACKING step), so falling step counts are its progress.
+  void beginLeg(int32_t steps, long position1, long position2, bool backward = false) {
     live_.legActive = true;
     live_.legSteps = steps;
     live_.legStart1 = position1;
     live_.legStart2 = position2;
+    live_.legBackward = backward;
   }
   // A route turn added its angle to the route heading frame.
   void commitTurn() {
@@ -122,9 +127,7 @@ class RouteResume {
   // Straight travel still to drive in the leg in progress; -1 without one.
   int32_t legLeft(long position1, long position2) const {
     if (live_.route == NONE || !live_.legActive) return -1;
-    const int64_t done = ((int64_t)(position1 - live_.legStart1) +
-                          (int64_t)(position2 - live_.legStart2)) / 2;
-    const int64_t left = (int64_t)live_.legSteps - done;
+    const int64_t left = (int64_t)live_.legSteps - legDone(position1, position2);
     return left < 0 ? 0 : (int32_t)left;
   }
 
@@ -148,9 +151,7 @@ class RouteResume {
     point.anchorFromTarget =
         live_.anchorFromTarget - (live_.turnCommitted ? live_.stepTurn : 0.0f);
     if (live_.legActive) {
-      const int64_t done = ((int64_t)(position1 - live_.legStart1) +
-                            (int64_t)(position2 - live_.legStart2)) / 2;
-      int64_t left = (int64_t)live_.legSteps - done;
+      int64_t left = (int64_t)live_.legSteps - legDone(position1, position2);
       if (left < 0) left = 0;
       if (live_.reverse) {
         // Still to drive back = travel already made into this step.
@@ -219,6 +220,13 @@ class RouteResume {
   }
 
  private:
+  // Mean travel of both wheels in the leg's own direction of travel.
+  int64_t legDone(long position1, long position2) const {
+    const int64_t moved = ((int64_t)(position1 - live_.legStart1) +
+                           (int64_t)(position2 - live_.legStart2)) / 2;
+    return live_.legBackward ? -moved : moved;
+  }
+
   struct Live {
     uint8_t route = NONE;
     uint8_t step = 0;
@@ -228,6 +236,7 @@ class RouteResume {
     bool legActive = false;
     int32_t legSteps = 0;
     long legStart1 = 0, legStart2 = 0;
+    bool legBackward = false;   // a BACKING leg: falling step counts are progress
     bool turnCommitted = false;
     bool parked = false;
     bool reverse = false;       // the way back of a reverse run

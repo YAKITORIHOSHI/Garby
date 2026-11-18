@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-TESTS = ROOT / "tools" / "firmware_tests"
+TESTS = ROOT / "tests" / "firmware"
 
 def main():
     with tempfile.TemporaryDirectory(prefix="garby-firmware-tests-") as directory:
@@ -45,16 +45,26 @@ def main():
             raise SystemExit("No host C++ compiler available")
         compiler_path = shutil.which(compiler) or compiler
         environment["PATH"] = str(Path(compiler_path).resolve().parent) + os.pathsep + environment.get("PATH", "")
+        # The ESP32 core builds the firmware as C++20, which deprecates ++, -- and
+        # compound assignment on volatile objects (-Wvolatile). GCC checks that rule
+        # in this C++17 build as well, so make it an error here, before a target build.
+        strict = []
+        if not use_msvc:
+            version = subprocess.run([compiler, "--version"], env=environment, capture_output=True, text=True).stdout
+            if "Free Software Foundation" in version:
+                strict = ["-Werror=volatile"]
         for source in sorted(TESTS.glob("test_*.cpp")):
             executable = build / (source.stem + (".exe" if os.name == "nt" else ""))
             if use_msvc:
                 command = [compiler, "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/W3", f"/I{TESTS / 'stubs'}", f"/I{build}", str(source), f"/Fe:{executable}", f"/Fo:{build / (source.stem + '.obj')}"]
             else:
-                command = [compiler, "-std=c++17", "-I", str(TESTS / "stubs"), "-I", str(build), str(source), "-o", str(executable)]
+                command = [compiler, "-std=c++17", *strict, "-I", str(TESTS / "stubs"), "-I", str(build), str(source), "-o", str(executable)]
             result = subprocess.run(command, cwd=build, env=environment, capture_output=True, text=True)
             print(result.stdout + result.stderr)
             result.check_returncode()
-            result = subprocess.run([str(executable)], env=environment, capture_output=True, text=True, timeout=15)
+            # Unoptimised, test_navigation alone needs about 14 s of CPU on a desktop,
+            # so a 15 s limit failed whenever anything else was running. A hang still ends.
+            result = subprocess.run([str(executable)], env=environment, capture_output=True, text=True, timeout=120)
             print(result.stdout + result.stderr)
             result.check_returncode()
     print("Firmware behavioral checks PASS; hardware timing/electrical acceptance remains required.")

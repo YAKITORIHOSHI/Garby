@@ -115,7 +115,8 @@ class HeadingControl {
   static constexpr uint32_t TURN_CORRECTION_SPEED_HZ = 800;
   static constexpr uint32_t TURN_MIN_SPEED_HZ = 300;
   static constexpr float TURN_PROFILE_DECEL_FRACTION = 0.6f;
-  static constexpr float TURN_STOP_DEG = 0.3f;
+  // Abort wheel queues at the estimated target; no early ramp-stop allowance.
+  static constexpr float TURN_STOP_DEG = 0.0f;
   static constexpr float TURN_TOLERANCE_DEG = 1.0f;
   static constexpr float TURN_WRONG_WAY_DEG = 3.0f;
   static constexpr float TURN_STEP_LIMIT_FACTOR = 1.5f;
@@ -142,6 +143,13 @@ class HeadingControl {
   static constexpr float ALIGN_MAX_CORRECTION_DEG = 8.0f;  // more is not the expected hallway
   static constexpr float ALIGN_AGREE_DEG = 1.5f;
   static constexpr uint8_t ALIGN_MAX_PASSES = 2;
+
+  // Parking only: square the rear to its own wall, not the hallway/route yaw.
+  static constexpr float PARK_ALIGN_DEG = 1.0f;
+  static constexpr float PARK_DRIFT_DEG = 2.0f;
+  static constexpr float PARK_SCAN_AGREE_DEG = 1.0f;
+  static constexpr float PARK_DISTANCE_AGREE_CM = 3.0f;
+  static constexpr float PARK_MAX_CORRECTION_DEG = 8.0f;
 
   // ---- pre-run centring (2026-11-12, owner's idea) ----
   // Before a long centred straight the robot stands still, measures where it is
@@ -178,6 +186,10 @@ class HeadingControl {
     }
     if (line[0] == 'W' && line[1] == ',') {
       handleWallLine(line, now);
+      return true;
+    }
+    if (line[0] == 'D' && line[1] == ',') {
+      handleRearLine(line, now);
       return true;
     }
     if (line[0] != 'M' || line[1] != ',') return false;
@@ -443,6 +455,7 @@ class HeadingControl {
                               TURN_PROFILE_DECEL_FRACTION * remainingSteps);
     const uint32_t limited = (uint32_t)constrain(speed, (float)TURN_MIN_SPEED_HZ,
                                                  (float)maxSpeedHz);
+    if (limited == maxSpeedHz) return maxSpeedHz;  // keep a non-round speed setting (2351 Hz) exact
     return (limited / 10U) * 10U;  // avoid re-sending tiny speed changes
   }
 
@@ -501,6 +514,32 @@ class HeadingControl {
   }
 
   // ======================= diagnostics =======================
+  struct RearView {
+    uint32_t acquisition = 0, scanMs = 0;
+    float distanceCm = 0.0f, axisDeg = 0.0f;
+  };
+  void resetRearEvidence() {
+    rearValid_ = haveRearAcquisition_ = false;
+    ++rearGeneration_;
+  }
+  uint32_t rearGeneration() const { return rearGeneration_; }
+  bool rearViewSince(uint32_t sinceMs, uint32_t now, RearView* out) const {
+    if (!rearValid_ || !out || (int32_t)(rear_.scanMs - sinceMs) < 0 ||
+        now - rear_.scanMs > WALL_MAX_AGE_MS) return false;
+    float gyroThen = 0.0f;
+    if (!headingAt(rear_.scanMs, &gyroThen)) return false;
+    *out = rear_;
+    out->axisDeg = gyroThen - rearHeadingDeg_;
+    return true;
+  }
+
+  // Raw LiDAR wall measurement, independent of MPU readiness. Diagnostic only.
+  bool wallMeasurement(uint32_t now, float* degrees) const {
+    if (degrees == nullptr || !wall_.valid || !(wall_.flags & WALL_HEADING) || now - wall_.scanMs > WALL_MAX_AGE_MS)
+      return false;
+    *degrees = wall_.headingDeg;
+    return true;
+  }
   uint32_t accepted() const { return accepted_; }
   uint32_t rejected() const { return rejected_; }
   uint32_t faultLines() const { return faultLines_; }
@@ -541,6 +580,11 @@ class HeadingControl {
   WallSample wall_;
   bool haveWallAcquisition_ = false;
   uint32_t lastWallAcquisition_ = 0, wallLines_ = 0, wallRejected_ = 0;
+  RearView rear_;
+  bool rearValid_ = false, haveRearAcquisition_ = false;
+  uint32_t lastRearAcquisition_ = 0;
+  uint32_t rearGeneration_ = 0;
+  float rearHeadingDeg_ = 0.0f;
   // fusion
   bool axisKnown_ = false, lateralKnown_ = false, widthKnown_ = false, centerActive_ = false;
   float axisDeg_ = 0.0f, driftDps_ = 0.0f, lateralCm_ = 0.0f, widthCm_ = 0.0f;
@@ -691,6 +735,34 @@ class HeadingControl {
     wall_.rightCm = rightMm * 0.1f;
     wall_.headingDeg = headingCdeg * 0.01f;
     if (straightActive_ && centering_ && WALL_FUSION_ENABLED) fuseWall(now);
+  }
+
+  void handleRearLine(const char* line, uint32_t now) {
+    char copy[96];
+    const size_t length = strnlen(line, sizeof(copy));
+    if (length >= sizeof(copy)) { rearValid_ = false; ++rearGeneration_; return; }
+    memcpy(copy, line, length + 1U);
+    char* field = checkedFields(copy);
+    unsigned long acquisition = 0, age = 0, valid = 0;
+    long distance = 0, angle = 0;
+    if (!field || !parseUnsigned(&field, ',', &acquisition) ||
+        !parseUnsigned(&field, ',', &age) || !parseUnsigned(&field, ',', &valid) ||
+        !parseSigned(&field, ',', &distance) || !parseSigned(&field, '\0', &angle) ||
+        valid > 1 || age > WALL_MAX_AGE_MS || distance < 0 || distance > 3000 ||
+        angle < -2000 || angle > 2000 || (valid && distance < 100)) {
+      rearValid_ = false;
+      ++rearGeneration_;
+      return;
+    }
+    if (haveRearAcquisition_ && (int32_t)((uint32_t)acquisition - lastRearAcquisition_) <= 0) return;
+    haveRearAcquisition_ = true;
+    lastRearAcquisition_ = (uint32_t)acquisition;
+    rearValid_ = valid != 0;
+    if (!rearValid_) ++rearGeneration_;
+    rear_.acquisition = (uint32_t)acquisition;
+    rear_.scanMs = now - (uint32_t)age;
+    rear_.distanceCm = distance * 0.1f;
+    rearHeadingDeg_ = angle * 0.01f;
   }
 
   void fuseWall(uint32_t now) {

@@ -53,6 +53,10 @@ class ChassisGeometry:
     turn_margin_cm: float = 8.0
     front_stop_cm: float = 95.0     # same straight-ahead limit as THRESHOLD_CM, from the LiDAR
     front_slow_cm: float = 160.0
+    # Reverse parking (2026-11-16): the box behind the rear edge that holds a backing
+    # move. Backing runs at ~25 cm/s (executor BACKING_SPEED); 35 cm is about twice
+    # what 0.6 s of scan, link and braking delay plus the stop itself would cover.
+    backing_stop_cm: float = 35.0   # from the rear edge
 
     @property
     def half_width_cm(self):
@@ -161,6 +165,11 @@ class HallwayAnalysis:
     heading_deg: float | None         # robot heading relative to the walls, + = rotated left
     heading_source: str = "near"      # "far" when the long-baseline fit supplied heading_deg
     near_heading_deg: float | None = None   # the near window's own heading, for comparison
+    # Reverse parking (2026-11-16): the same checks for driving backwards. Only the
+    # rear-travel code R= reads them; a forward move never does.
+    rear_stop: bool = False           # corridor box from the rear edge to backing_stop_cm behind it
+    rear_side_left: bool = False      # within side_margin beside the rear half
+    rear_side_right: bool = False
 
 
 def _robot_points(ranges, angle_min, angle_increment, range_min, range_max, lidar_y_cm):
@@ -339,6 +348,14 @@ def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
                  & (xs <= geometry.front_cm))
     side_left = bool(np.any(alongside & (ys > half) & (ys <= half + geometry.side_margin_cm)))
     side_right = bool(np.any(alongside & (ys < -half) & (ys >= -half - geometry.side_margin_cm)))
+    # Reverse parking (2026-11-16): backing sweeps what lies behind the rear edge and,
+    # with heading drift, beside the rear half (rear edge to the spin centre).
+    rear_stop = bool(np.any(corridor & (xs < -geometry.rear_cm)
+                            & (xs >= -(geometry.rear_cm + geometry.backing_stop_cm))))
+    behind = ((xs >= -geometry.rear_cm)
+              & (xs <= min(geometry.rotation_x_cm, geometry.front_cm)))
+    rear_side_left = bool(np.any(behind & (ys > half) & (ys <= half + geometry.side_margin_cm)))
+    rear_side_right = bool(np.any(behind & (ys < -half) & (ys >= -half - geometry.side_margin_cm)))
     sweep = outside & (np.hypot(xs - geometry.rotation_x_cm, ys) <= geometry.turn_radius_cm)
     turn_front = bool(np.any(sweep & (xs >= geometry.rotation_x_cm)))
     turn_back = bool(np.any(sweep & (xs < geometry.rotation_x_cm)))
@@ -354,4 +371,5 @@ def analyze_hallway(ranges, *, angle_min, angle_increment, range_min, range_max,
         if far is not None:
             heading, source = far, "far"
     return HallwayAnalysis(front_stop, front_slow, side_left, side_right, turn_front,
-                           turn_back, front_gap, left, right, heading, source, near_heading)
+                           turn_back, front_gap, left, right, heading, source, near_heading,
+                           rear_stop, rear_side_left, rear_side_right)

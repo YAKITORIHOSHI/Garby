@@ -44,13 +44,13 @@ Android APK separately from
 
 | Folder | Contents |
 | --- | --- |
-| `RasPi/` | Pi runtime (`final_w_serial.py` is the entry point), monitor, launch scripts, tests |
+| `RasPi/` | Pi runtime only (`final_w_serial.py` is the entry point), monitor, launch scripts: deploy this folder |
 | `BLE_Receiver-Final/` | ESP32-S3 bridge sketch |
 | `MAIN_EXECUTOR_CODE/` | ESP32 executor sketch; route steps are in `pointsRun.ino`, tunables at the top of the headers |
 | External [Garby-Mobile-App](https://github.com/YAKITORIHOSHI/Garby-Mobile-App) repository | Android app, built and released separately |
-| `tools/` | Project verification and host tests of the real firmware source |
+| `tests/` | Everything that is not deployed: Pi tests (`tests/pi`), firmware host tests (`tests/firmware`), bench sketches (`tests/sketches`) |
+| `tools/` | Project verification and the desktop monitor preview |
 | `docs/` | Design and investigation reports |
-| `Test/`, `MPU_and_Motor-Latest/` | Bench test sketches, not used on the robot |
 
 ## Requirements
 
@@ -71,17 +71,19 @@ Flash both sketches from the same version of this repository; the messages betwe
 match.
 
 ```bash
-arduino-cli compile --upload -p <S3 port> --fqbn esp32:esp32:esp32s3:FlashSize=8M,PSRAM=disabled BLE_Receiver-Final
+arduino-cli compile --upload -p <S3 port> --fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi BLE_Receiver-Final
 arduino-cli compile --upload -p <ESP32 port> --fqbn esp32:esp32:esp32:FlashSize=4M,PSRAM=disabled MAIN_EXECUTOR_CODE
 ```
 
 Each board prints its build on its USB console at boot (`[EXECUTOR BUILD:...]`,
 `[BRIDGE] Firmware ...`). Keep the robot still and level for the first seconds after power-on
 while the gyro calibrates.
+The bridge is the owner's ESP32-S3 **N16R8**: 16 MB flash and 8 MB octal PSRAM.
 
 ### 2. Install the Pi software
 
-Copy the whole `RasPi/` directory to the Pi (it needs all of its helper files), then:
+Copy the whole `RasPi/` directory to the Pi (it needs all of its helper files and contains no
+tests), then:
 
 ```bash
 python3 -m pip install -r RasPi/requirements-firebase.txt
@@ -105,8 +107,9 @@ bash RasPi/run_bridge.sh                                      # run with the mon
 bash RasPi/run_bridge.sh --headless                           # run without a screen
 ```
 
-Keep a log of every test run: `bash RasPi/run_bridge.sh 2>&1 | tee ~/garby-$(date +%F-%H%M).log`.
-To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`.
+The monitor keeps its log in its own *Log* tab and in `~/garby-logs/bridge.log` (one file per
+day, 14 days kept); the terminal only says where. Send that file with any report.
+To look at the monitor without any robot hardware: `python3 tools/preview_ui.py`.
 
 ## Use
 
@@ -117,8 +120,48 @@ To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`
   between the hallway walls. The *BLE/messages* tab shows the link and the
   robot's reports. The *Controls* tab has **Manual disposal** (with confirmation), **Release stop**,
   **Continue run**, **Reverse to start**,
-  front/rear LiDAR read-only, obstacle sonar on/off and **Restart Pi + bridge + executor**.
-  **EMERGENCY STOP** is always visible.
+  LiDAR read-only for the front, back and sides, obstacle sonar on/off and **Restart Pi +
+  bridge + executor**. Read only keeps the readings but stops that group holding the motors:
+  Sides lets GARBY move with something right beside it (a spin also needs Front/Back read
+  only). Everything is back on when the monitor restarts. GARBY only starts moving when you
+  press a button: changing a read-only switch during a route, or opening the monitor while
+  a route from before is still running, stops it until you choose Continue run, Reverse to
+  start or Release stop. A greyed-out button says why it is unavailable when clicked; a hold names
+  where the obstacle is. On the map, state/notices, scan status, range, hit count and map
+  captions are in the right sidebar with the bin sensors; scroll it for more details. The
+  map fills the space beside it. Other tabs keep state/notices in their header. The *Log*
+  tab shows the Pi's log. **EMERGENCY STOP** is always visible.
+- **Restart over ssh.** Ubuntu lets only the user at the Pi's own screen reboot it. To let the
+  monitor restart the Pi from an `ssh -Y` session, run once:
+  `sudo install -m 644 RasPi/49-garby-reboot.rules /etc/polkit-1/rules.d/`.
+- **Developer tests.** The **Developer** button opens them in their own window, with its
+  own EMERGENCY STOP; closing it stops a running test. Its *Remote control* tab has four
+  arrows: hold one to drive forward, backward or spin left/right, let go to stop. Slow is
+  about 30 cm/s and Fast about 60 cm/s at the wheel rim, using nominal wheel geometry.
+  The arrows use no sensor checks, so watch GARBY while driving. The *RunStart* tab drives a
+  list of steps you build (Forward, Backward, Turn left/right, Bump calibrate, each a number of
+  steps; **+** adds a row, the bin deletes one) at the max speed and acceleration you set, with
+  no sensor checks. The minimum speed setting is 2351 steps/s (about 30 cm/s), also the
+  default; acceleration and turn braking can be slower, and short moves may never reach it.
+  The rows lock once it starts. After EMERGENCY STOP, **Continue run** finishes
+  the list and **Reverse to start** takes it back. The bench tests can read the gyro and LiDAR wall
+  angle separately (and the rear wall that parking squares up to), move forward or backward
+  about 5 cm, pulse either motor, or make an MPU-measured 10° or 90° turn left or right.
+  Measured turns must be done on the floor with both wheels down; their confirmation says
+  so. Lifted wheels cannot rotate the robot for the MPU to measure. Backward obeys the same
+  rear LiDAR check as reverse parking. Select LiDAR clearance, MPU heading and obstacle sonar for each test, then confirm
+  the movement. Ordinary tests expire after at most 8 seconds; 90° turns have up to 30 seconds
+  with the same 30 cm/s speed setting and a slower turn approach. A measured turn waits for
+  steady, fresh MPU readings after stopping. The MPU scale currently uses the owner's
+  approximate 100° floor observation for 90° reported; verify the settled angle in both
+  directions. A lost connection lease stops either, and normal route checks return
+  afterward. Supervise every test: forward/backward and individual-motor checks can be done
+  with wheels lifted first; MPU turns need the floor. Setup and limits:
+  [`docs/developer-90-turns-2026-11-16.md`](docs/developer-90-turns-2026-11-16.md),
+  [`docs/developer-turn-speed-2026-11-17.md`](docs/developer-turn-speed-2026-11-17.md),
+  [`docs/developer-tests-start-hold-2026-11-15.md`](docs/developer-tests-start-hold-2026-11-15.md);
+  Backward: [`docs/backward-test-2026-11-16.md`](docs/backward-test-2026-11-16.md);
+  RunStart: [`docs/runstart-2026-11-16.md`](docs/runstart-2026-11-16.md).
 - **Without a screen.** `bash RasPi/run_headless.sh start` runs GARBY in the background with a
   saved log; `status`, `logs`, `stop` and `doctor` do what they say. The Android app is then the
   monitor and the controls: its **Controls** tab has the same actions as the monitor's, its
@@ -134,14 +177,19 @@ To look at the monitor without any robot hardware: `python3 RasPi/preview_ui.py`
   App setup and Windows build steps: [`docs/manual-disposal-2026-11-13.md`](docs/manual-disposal-2026-11-13.md).
 - **A run.** Once started, GARBY drives the outbound route and beeps every 1.2 s. If something
   blocks it, it stops, chirps twice every 2 s, and continues by itself when the path is clear; a
-  long wait switches to low power. At the destination it stays put until a return is requested
-  from the Android app.
+  long wait switches to low power. It parks by reversing: at the end of each route it turns its
+  back to the parking spot and backs in slowly (about 25 cm/s), at the destination and at the
+  station. Before reversing it needs two fresh, agreeing scans of the wall behind it and
+  aligns square to that wall; without that wall it waits. Rear-wall loss or excess drift
+  holds the approach until it can be checked again. While backing only the LiDAR watches behind it, and nothing below the LiDAR's height
+  is seen there: keep the parking spots clear of low objects. At the destination it stays put
+  until a return is requested from the Android app.
 - **Emergency stop** stops both controllers and stays latched through reconnects and restarts.
   **Release stop** returns GARBY to idle; it then needs a new Start. **Continue run** (with
   confirmation) instead lets GARBY finish the stopped route from where it stopped, once the
   path is clear. **Reverse to start** (with confirmation) sends GARBY back along the route to
-  where it began, for another calibration attempt: it turns around, drives forward and faces
-  its starting direction again. Use either only if GARBY has not been moved by hand; after a
+  where it began, for another calibration attempt: it turns around, drives forward (it drives
+  out of a parking spot forward as well) and faces its starting direction again. Use either only if GARBY has not been moved by hand; after a
   controller restart they are not available.
 - **Route fault.** If a route cannot be completed (for example a turn that cannot finish), GARBY
   stops where it is and sends an SMS. Move it back to its base by hand, then clear the fault with
@@ -161,7 +209,7 @@ From the repository root:
 
 ```bash
 python3 -B tools/verify_project.py --host-only            # all host checks
-python3 -B -m unittest discover -s RasPi -p 'test_*.py'    # Pi tests
+python3 -B -m unittest discover -s tests/pi -p 'test_*.py' # Pi tests
 python3 -B tools/run_firmware_tests.py                     # firmware logic tests
 ```
 

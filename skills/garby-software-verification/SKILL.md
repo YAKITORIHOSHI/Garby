@@ -14,7 +14,7 @@ documentation/skill edit. For normal runtime/firmware integration, the project
 commands are:
 
 ```bash
-python3 -B -m unittest discover -s RasPi -p 'test_*.py'
+python3 -B -m unittest discover -s tests/pi -p 'test_*.py'
 python3 -B tools/run_firmware_tests.py
 python3 -B tools/source_sanity.py .
 ```

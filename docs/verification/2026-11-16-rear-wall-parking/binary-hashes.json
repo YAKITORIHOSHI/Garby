@@ -1,0 +1,62 @@
+[
+  {
+    "target": "bridge",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/bridge/BLE_Receiver-Final.ino.bin",
+    "sizeBytes": 600160,
+    "sha256": "aa61d1633f1331cd765a89a76485860e8292b25bca64ebfabe64c461b9d71cbc"
+  },
+  {
+    "target": "bridge",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/bridge/BLE_Receiver-Final.ino.bootloader.bin",
+    "sizeBytes": 19968,
+    "sha256": "31b3c1be45dc5a76aa85c82540d6787b675e711eaf11021a5eea7e36f469c6de"
+  },
+  {
+    "target": "bridge",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/bridge/BLE_Receiver-Final.ino.elf",
+    "sizeBytes": 11634180,
+    "sha256": "c144cb3328d867857059218ca5d73945487be0e7dcb166ee4e8dafdac04a4fee"
+  },
+  {
+    "target": "bridge",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/bridge/BLE_Receiver-Final.ino.merged.bin",
+    "sizeBytes": 16777216,
+    "sha256": "c55cab7216592cf41cc2f41b9798db34bab4969b3117a87491cfde9d80571b80"
+  },
+  {
+    "target": "bridge",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/bridge/BLE_Receiver-Final.ino.partitions.bin",
+    "sizeBytes": 3072,
+    "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"
+  },
+  {
+    "target": "executor",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/executor/MAIN_EXECUTOR_CODE.ino.bin",
+    "sizeBytes": 432000,
+    "sha256": "c71f181f7815d9a62fac8318005bb17e8227835c8b3958e5999461a8f6ee14bd"
+  },
+  {
+    "target": "executor",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/executor/MAIN_EXECUTOR_CODE.ino.bootloader.bin",
+    "sizeBytes": 24992,
+    "sha256": "427f96e10c620c4f062dab15da54fc45494d897e8397ae6f3aecc98c42d7e379"
+  },
+  {
+    "target": "executor",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/executor/MAIN_EXECUTOR_CODE.ino.elf",
+    "sizeBytes": 7764012,
+    "sha256": "cb0e897f2296737b4a97d36f43ff9bd84307eac158c5156d6dfb3e26c2ceef65"
+  },
+  {
+    "target": "executor",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/executor/MAIN_EXECUTOR_CODE.ino.merged.bin",
+    "sizeBytes": 4194304,
+    "sha256": "9032d71809d90a51d62cf8a3788ef18cc04e2b940528f3cdb52acbd36e1d157d"
+  },
+  {
+    "target": "executor",
+    "path": "/home/garby/.local/share/garby-builds/rear-wall-parking-2026-11-16/executor/MAIN_EXECUTOR_CODE.ino.partitions.bin",
+    "sizeBytes": 3072,
+    "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"
+  }
+]

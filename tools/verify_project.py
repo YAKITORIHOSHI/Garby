@@ -34,12 +34,14 @@ def main():
             parser.error("--mobile-repo must point to a separate Android project")
         os.environ["GARBY_MOBILE_APP_ROOT"] = str(mobile)
     with tempfile.TemporaryDirectory(prefix="garby-syntax-") as directory:
-        sources = list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py"))
+        sources = (list((ROOT / "RasPi").glob("*.py")) + list((ROOT / "tools").glob("*.py"))
+                   + list((ROOT / "tests/pi").glob("*.py")))
         if mobile is not None:
             sources += list((mobile / "tools").glob("*.py"))
         for index, source in enumerate(sources):
             py_compile.compile(str(source), cfile=str(Path(directory) / f"{index}.pyc"), doraise=True)
-    run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "RasPi", "-p", "test_*.py"])
+    # Tests live in tests/, outside the deployable RasPi/ folder (owner, 2026-11-16).
+    run([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests/pi", "-p", "test_*.py"])
     run([sys.executable, "-B", "tools/run_firmware_tests.py"])
     run([sys.executable, "-B", "tools/source_sanity.py", "."])
     legacy_audit = ROOT / ".github/skills/garby-robot-maintainer/scripts/audit_project.py"

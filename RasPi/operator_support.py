@@ -343,13 +343,30 @@ class OperatorControl:
     def reboot_result(self, error=None):
         with self._lock:
             self._rebooting = error is None
-            self._reboot_error = str(error)[:100] if error else None
-            self._message = (f"Pi reboot failed: {error}; STOP remains latched" if error
-                             else "Pi reboot requested; STOP remains latched")
+            self._reboot_error = reboot_error_text(error) if error else None
+            self._message = (f"Pi reboot failed: {self._reboot_error}; STOP remains latched"
+                             if error else "Pi reboot requested; STOP remains latched")
 
     def reboot_allowed(self):
         with self._lock:
             return self._rebooting and self.local_stop and self._persistence_ok
+
+
+# Ubuntu lets only the user at the Pi's own screen reboot without a password. From an
+# ssh session (the owner's ssh -Y, 2026-11-16) systemd answers this; a one-time rule
+# file (RasPi/49-garby-reboot.rules) allows the robot account to reboot.
+REBOOT_NEEDS_PERMISSION = ("Interactive authentication required", "Access denied")
+REBOOT_PERMISSION_HINT = (
+    "the Pi does not allow a reboot from this ssh session. One-time fix: sudo install -m 644 "
+    "RasPi/49-garby-reboot.rules /etc/polkit-1/rules.d/ (see DEPLOYMENT_AND_ACCEPTANCE.md). "
+    "The bridge and executor restart by themselves")
+
+
+def reboot_error_text(error):
+    text = str(error)
+    if any(marker in text for marker in REBOOT_NEEDS_PERMISSION):
+        return REBOOT_PERMISSION_HINT
+    return text[:100]
 
 
 def reboot_pi():

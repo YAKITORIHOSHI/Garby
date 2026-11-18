@@ -70,7 +70,9 @@ stop)
     fi
     kill -TERM "$pid"
     for _ in $(seq 1 40); do
-        kill -0 "$pid" 2>/dev/null || { rm -f "$pid_file"; echo "GARBY stopped."; exit 0; }
+        # Not kill -0: an exited bridge stays a zombie until whatever adopted it
+        # reaps it, and some terminal supervisors do that late or never.
+        running_pid >/dev/null || { rm -f "$pid_file"; echo "GARBY stopped."; exit 0; }
         sleep 0.2
     done
     echo "GARBY (PID $pid) did not stop within 8 s. It is still running." >&2

@@ -1,0 +1,1150 @@
+#!/usr/bin/env python3
+"""
+MANUAL SIMULATION / VISUALIZATION HARNESS.
+
+This tool shares GARBY's LiDAR-only blockage formatter, thresholds, sensor
+sentinels, BLE request token, current sequenced P:/S: transport, and the
+direction-independent 22 cm side hard-stop envelope. It intentionally
+simplifies production behaviour: eight direction cards provide
+already-aggregated distances. It does not consume raw LaserScan angles, run the
+production gap-free 45-degree safety partition, or certify collision safety.
+
+The GUI defaults are 100 cm per LiDAR direction, 999 for the bin trash-level
+ultrasonic, and -1 for unavailable MQ sensors. Trash level is telemetry only
+and never changes simulated path classification.
+"""
+
+import raspi_path  # noqa: F401  (puts the deployable RasPi/ folder on sys.path)
+import os, sys, time, queue, threading, asyncio, random, math, logging, signal, subprocess, glob, gc
+from collections import deque
+from datetime import datetime
+from statistics import median
+
+from bridge_core import (
+    format_lidar_blockage,
+    lidar_status_code,
+    clamp_heading_error_cm,
+    side_obstacle_names,
+    CoalescingBleQueue,
+)
+
+# pyrefly: ignore [missing-import]
+from bleak import BleakScanner, BleakClient
+from runtime_support import SingleInstanceGuard
+from firebase_support import resolve_firebase_credentials
+from ble_support import (NotificationDecoder, configured_uuid, adapter_options,
+                         discover_robot, robot_characteristics, subscribe)
+
+# ═══ Firebase Manager ═══
+# pyrefly: ignore [missing-import]
+import firebase_admin
+# pyrefly: ignore [missing-import]
+from firebase_admin import credentials, db
+
+class FirebaseManager:
+    def __init__(self):
+        cred = credentials.Certificate(resolve_firebase_credentials())
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://garby-thesis-default-rtdb.asia-southeast1.firebasedatabase.app"
+        })
+
+    def update_app(self, reset_state):
+        db.reference("/APP").update({"resetState": reset_state})
+
+    def update_mcu_states(self, is_blocked=None, is_fully_loaded=None,
+                          is_sim_registered=None, is_started=None):
+        updates = {}
+        if is_blocked is not None:        updates["isBlocked"] = is_blocked
+        if is_fully_loaded is not None:   updates["isFullyLoaded"] = is_fully_loaded
+        if is_sim_registered is not None: updates["isSimModuleRegistered"] = is_sim_registered
+        if is_started is not None:        updates["isStarted"] = is_started
+        db.reference("/MCU/STATES").update(updates)
+
+    def update_mcu_load_cell(self, value):
+        db.reference("/MCU/VALUES").update({"LOAD_CELL": value})
+
+    def get_raspi_launch_time(self):
+        return db.reference("/RASPI/STATES/launchTime").get()
+
+    def update_raspi_states(self, launch_time):
+        db.reference("/RASPI/STATES").update({"launchTime": launch_time})
+
+    def update_raspi_sensors(self, air_quality=None, ammonia=None,
+                             methane=None, ultrasonic_distance=None):
+        if ultrasonic_distance is not None:
+            db.reference("/RASPI/VALUES/ULTRASONIC_SENSOR").update(
+                {"CM_DISTANCE": ultrasonic_distance})
+        if air_quality is not None:
+            db.reference("/RASPI/VALUES/MQ135_SENSOR").update(
+                {"AIR_QUALITY": air_quality})
+        if ammonia is not None:
+            db.reference("/RASPI/VALUES/MQ137").update(
+                {"AMMONIA": ammonia})
+        if methane is not None:
+            db.reference("/RASPI/VALUES/MQ4_SENSOR").update(
+                {"METHANE": methane})
+
+# ═══ Executor Service ═══
+from threading import Thread
+from queue import Queue
+
+class Task:
+    def __init__(self, func, permanent=False):
+        self.func = func
+        self.permanent = permanent
+
+class ExecutorService:
+    def __init__(self, workers=2):
+        self.queue = Queue()
+        self.workers = workers
+        for i in range(workers):
+            Thread(target=self._worker, daemon=True, name=f"Worker-{i+1}").start()
+
+    def submit(self, func, permanent=False):
+        self.queue.put(Task(func, permanent))
+
+    def _worker(self):
+        while True:
+            task = self.queue.get()
+            crashed = False
+            try:
+                task.func()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                crashed = True
+            finally:
+                if task.permanent and crashed:
+                    self.queue.put(task)
+                self.queue.task_done()
+
+# ═══ Configuration ═══
+SERVICE_UUID     = configured_uuid("GARBY_BLE_SERVICE_UUID", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")
+WRITE_CHAR_UUID  = configured_uuid("GARBY_BLE_WRITE_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a8")
+NOTIFY_CHAR_UUID = configured_uuid("GARBY_BLE_NOTIFY_CHAR_UUID", "beb5483e-36e1-4688-b7f5-ea07361b26a9")
+DEVICE_NAME      = os.environ.get("GARBY_BLE_DEVICE_NAME", "GarbyESP32").strip() or "GarbyESP32"
+BLE_MAC_ADDRESS  = os.environ.get("GARBY_BLE_ADDRESS", "").strip() or None
+
+THRESHOLD_CM      = 95.0                  # front stop distance (increased from 50cm for 1.05m/s travel speed reaction time)
+BACK_THRESHOLD_CM = 35.0                  # 35 cm back threshold
+
+
+SIDES_TOLERANCE   = 5.0
+BLE_CMD_PERIOD    = 0.25
+
+REQUEST_TOKEN = "[REQUEST-STATUS]"
+RASPI_READY   = "[RASPI READY]"
+
+firebase = None
+
+# Default sensor readings: ultrasonic=999, MQ sensors=-1
+latest_sensor_readings = {"ultrasonic": 999.0, "mq4": -1, "mq137": -1, "mq135": -1}
+sensor_readings_lock = threading.Lock()
+
+serial_stop = threading.Event()
+ble_send_queue = CoalescingBleQueue(maxlen=12)
+ble_recv_queue = queue.Queue(maxsize=256)
+
+_status_requested = threading.Event()
+_robot_running = threading.Event()
+front_disabled = threading.Event()
+back_disabled  = threading.Event()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger("combined_app_sim")
+
+# Module‑level ble_service placeholder – will be set after BLE connects
+ble_service = None
+
+# ═══ Simulation Sensor Loop ═══
+def simulated_sensor_updater(stop_event):
+    logger.info("Simulated sensor updater started.")
+    last_firebase_update = 0.0
+    while not stop_event.is_set():
+        with sensor_readings_lock:
+            us   = latest_sensor_readings.get("ultrasonic")
+            m4   = latest_sensor_readings.get("mq4")
+            m137 = latest_sensor_readings.get("mq137")
+            m135 = latest_sensor_readings.get("mq135")
+
+        now = time.time()
+        if now - last_firebase_update >= 2.0:
+            last_firebase_update = now
+            if firebase:
+                try:
+                    firebase.update_raspi_sensors(
+                        ultrasonic_distance=us if us is not None else 999,
+                        methane=m4 if m4 is not None else -1,
+                        ammonia=m137 if m137 is not None else -1,
+                        air_quality=m135 if m135 is not None else -1
+                    )
+                except Exception as e:
+                    logger.error(f"Firebase sensor update error: {e}")
+
+        time.sleep(0.1)
+    logger.info("Simulated sensor updater stopped.")
+
+# ═══ On-demand status responder ═══
+def on_demand_status_responder(lidar_node, stop_event):
+    logger.info("On-demand status responder started.")
+    while not stop_event.is_set():
+        fired = _status_requested.wait(timeout=0.1)
+        if not fired:
+            continue
+        _status_requested.clear()
+
+        with sensor_readings_lock:
+            readings = dict(latest_sensor_readings)
+
+        us      = readings.get("ultrasonic")
+        mq4_v   = readings.get("mq4")
+        mq137_v = readings.get("mq137")
+        mq135_v = readings.get("mq135")
+
+        us_str    = f"{us:.1f}"  if us      is not None else "999"
+        mq4_str   = str(mq4_v)   if mq4_v   is not None else "-1"
+        mq137_str = str(mq137_v) if mq137_v is not None else "-1"
+        mq135_str = str(mq135_v) if mq135_v is not None else "-1"
+
+        sensor_msg = (f"SENSOR:US={us_str}|MQ4={mq4_str}"
+                      f"|MQ137={mq137_str}|MQ135={mq135_str}")
+
+        if lidar_node is not None:
+            path_msg, sides_msg = lidar_node.build_status_packets()
+        else:
+            seq = int(time.monotonic() * 10.0) & 0xFFFFFFFF
+            path_msg, sides_msg = f"P:{seq}|F=S|B=S", f"S:{seq}|STABLE"
+
+        for msg in (path_msg, sides_msg, sensor_msg):
+            try:
+                ble_send_queue.put_nowait(msg)
+            except queue.Full:
+                pass
+
+    logger.info("On-demand status responder stopped.")
+
+# ═══ BLE notification handler ═══
+def ble_notify_handler(msg: str):
+    try:
+        ble_recv_queue.put_nowait(msg)
+    except queue.Full:
+        pass
+
+    stripped = msg.strip()
+    if stripped == REQUEST_TOKEN:
+        _robot_running.set()
+        _status_requested.set()
+        return
+    if stripped in ("[RESET]", "[IDLE]"):
+        _robot_running.clear()
+
+# ═══ BLE bench service ═══
+
+class BleService(threading.Thread):
+    """Manual bench transport; one task owns discovery, GATT, and reconnect."""
+    RETRY_DELAY = 3.0
+    SCAN_TIMEOUT = 12.0
+    CONNECT_TIMEOUT = 30.0
+    NOTIFY_TIMEOUT = 8.0
+    WRITE_TIMEOUT = 2.0
+    DRAIN_INTERVAL = 0.02
+
+    def __init__(self, status_cb, notify_cb):
+        super().__init__(daemon=True, name="ble-service")
+        self.status_cb = status_cb
+        self.notify_cb = notify_cb
+        self._loop = None
+        self._client = None
+        self._candidate_client = None
+        self._write_char = None
+        self._notify_char = None
+        self._stop_event = None
+        self._write_lock = None
+        self._notification_decoder = NotificationDecoder()
+        self._connection_phase = "idle"
+
+    def stop(self):
+        if self._loop and not self._loop.is_closed() and self._stop_event:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+
+    def disconnect_client(self, timeout=3.0):
+        self.stop()
+        if self.is_alive():
+            self.join(timeout=timeout)
+
+    def run(self):
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._stop_event = asyncio.Event()
+        self._write_lock = asyncio.Lock()
+        try:
+            self._loop.run_until_complete(self._run_service())
+        finally:
+            pending = asyncio.all_tasks(self._loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
+
+    async def _run_service(self):
+        worker = asyncio.create_task(self._run_sessions())
+        await self._stop_event.wait()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+    async def _run_sessions(self):
+        while not self._stop_event.is_set():
+            try:
+                await self._connect()
+                await self._drain_loop(self._client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning("Bench BLE %s failed: %s: %s",
+                               self._connection_phase, type(error).__name__, error)
+            finally:
+                client = self._candidate_client
+                self._candidate_client = None
+                self._client = None
+                self._write_char = None
+                self._notify_char = None
+                _robot_running.clear()
+                ble_send_queue.clear()
+                self._notification_decoder.reset()
+                if client is not None:
+                    try:
+                        await asyncio.wait_for(client.disconnect(), timeout=2.0)
+                    except Exception:
+                        pass
+            if not self._stop_event.is_set():
+                self._status("Disconnected — retry 3 s", "#f85149")
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self.RETRY_DELAY)
+                except asyncio.TimeoutError:
+                    pass
+
+    def _status(self, text, color):
+        try:
+            self.status_cb(text, color)
+        except Exception:
+            logger.debug("Bench BLE status callback failed", exc_info=True)
+
+    def _on_disconnect(self, client):
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._handle_disconnect, client)
+
+    def _handle_disconnect(self, client):
+        if client is self._client:
+            self._client = None
+            self._write_char = None
+            self._notify_char = None
+            _robot_running.clear()
+            ble_send_queue.clear()
+            self._notification_decoder.reset()
+
+    def _notification_handler(self, client, sender, data):
+        if client is self._client and client.is_connected and not self._stop_event.is_set():
+            for message in self._notification_decoder.feed(data):
+                if self.notify_cb:
+                    self.notify_cb(message)
+
+    async def _connect(self):
+        self._connection_phase = "discovery"
+        self._status("Scanning for GARBY...", "#d29922")
+        ble_send_queue.clear()
+        self._notification_decoder.reset()
+        target = await asyncio.wait_for(discover_robot(
+            BleakScanner, address=BLE_MAC_ADDRESS, name=DEVICE_NAME,
+            service_uuid=SERVICE_UUID, timeout=self.SCAN_TIMEOUT),
+            timeout=self.SCAN_TIMEOUT + 5.0)
+        if target is None:
+            raise ConnectionError("GARBY not advertising on the selected adapter")
+        self._connection_phase = "connection/GATT discovery"
+        client = BleakClient(target, disconnected_callback=self._on_disconnect,
+                             timeout=self.CONNECT_TIMEOUT, **adapter_options())
+        self._candidate_client = client
+        await asyncio.wait_for(client.connect(), timeout=self.CONNECT_TIMEOUT)
+        if not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended before GATT setup")
+        self._client = client
+        write, notify = robot_characteristics(client, SERVICE_UUID, WRITE_CHAR_UUID, NOTIFY_CHAR_UUID)
+        self._connection_phase = "notification subscription"
+        await asyncio.wait_for(subscribe(client, notify,
+            lambda sender, data: self._notification_handler(client, sender, data)),
+            timeout=self.NOTIFY_TIMEOUT)
+        if self._client is not client or not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended during notification setup")
+        self._write_char, self._notify_char = write, notify
+        self._connection_phase = "readiness write"
+        await self._write_message(RASPI_READY, client)
+        if self._client is not client or not client.is_connected or self._stop_event.is_set():
+            raise ConnectionError("Session ended during readiness write")
+        self._connection_phase = "ready"
+        _robot_running.set()
+        _status_requested.set()
+        self._status("CONNECTED", "#3fb950")
+
+    async def _write_message(self, message, client):
+        payload = message.encode("ascii")
+        if not payload or len(payload) > 244 or any(c < 32 or c > 126 for c in payload):
+            raise ValueError("BLE packet must be one printable line of at most 244 bytes")
+        write = self._write_char
+        if not write or client is not self._client or not client.is_connected:
+            raise ConnectionError("BLE session is not writable")
+        acknowledged = (message.startswith(("P:", "[RESET", "[RASPI READY]")) or
+                        len(payload) > getattr(write, "max_write_without_response_size", 20))
+        async with self._write_lock:
+            if client is not self._client or not client.is_connected:
+                raise ConnectionError("BLE session changed before write")
+            await asyncio.wait_for(client.write_gatt_char(write, payload, response=acknowledged),
+                                   timeout=self.WRITE_TIMEOUT)
+
+    async def _drain_loop(self, client):
+        while not self._stop_event.is_set() and client is self._client and client.is_connected:
+            try:
+                message = ble_send_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(self.DRAIN_INTERVAL)
+                continue
+            await self._write_message(message, client)
+            await asyncio.sleep(0.005)
+
+    async def _urgent_write(self, message):
+        # Share the same sequenced mailbox; never race the periodic writer.
+        ble_send_queue.put_nowait(message, urgent=True)
+
+# ═══ Simulated LiDAR Distance Reader ═══
+class SimulatedLidarReader:
+    """Manual eight-direction visualizer, not a raw-scan safety simulator."""
+    SIDES = {
+        "FRONT":         0.0,
+        "FRONT_LEFT":   45.0,
+        "LEFT":         90.0,
+        "BACK_LEFT":   135.0,
+        "BACK":        180.0,
+        "BACK_RIGHT":  225.0,
+        "RIGHT":       270.0,
+        "FRONT_RIGHT": 315.0,
+    }
+    FRONT_GROUP = {"FRONT", "FRONT_LEFT", "FRONT_RIGHT"}
+    BACK_GROUP  = {"BACK",  "BACK_LEFT",  "BACK_RIGHT"}
+    SIDE_GROUP  = {"LEFT", "RIGHT"}
+    SIDE_OBSTACLE_THRESHOLD_CM = 22.0
+
+    CONE_DEG       = 22.0  # display metadata only; no raw angular partition here
+    HISTORY_DEPTH  = 6
+
+    def __init__(self, data_queue: queue.Queue, ble_service=None):
+        self.data_queue = data_queue
+        self.ble_service = ble_service
+        self.history    = {side: deque(maxlen=self.HISTORY_DEPTH) for side in self.SIDES}
+        # Pre-populate history with 100.0 cm default
+        for side in self.SIDES:
+            for _ in range(self.HISTORY_DEPTH):
+                self.history[side].append(100.0)
+
+        self.last_sides_status   = "SIDES:STABLE"
+        self._prev_front_blocked = False
+        self._prev_back_blocked  = False
+        self._prev_side_blocked  = False
+        self._last_urgent_send   = 0
+        self._urgent_cooldown    = 0.2
+        self._path_seq           = 0
+        self._seq_lock           = threading.Lock()
+
+    def _quick_min(self, side: str, window=5):
+        valid = [v for v in self.history[side] if v is not None][-window:]
+        if not valid:
+            return None
+        return min(valid)
+
+    def _smoothed_distance(self, side: str):
+        valid = [v for v in self.history[side] if v is not None]
+        if not valid:
+            return None
+        return median(valid)
+
+    def _collect_blocked_sides(self, group, threshold_cm):
+        blocked = []
+        for side in group:
+            d = self._quick_min(side)
+            if d is None or d <= threshold_cm:
+                blocked.append(side)
+        return blocked
+
+    def _format_blocked_status(self, blocked_sides, all_sides):
+        return format_lidar_blockage(blocked_sides, all_sides)
+
+    def _get_blocked_status(self, group, threshold_cm):
+        blocked = self._collect_blocked_sides(group, threshold_cm)
+        return self._format_blocked_status(blocked, group)
+
+    def _get_side_obstacle_status(self):
+        distances = {
+            side: self._quick_min(side)
+            for side in self.SIDE_GROUP
+        }
+        blocked = side_obstacle_names(
+            distances, self.SIDE_OBSTACLE_THRESHOLD_CM
+        )
+        return self._format_blocked_status(blocked, self.SIDE_GROUP)
+
+    def _next_path_seq(self):
+        with self._seq_lock:
+            self._path_seq = (self._path_seq + 1) & 0xFFFFFFFF
+            return self._path_seq
+
+    def _send_immediate_status(self, front_blocked, back_blocked):
+        # Keep the simulator on the same producer contract as production.
+        path_msg, sides_msg = self.build_status_packets()
+        try:
+            ble_send_queue.put_nowait(path_msg)
+            ble_send_queue.put_nowait(sides_msg)
+        except queue.Full:
+            pass
+
+    def update_distances(self, distances_dict: dict):
+        """Update simulated LiDAR distances for all sides (values in cm)."""
+        for side in self.SIDES:
+            val_cm = distances_dict.get(side)
+            if val_cm is not None and val_cm > 0:
+                self.history[side].append(val_cm)
+            else:
+                self.history[side].append(100.0)
+
+        data_out = {}
+        for s in self.SIDES:
+            h = [v for v in self.history[s] if v is not None]
+            if h:
+                med_cm = median(h)
+                data_out[s] = (med_cm / 100.0, med_cm / 100.0, len(h))
+            else:
+                data_out[s] = None
+
+        front_blocked, _ = self._get_blocked_status(self.FRONT_GROUP, THRESHOLD_CM)
+        back_blocked, _  = self._get_blocked_status(self.BACK_GROUP,  BACK_THRESHOLD_CM)
+        side_blocked, _ = self._get_side_obstacle_status()
+        reported_front_blocked = front_blocked or side_blocked
+        reported_back_blocked = back_blocked or side_blocked
+        if not side_blocked:
+            if front_disabled.is_set(): reported_front_blocked = False
+            if back_disabled.is_set():  reported_back_blocked = False
+
+        now = time.monotonic()
+        if (reported_front_blocked or reported_back_blocked) and (
+            reported_front_blocked != self._prev_front_blocked
+            or reported_back_blocked != self._prev_back_blocked
+            or side_blocked != self._prev_side_blocked
+        ):
+            if now - self._last_urgent_send > self._urgent_cooldown:
+                self._send_immediate_status(
+                    reported_front_blocked, reported_back_blocked
+                )
+                self._last_urgent_send = now
+
+        self._prev_front_blocked = reported_front_blocked
+        self._prev_back_blocked = reported_back_blocked
+        self._prev_side_blocked = side_blocked
+
+        if self.data_queue.full():
+            try: self.data_queue.get_nowait()
+            except queue.Empty: pass
+        self.data_queue.put_nowait(
+            (data_out, 0.03, 8.0, self.CONE_DEG, self.last_sides_status)
+        )
+
+    def build_status_packets(self):
+        seq = self._next_path_seq()
+        _, front_status = self._get_blocked_status(self.FRONT_GROUP, THRESHOLD_CM)
+        _, back_status = self._get_blocked_status(self.BACK_GROUP, BACK_THRESHOLD_CM)
+        if front_disabled.is_set():
+            front_status = "CLEAR"
+        if back_disabled.is_set():
+            back_status = "CLEAR"
+        side_blocked, side_status = self._get_side_obstacle_status()
+        if side_blocked:
+            front_status = side_status
+            back_status = side_status
+
+        med = {side: self._smoothed_distance(side) for side in self.SIDES}
+        path_msg = (
+            f"P:{seq}|F={lidar_status_code(front_status)}"
+            f"|B={lidar_status_code(back_status)}"
+        )
+        key_map = {
+            "LEFT": "L", "RIGHT": "R", "FRONT": "F", "BACK": "B",
+            "FRONT_LEFT": "FL", "FRONT_RIGHT": "FR",
+            "BACK_LEFT": "BL", "BACK_RIGHT": "BR",
+        }
+        parts = [f"{key_map[side]}={value:.1f}" for side, value in med.items() if value is not None]
+        fl, fr = med.get("FRONT_LEFT"), med.get("FRONT_RIGHT")
+        bl, br = med.get("BACK_LEFT"), med.get("BACK_RIGHT")
+        tilt = None
+        if None not in (fl, fr, bl, br):
+            tilt = 0.5 * (fl - fr) + 0.5 * (br - bl)
+        elif fl is not None and fr is not None:
+            tilt = fl - fr
+        if tilt is not None:
+            parts.append(f"T={clamp_heading_error_cm(tilt):.1f}")
+
+        sides_cmd = "|".join(parts) if parts else "STABLE"
+        self.last_sides_status = "SIDES:" + sides_cmd
+        return path_msg, f"S:{seq}|{sides_cmd}"
+
+    def build_combined_cmd(self) -> str:
+        """Human-readable compatibility display; do not transmit this string."""
+        path_msg, sides_msg = self.build_status_packets()
+        return f"{path_msg} || {sides_msg}"
+
+# ═══ GUI ═══
+def init_gui(sim_node: SimulatedLidarReader):
+    import tkinter as tk
+    from tkinter import font as tkfont
+    from tkinter import scrolledtext
+
+    class LidarGUI:
+        ARROWS = {
+            "FRONT":       "▲ FRONT",
+            "FRONT_RIGHT": "⬈ FRONT-RIGHT",
+            "RIGHT":       "RIGHT ▶",
+            "BACK_RIGHT":  "⬊ BACK-RIGHT",
+            "BACK":        "▼ BACK",
+            "BACK_LEFT":   "⬋ BACK-LEFT",
+            "LEFT":        "◀ LEFT",
+            "FRONT_LEFT":  "⬉ FRONT-LEFT"
+        }
+        ALERT_SIDES = {"FRONT", "FRONT_RIGHT", "FRONT_LEFT",
+                       "BACK", "BACK_LEFT", "BACK_RIGHT"}
+        FRONT_GROUP = {"FRONT", "FRONT_LEFT", "FRONT_RIGHT"}
+        BACK_GROUP  = {"BACK", "BACK_LEFT", "BACK_RIGHT"}
+        BASE_CARD_W = 190
+        BASE_CARD_H = 130
+
+        def __init__(self, root: tk.Tk, data_queue: queue.Queue, recv_queue: queue.Queue):
+            self.root = root
+            self.data_queue = data_queue
+            self.recv_queue = recv_queue
+            self.sim_node   = sim_node
+            root.title("YDLidar – 8 Direction Distance Monitor + BLE (SIMULATION)")
+            root.configure(bg="#0d1117")
+            root.geometry("1000x700")
+            root.minsize(800, 500)
+            root.bind('<F11>', self.toggle_fullscreen)
+
+            self._scalable_fonts = []
+            side_fnt  = tkfont.Font(family="Helvetica", size=10, weight="bold")
+            val_fnt   = tkfont.Font(family="Courier",   size=18, weight="bold")
+            sensor_val_fnt = tkfont.Font(family="Courier", size=14, weight="bold")
+            small_fnt = tkfont.Font(family="Helvetica", size=9)
+            title_fnt = tkfont.Font(family="Helvetica", size=12, weight="bold")
+
+            hdr = tk.Frame(root, bg="#0d1117")
+            hdr.pack(fill="x", padx=16, pady=(12, 4))
+            tk.Label(hdr, text="● YDLidar 8-Direction Distance Monitor (SIM)",
+                     bg="#0d1117", fg="#58a6ff", font=title_fnt).pack(side="left")
+            self.status_lbl = tk.Label(hdr, text="Waiting…", bg="#0d1117",
+                                       fg="#8b949e", font=small_fnt)
+            self.status_lbl.pack(side="right")
+
+            bottom_frame = tk.Frame(root, bg="#0d1117")
+            bottom_frame.pack(side="bottom", fill="x")
+
+            self.footer = tk.Label(bottom_frame,
+                                   text="manual 8-direction visualization | not raw scan geometry",
+                                   bg="#0d1117", fg="#8b949e", font=small_fnt)
+            self.footer.pack(pady=(2, 6))
+
+            ble_bar = tk.Frame(bottom_frame, bg="#0d1117")
+            ble_bar.pack(fill="x", padx=16, pady=(0, 6))
+            tk.Label(ble_bar, text="BLE:", bg="#0d1117",
+                     fg="#8b949e", font=small_fnt).pack(side="left")
+            self.ble_status_lbl = tk.Label(ble_bar, text="● Initialising…",
+                                           bg="#0d1117", fg="#d29922", font=small_fnt)
+            self.ble_status_lbl.pack(side="left", padx=(4, 0))
+
+            btn_fnt = tkfont.Font(family="Helvetica", size=9, weight="bold")
+            self.front_btn = tk.Button(
+                ble_bar, text="FRONT: ENABLED", font=btn_fnt,
+                bg="#238636", fg="#ffffff", activebackground="#2ea043",
+                activeforeground="#ffffff", relief="flat", padx=10, pady=2,
+                command=self._toggle_front
+            )
+            self.front_btn.pack(side="right", padx=(6, 0))
+
+            self.back_btn = tk.Button(
+                ble_bar, text="BACK: ENABLED", font=btn_fnt,
+                bg="#238636", fg="#ffffff", activebackground="#2ea043",
+                activeforeground="#ffffff", relief="flat", padx=10, pady=2,
+                command=self._toggle_back
+            )
+            self.back_btn.pack(side="right", padx=(6, 0))
+
+            log_frame = tk.Frame(bottom_frame, bg="#0d1117")
+            log_frame.pack(fill="x", padx=16, pady=(0, 8))
+            tk.Label(log_frame, text="BLE RECEIVED MESSAGES", bg="#0d1117",
+                     fg="#8b949e", font=small_fnt).pack(anchor="w")
+            self.log_text = scrolledtext.ScrolledText(
+                log_frame, height=6, bg="#161b22", fg="#e6edf3",
+                insertbackground="white", font=("Courier", 9), wrap=tk.WORD,
+                highlightbackground="#30363d", highlightthickness=1
+            )
+            self.log_text.pack(fill="x", pady=(2, 0))
+            self.log_text.config(state=tk.DISABLED)
+
+            sensor_bar = tk.Frame(bottom_frame, bg="#0d1117")
+            sensor_bar.pack(fill="x", padx=16, pady=(0, 12))
+            tk.Label(sensor_bar, text="SENSOR READINGS (Edit fields to simulate values)", bg="#0d1117",
+                     fg="#8b949e", font=small_fnt).pack(anchor="w")
+            sensor_row = tk.Frame(sensor_bar, bg="#0d1117")
+            sensor_row.pack(fill="x")
+            self.sensor_labels = {}
+            self.sensor_entries = {}
+            sensor_defs = [
+                ("ultrasonic", "ULTRASONIC",          "cm", "999"),
+                ("mq4",        "MQ4 (METHANE)",        "",   "-1"),
+                ("mq137",      "MQ137 (AMMONIA)",      "",   "-1"),
+                ("mq135",      "MQ135 (AIR QUALITY)",  "",   "-1"),
+            ]
+            for key, name, unit, default_val in sensor_defs:
+                cell = tk.Frame(sensor_row, bg="#161b22", highlightbackground="#30363d",
+                                highlightthickness=1)
+                cell.pack(side="left", expand=True, fill="x", padx=4)
+                tk.Label(cell, text=name, bg="#161b22", fg="#e6edf3",
+                         font=small_fnt).pack(pady=(4, 0))
+                val_lbl = tk.Label(cell, text=default_val, bg="#161b22",
+                                   fg="#58a6ff", font=sensor_val_fnt)
+                val_lbl.pack(pady=(1, 2))
+                entry = tk.Entry(cell, bg="#0d1117", fg="#e6edf3", insertbackground="white",
+                                 font=small_fnt, justify="center", width=8)
+                entry.insert(0, default_val)
+                entry.pack(pady=(0, 4))
+                self.sensor_labels[key] = (val_lbl, unit)
+                self.sensor_entries[key] = entry
+
+            compass = tk.Frame(root, bg="#0d1117")
+            compass.pack(fill="both", expand=True, padx=14, pady=6)
+            for i in range(3):
+                compass.grid_rowconfigure(i, weight=1, uniform="card")
+                compass.grid_columnconfigure(i, weight=1, uniform="card")
+
+            self.cards = {}
+            self.distance_entries = {}
+            layout = [
+                ("FRONT_LEFT",  0, 0), ("FRONT",       0, 1), ("FRONT_RIGHT", 0, 2),
+                ("LEFT",        1, 0),                         ("RIGHT",       1, 2),
+                ("BACK_LEFT",   2, 0), ("BACK",         2, 1), ("BACK_RIGHT",  2, 2),
+            ]
+            for side, row, col in layout:
+                card = tk.Frame(compass, bg="#161b22", highlightbackground="#30363d",
+                                highlightthickness=1, width=self.BASE_CARD_W, height=self.BASE_CARD_H)
+                card.grid(row=row, column=col, padx=6, pady=6, sticky="nsew")
+                card.grid_propagate(False)
+                lbl = tk.Label(card, text=self.ARROWS[side], bg="#161b22",
+                               fg="#e6edf3", font=side_fnt)
+                lbl.place(relx=0.05, rely=0.06)
+                self._track_font(lbl, side_fnt)
+                alert_lbl = tk.Label(card, text="", bg="#f85149", fg="#ffffff",
+                                     font=tkfont.Font(family="Helvetica", size=8, weight="bold"),
+                                     padx=4, pady=1)
+                alert_lbl.place_forget()
+                val = tk.Label(card, text="100.0 cm", bg="#161b22", fg="#58a6ff", font=val_fnt)
+                val.place(relx=0.05, rely=0.24)
+                self._track_font(val, val_fnt)
+                bar_canvas = tk.Canvas(card, bg="#30363d", bd=0, highlightthickness=0)
+                bar_canvas.place(relx=0.05, rely=0.55, relwidth=0.9, relheight=0.07)
+                bar_fill = bar_canvas.create_rectangle(0, 0, 0, 0, fill="#58a6ff", outline="")
+                avg_lbl = tk.Label(card, text="avg: 100.0cm", bg="#161b22", fg="#8b949e", font=small_fnt)
+                avg_lbl.place(relx=0.05, rely=0.68)
+                self._track_font(avg_lbl, small_fnt)
+                pts_lbl = tk.Label(card, text="pts: 6", bg="#161b22", fg="#8b949e", font=small_fnt)
+                pts_lbl.place(relx=0.63, rely=0.68)
+                self._track_font(pts_lbl, small_fnt)
+
+                dist_entry = tk.Entry(card, bg="#0d1117", fg="#e6edf3", insertbackground="white",
+                                      font=small_fnt, justify="center", width=7)
+                dist_entry.insert(0, "100")
+                dist_entry.place(relx=0.5, rely=0.92, anchor="s", relwidth=0.7)
+                self.distance_entries[side] = dist_entry
+
+                self.cards[side] = {
+                    "val": val, "bar_canvas": bar_canvas, "bar_fill": bar_fill,
+                    "avg": avg_lbl, "pts": pts_lbl, "card": card, "alert": alert_lbl,
+                }
+
+            center_card = tk.Frame(compass, bg="#161b22", highlightbackground="#30363d",
+                                   highlightthickness=1, width=self.BASE_CARD_W, height=self.BASE_CARD_H)
+            center_card.grid(row=1, column=1, padx=6, pady=6, sticky="nsew")
+            center_card.grid_propagate(False)
+            self.center_card = center_card
+            tk.Label(center_card, text="🤖", bg="#161b22",
+                     font=("Helvetica", 36)).place(relx=0.5, rely=0.4, anchor="center")
+            tk.Label(center_card, text="GARBY (SIM)", bg="#161b22",
+                     fg="#8b949e", font=small_fnt).place(relx=0.5, rely=0.78, anchor="center")
+
+            compass.bind('<Configure>', self._on_compass_configure)
+            self._base_card_w = self.BASE_CARD_W
+            self._base_card_h = self.BASE_CARD_H
+            self._compass = compass
+
+            self._process_updates()
+            self._process_ble_recv()
+
+        def toggle_fullscreen(self, event=None):
+            current = self.root.attributes('-fullscreen')
+            self.root.attributes('-fullscreen', not current)
+
+        def _toggle_front(self):
+            if front_disabled.is_set():
+                front_disabled.clear()
+                self.front_btn.config(text="FRONT: ENABLED", bg="#238636", activebackground="#2ea043")
+            else:
+                front_disabled.set()
+                self.front_btn.config(text="FRONT: DISABLED", bg="#f85149", activebackground="#ff6b63")
+
+        def _toggle_back(self):
+            if back_disabled.is_set():
+                back_disabled.clear()
+                self.back_btn.config(text="BACK: ENABLED", bg="#238636", activebackground="#2ea043")
+            else:
+                back_disabled.set()
+                self.back_btn.config(text="BACK: DISABLED", bg="#f85149", activebackground="#ff6b63")
+
+        def _track_font(self, widget, font_src):
+            if isinstance(font_src, tkfont.Font):
+                self._scalable_fonts.append((
+                    widget, font_src.cget('family'),
+                    font_src.cget('size'), font_src.cget('weight')
+                ))
+            elif isinstance(font_src, tuple):
+                family = font_src[0]; size = font_src[1]
+                weight = font_src[2] if len(font_src) > 2 else 'normal'
+                self._scalable_fonts.append((widget, family, size, weight))
+
+        def _on_compass_configure(self, event):
+            w = event.width; h = event.height
+            card_w = max(10, (w - 36) // 3)
+            card_h = max(10, (h - 36) // 3)
+            for info in self.cards.values():
+                info['card'].config(width=card_w, height=card_h)
+            self.center_card.config(width=card_w, height=card_h)
+            scale = card_w / self._base_card_w if self._base_card_w else 1.0
+            for widget, family, base_size, weight in self._scalable_fonts:
+                new_size = max(1, int(base_size * scale))
+                try:
+                    widget.config(font=(family, new_size, weight))
+                except Exception:
+                    pass
+
+        def get_simulated_distances(self):
+            """Read distances (cm) from the entry fields, default to 100.0 if empty/invalid."""
+            dists = {}
+            for side, entry in self.distance_entries.items():
+                val_str = entry.get().strip()
+                if val_str == "":
+                    dists[side] = 100.0
+                else:
+                    try:
+                        dists[side] = float(val_str)
+                    except ValueError:
+                        dists[side] = 100.0
+            return dists
+
+        def _sync_sensor_entries(self):
+            """Sync manual entry fields to latest_sensor_readings dict."""
+            with sensor_readings_lock:
+                # Ultrasonic
+                us_str = self.sensor_entries["ultrasonic"].get().strip()
+                try:
+                    latest_sensor_readings["ultrasonic"] = float(us_str) if us_str != "" else 999.0
+                except ValueError:
+                    latest_sensor_readings["ultrasonic"] = 999.0
+
+                # Gas sensors
+                for k in ("mq4", "mq137", "mq135"):
+                    v_str = self.sensor_entries[k].get().strip()
+                    try:
+                        latest_sensor_readings[k] = int(v_str) if v_str != "" else -1
+                    except ValueError:
+                        latest_sensor_readings[k] = -1
+
+        def _process_updates(self):
+            self._sync_sensor_entries()
+            dists = self.get_simulated_distances()
+            if self.sim_node:
+                self.sim_node.update_distances(dists)
+
+            try:
+                data, range_min, range_max, cone_deg, sides_status = self.data_queue.get_nowait()
+                self.update(data, range_min, range_max, cone_deg, sides_status)
+            except queue.Empty:
+                pass
+            self._update_sensor_readings_display()
+            self.root.after(100, self._process_updates)
+
+        def _process_ble_recv(self):
+            while True:
+                try:
+                    msg = self.recv_queue.get_nowait()
+                except queue.Empty:
+                    break
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                line = f"[{timestamp}] {msg}\n"
+                self.log_text.config(state=tk.NORMAL)
+                self.log_text.insert(tk.END, line)
+                self.log_text.see(tk.END)
+                self.log_text.config(state=tk.DISABLED)
+            self.root.after(200, self._process_ble_recv)
+
+        def _update_sensor_readings_display(self):
+            with sensor_readings_lock:
+                readings = dict(latest_sensor_readings)
+            for key, (lbl, unit) in self.sensor_labels.items():
+                val = readings.get(key)
+                if val is None:
+                    if key == "ultrasonic":
+                        lbl.config(text=f"999 {unit}".strip(), fg="#d29922")
+                    else:
+                        lbl.config(text="-1", fg="#d29922")
+                elif key == "ultrasonic":
+                    lbl.config(text=f"{val:.1f} {unit}", fg="#58a6ff")
+                else:
+                    color = "#f85149" if val >= 700 else "#58a6ff"
+                    lbl.config(text=f"{val}", fg=color)
+
+        def set_ble_status(self, text, color):
+            self.root.after(0, lambda: self.ble_status_lbl.config(text=f"● {text}", fg=color))
+
+        def update(self, data, range_min, range_max, cone_deg, sides_status=None):
+            self.status_lbl.config(text="● Live (sim)", fg="#3fb950")
+
+            def dist_color_cm(d):
+                return "#3fb950" if d <= 200 else ("#d29922" if d <= 400 else "#f85149")
+
+            for side, info in data.items():
+                if side in ("LEFT", "RIGHT"):
+                    continue
+                w = self.cards[side]
+                if info is None:
+                    w["val"].config(text="N/A", fg="#8b949e")
+                    w["bar_canvas"].coords(w["bar_fill"], 0, 0, 0, 0)
+                    w["avg"].config(text="avg: —"); w["pts"].config(text="pts: —")
+                    w["card"].config(highlightbackground="#30363d")
+                    if side in self.ALERT_SIDES: w["alert"].place_forget()
+                    continue
+                min_d, avg_d, count = info
+                bar_w = w["bar_canvas"].winfo_width(); bar_h = w["bar_canvas"].winfo_height()
+                ratio = min(min_d / range_max, 1.0) if range_max > 0 else 0
+                min_cm = min_d * 100; avg_cm = avg_d * 100
+                color = dist_color_cm(min_cm)
+                w["val"].config(text=f"{min_cm:.1f} cm", fg=color)
+                w["bar_canvas"].coords(w["bar_fill"], 0, 0, int(ratio * bar_w), bar_h)
+                w["bar_canvas"].itemconfig(w["bar_fill"], fill=color)
+                w["avg"].config(text=f"avg: {avg_cm:.1f}cm"); w["pts"].config(text=f"pts: {count}")
+                alert = False; threshold = None
+                if side in self.FRONT_GROUP:
+                    threshold = THRESHOLD_CM; alert = (min_cm <= THRESHOLD_CM) and not front_disabled.is_set()
+                elif side in self.BACK_GROUP:
+                    threshold = BACK_THRESHOLD_CM; alert = (min_cm <= BACK_THRESHOLD_CM) and not back_disabled.is_set()
+                if (side in self.FRONT_GROUP and front_disabled.is_set()) or \
+                   (side in self.BACK_GROUP  and back_disabled.is_set()):
+                    w["card"].config(highlightbackground="#8b949e")
+                else:
+                    w["card"].config(highlightbackground="#f85149" if alert else "#3fb950")
+                if side in self.ALERT_SIDES:
+                    if alert:
+                        w["alert"].config(text=f"⚠ ≤{threshold:.0f}cm")
+                        w["alert"].place(relx=0.5, rely=0.04, anchor="n")
+                    else:
+                        w["alert"].place_forget()
+
+            left_info  = data.get("LEFT")
+            right_info = data.get("RIGHT")
+            left_cm    = left_info[0]  * 100 if left_info  else None
+            right_cm   = right_info[0] * 100 if right_info else None
+
+            nudge = None
+            if left_cm is not None and right_cm is not None:
+                diff = left_cm - right_cm
+                if abs(diff) <= SIDES_TOLERANCE: nudge = "stable"
+                elif diff < 0:                   nudge = "nudge_right"
+                else:                            nudge = "nudge_left"
+
+            if sides_status is None:
+                if   nudge == "stable":       sides_status = "SIDES:STABLE"
+                elif nudge == "nudge_right":  sides_status = "SIDES:NUDGE-RIGHT"
+                elif nudge == "nudge_left":   sides_status = "SIDES:NUDGE-LEFT"
+
+            for side in ("LEFT", "RIGHT"):
+                info = data.get(side); w = self.cards[side]
+                if info is None:
+                    w["val"].config(text="N/A", fg="#8b949e")
+                    w["bar_canvas"].coords(w["bar_fill"], 0, 0, 0, 0)
+                    w["avg"].config(text="avg: —"); w["pts"].config(text="pts: —")
+                    w["card"].config(highlightbackground="#30363d"); continue
+                min_d, avg_d, count = info
+                bar_w = w["bar_canvas"].winfo_width(); bar_h = w["bar_canvas"].winfo_height()
+                ratio = min(min_d / range_max, 1.0) if range_max > 0 else 0
+                min_cm = min_d * 100; avg_cm = avg_d * 100
+                if   sides_status == "SIDES:STABLE":       fg = "#3fb950"
+                elif sides_status == "SIDES:NUDGE-RIGHT":  fg = "#f85149" if side == "LEFT"  else "#3fb950"
+                elif sides_status == "SIDES:NUDGE-LEFT":   fg = "#f85149" if side == "RIGHT" else "#3fb950"
+                else:                                      fg = dist_color_cm(min_cm)
+                w["val"].config(text=f"{min_cm:.1f} cm", fg=fg)
+                w["bar_canvas"].coords(w["bar_fill"], 0, 0, int(ratio * bar_w), bar_h)
+                w["bar_canvas"].itemconfig(w["bar_fill"], fill=fg)
+                w["avg"].config(text=f"avg: {avg_cm:.1f}cm"); w["pts"].config(text=f"pts: {count}")
+                if sides_status and "NUDGE" in sides_status:
+                    w["card"].config(highlightbackground="#d29922")
+                elif sides_status == "SIDES:STABLE":
+                    w["card"].config(highlightbackground="#3fb950")
+                else:
+                    w["card"].config(highlightbackground="#30363d")
+
+            self.footer.config(
+                text=(f"range: {range_min*100:.1f} – {range_max*100:.1f} cm | "
+                      "manual direction cards | not safety certification")
+            )
+
+    return LidarGUI
+
+# ═══ Headless key listener ═══
+def start_headless_key_listener():
+    if not sys.stdin.isatty():
+        logger.info("stdin is not a TTY — headless front/back key toggles disabled.")
+        return
+    import tty, termios
+
+    def _listener():
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while True:
+                ch = sys.stdin.read(1)
+                if not ch: continue
+                ch = ch.lower()
+                if ch == 'f':
+                    if front_disabled.is_set(): front_disabled.clear(); logger.info("FRONT re-enabled.")
+                    else: front_disabled.set(); logger.info("FRONT disabled.")
+                elif ch == 'b':
+                    if back_disabled.is_set(): back_disabled.clear(); logger.info("BACK re-enabled.")
+                    else: back_disabled.set(); logger.info("BACK disabled.")
+                elif ch == 'q':
+                    os.kill(os.getpid(), signal.SIGINT); return
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    threading.Thread(target=_listener, daemon=True, name="key-listener").start()
+
+# ═══ Main ═══
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Combined Sensor + LiDAR Application (SIMULATION)")
+    parser.add_argument("--headless", action="store_true", help="Run without GUI")
+    args = parser.parse_args()
+    with SingleInstanceGuard():
+        _run_application(args)
+
+
+def _run_application(args):
+
+    global firebase, ble_service
+    firebase = FirebaseManager()
+    time.sleep(1)
+
+    existing = firebase.get_raspi_launch_time()
+    if not existing:
+        launch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        firebase.update_raspi_states(launch_time=launch_time)
+
+    executor = ExecutorService(workers=2)
+    executor.submit(lambda: simulated_sensor_updater(serial_stop), permanent=True)
+
+    data_queue = queue.Queue(maxsize=2)
+    ble_service = None
+    node = SimulatedLidarReader(data_queue, ble_service)
+
+    executor.submit(lambda: on_demand_status_responder(node, serial_stop), permanent=True)
+
+    ble = None
+    gui_root = None
+    shutdown_started = threading.Event()
+
+    def shutdown():
+        if shutdown_started.is_set():
+            return
+        shutdown_started.set()
+        logger.info("Shutting down...")
+
+        def _force_kill():
+            time.sleep(5.0)
+            logger.warning("Shutdown taking too long — forcing process exit.")
+            os._exit(1)
+        threading.Thread(target=_force_kill, daemon=True, name="shutdown-watchdog").start()
+
+        serial_stop.set()
+
+        try:
+            if ble: ble.disconnect_client()
+        except Exception as e:
+            logger.error(f"BLE cleanup error: {e}")
+
+        if gui_root is not None:
+            try:
+                gui_root.quit()
+                gui_root.destroy()
+            except Exception as e:
+                logger.error(f"GUI teardown error: {e}")
+
+        logger.info("Shutdown complete.")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT,  lambda s, f: shutdown())
+    signal.signal(signal.SIGTERM, lambda s, f: shutdown())
+
+    if args.headless:
+        def ble_cb_status(text, color):
+            pass
+        ble = BleService(ble_cb_status, ble_notify_handler)
+        ble.start()
+        ble_service = ble
+        node.ble_service = ble
+        start_headless_key_listener()
+        try:
+            while True:
+                # In headless simulation, update distances to default 100.0 cm continuously
+                node.update_distances({s: 100.0 for s in SimulatedLidarReader.SIDES})
+                try:
+                    ble_recv_queue.get_nowait()  # drain silently
+                except queue.Empty:
+                    pass
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            shutdown()
+    else:
+        import tkinter as tk
+        root = tk.Tk()
+        gui_root = root
+        LidarGUI = init_gui(node)
+        gui = LidarGUI(root, data_queue, ble_recv_queue)
+
+        def ble_cb_status(text, color):
+            gui.set_ble_status(text, color)
+
+        ble = BleService(ble_cb_status, ble_notify_handler)
+        ble.start()
+        ble_service = ble
+        node.ble_service = ble
+        root.protocol("WM_DELETE_WINDOW", shutdown)
+        try:
+            root.mainloop()
+        except KeyboardInterrupt:
+            shutdown()
+
+if __name__ == '__main__':
+    main()

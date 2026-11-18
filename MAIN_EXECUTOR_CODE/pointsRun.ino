@@ -22,23 +22,34 @@
 //   MPU-measured spins, absolute along the route (2026-11-11: the old
 //   4900/5000-step turns are 90 degrees, the 9800-step turn is 180). Each turn
 //   is then checked against the LiDAR walls and corrected to the hallway.
-
+// BACKING n  (reverse parking, owner 2026-11-16)
+//   backIntoPlace(n): square the rear to its own LiDAR wall from two scans, then
+//   n steps BACKWARDS slowly, with the Pi's rear clearance (R=) required by the
+//   bridge. The preceding turn skips hallway-wall alignment; D owns this normal.
+//
+// Reverse parking (owner, 2026-11-16: "Add backwards movement for parking
+// purposes", for both routes). Until then each route ended by turning toward its
+// parking spot, driving at it and spinning 180 degrees beside it. Now the last
+// turn goes the other way, with its back to the spot, and the robot reverses in
+// by the same travel: the same final place and heading (right 90 then left 180
+// is left 90), with no spin beside the wall. Outbound: right 90, 500 + 10600
+// forward, left 180 became left 90, 11100 back. Return: right 90, 500 + 7000
+// forward, left 180 became left 90, 7500 back. The turn is at the same spot.
 //
 // Station steps (owner, 2026-11-14): the station is at the hallway wall. The
 // outbound route leaves it straight out to the hallway centre; the return route
-// drives straight at it and turns round beside it. Those steps carry
-// STEP_STATION (RouteResume.h): the Pi leaves the station's walls out of its
-// LiDAR holds while they run, and the turn beside the wall skips the wall
-// alignment. STEP_WALL_AHEAD_* marks where the sonar faces the station wall:
-// driving the return's last steps forward, and driving the outbound's first
-// steps on the way back of a reverse run. The outbound's first turn is at the
-// hallway centre and is an ordinary turn.
+// backs into it from there. Those steps carry STEP_STATION (RouteResume.h): the
+// Pi leaves the station's walls out of its LiDAR holds while they run.
+// STEP_WALL_AHEAD_REV marks where the sonar faces the station wall: driving the
+// outbound's first steps on the way back of a reverse run. Both turns at the
+// hallway centre are ordinary turns. (STEP_WALL_AHEAD_FWD marked the return's
+// old forward approach; no step drives at the station wall forward any more.)
 
 static const int32_t CALIBRATION_BUMP_STEPS = 100;
 static const int32_t CALIBRATION_BUMPS = 5 * CALIBRATION_BUMP_STEPS;
 
 static const uint8_t LEAVING_STATION = STEP_STATION | STEP_WALL_AHEAD_REV;
-static const uint8_t PARKING = STEP_STATION | STEP_WALL_AHEAD_FWD;
+static const uint8_t PARKING_AT_STATION = STEP_STATION;
 
 static const RouteStep OUTBOUND_ROUTE[] = {
   {RouteOp::BUMPS, CALIBRATION_BUMPS, LEAVING_STATION},
@@ -52,10 +63,8 @@ static const RouteStep OUTBOUND_ROUTE[] = {
   {RouteOp::TURN_RIGHT, 90},
   {RouteOp::BUMPS, CALIBRATION_BUMPS},
   {RouteOp::STRAIGHT, 25500},
-  {RouteOp::TURN_RIGHT, 90},
-  {RouteOp::BUMPS, CALIBRATION_BUMPS},
-  {RouteOp::STRAIGHT, 10600},
-  {RouteOp::TURN_LEFT, 180},
+  {RouteOp::TURN_LEFT, 90},
+  {RouteOp::BACKING, CALIBRATION_BUMPS + 10600},
 };
 
 static const RouteStep RETURN_ROUTE[] = {
@@ -70,10 +79,8 @@ static const RouteStep RETURN_ROUTE[] = {
   {RouteOp::TURN_RIGHT, 90},
   {RouteOp::BUMPS, CALIBRATION_BUMPS},
   {RouteOp::LONG_HALLWAY, 595700},
-  {RouteOp::TURN_RIGHT, 90},
-  {RouteOp::BUMPS, CALIBRATION_BUMPS, PARKING},
-  {RouteOp::STRAIGHT, 7000, PARKING},
-  {RouteOp::TURN_LEFT, 180, PARKING},
+  {RouteOp::TURN_LEFT, 90},
+  {RouteOp::BACKING, CALIBRATION_BUMPS + 7000, PARKING_AT_STATION},
 };
 
 static const uint8_t OUTBOUND_STEPS = sizeof(OUTBOUND_ROUTE) / sizeof(OUTBOUND_ROUTE[0]);
@@ -84,9 +91,9 @@ static bool routePause(unsigned long durationMs = 100UL) {
   return !resetQueued;
 }
 
-static void beginRouteLeg(int32_t steps) {
+static void beginRouteLeg(int32_t steps, bool backward = false) {
   routeResume.beginLeg(steps, stepper1 ? stepper1->getCurrentPosition() : 0,
-                       stepper2 ? stepper2->getCurrentPosition() : 0);
+                       stepper2 ? stepper2->getCurrentPosition() : 0, backward);
 }
 
 static bool runCalibrationBumps(int32_t steps) {
@@ -113,7 +120,8 @@ static bool runLongHallway(int32_t steps) {
   return safeMoveDistance(steps - progress, false, true);
 }
 
-static bool runRouteStep(const RouteStep& step, int32_t amount, bool turnCommitted) {
+static bool runRouteStep(const RouteStep& step, int32_t amount, bool turnCommitted,
+                         bool parkingNext = false) {
   switch (step.op) {
     case RouteOp::BUMPS:
       return runCalibrationBumps(amount);
@@ -123,16 +131,20 @@ static bool runRouteStep(const RouteStep& step, int32_t amount, bool turnCommitt
     case RouteOp::LONG_HALLWAY:
       return amount <= 0 || runLongHallway(amount);
     case RouteOp::TURN_LEFT:
-      return turnCommitted ? resumeRouteTurn() : safeTurnLeft((float)amount);
+      return turnCommitted ? resumeRouteTurn(!parkingNext) : safeTurnLeft((float)amount, !parkingNext);
     case RouteOp::TURN_RIGHT:
-      return turnCommitted ? resumeRouteTurn() : safeTurnRight((float)amount);
+      return turnCommitted ? resumeRouteTurn(!parkingNext) : safeTurnRight((float)amount, !parkingNext);
+    case RouteOp::BACKING:
+      beginRouteLeg(amount, true);
+      return amount <= 0 || backIntoPlace(amount);
   }
   return false;
 }
 
+// Straight travel, forward or (BACKING) backwards.
 static bool isStraightStep(const RouteStep& step) {
   return step.op == RouteOp::BUMPS || step.op == RouteOp::STRAIGHT ||
-         step.op == RouteOp::LONG_HALLWAY;
+         step.op == RouteOp::LONG_HALLWAY || step.op == RouteOp::BACKING;
 }
 
 // The angle a step adds to the route heading (+ = left).
@@ -173,6 +185,7 @@ static bool runRoute(uint8_t route, const RouteStep* steps, uint8_t count, const
   const bool continuing = resume.route == route && resume.anchored && resume.step <= count;
   const uint8_t first = continuing ? resume.step : 0;
   routeResume.beginRoute(route);
+  discardRunCheckpoint();  // the wheels leave a RunStart list's saved place
   bool finished = false;
   struct LiveScope {
     bool* finished;
@@ -203,7 +216,9 @@ static bool runRoute(uint8_t route, const RouteStep* steps, uint8_t count, const
     routeResume.beginStep(i, amount, -headingBeforeStep(steps, i), stepTurnDeg(steps[i]));
     routeLegBegin(route, false, i, count, steps[i].op, steps[i].flags,
                   wallAheadBeyond(steps, count, i, false));
-    if (!runRouteStep(steps[i], amount, resumed && resume.turnCommitted)) return false;
+    // Rear-wall alignment owns the parking direction, including continued turns.
+    const bool parkingNext = i + 1U < count && steps[i + 1U].op == RouteOp::BACKING;
+    if (!runRouteStep(steps[i], amount, resumed && resume.turnCommitted, parkingNext)) return false;
     // A pause after every step but the last, as the hand-written routes had.
     if (i + 1U < count && !routePause()) return false;
   }
@@ -232,6 +247,10 @@ static bool runRoute(uint8_t route, const RouteStep* steps, uint8_t count, const
 //
 // It reaches the start only as well as the wheels repeat their steps: slip on
 // the way out is not known and is not corrected.
+//
+// A BACKING step (reverse parking, 2026-11-16) moved the robot the way its back
+// faced, so the way back over it is forward, facing the same way: no turn round,
+// and the reverse run still only ever drives forward.
 static float nearestHeading(float targetDeg) {
   return heading.heading() + HeadingControl::wrap180(targetDeg - heading.heading());
 }
@@ -240,6 +259,7 @@ static bool runReverseRoute(uint8_t route, const RouteStep* steps, uint8_t count
   const RouteResume::Point point = routeResume.takeReverse();
   if (point.route != route || !point.anchored) return false;
   routeResume.beginRoute(route, true);
+  discardRunCheckpoint();
   bool finished = false;
   struct LiveScope {
     bool* finished;
@@ -274,10 +294,12 @@ static bool runReverseRoute(uint8_t route, const RouteStep* steps, uint8_t count
     if (done > step.amount) done = step.amount;
     if (done <= 0) continue;
     const float legOffset = headingBeforeStep(steps, (uint8_t)j);
-    const float target = nearestHeading(anchor + legOffset + 180.0f);
+    // The heading the way back is driven at, relative to the route's start.
+    const float backOffset = legOffset + (step.op == RouteOp::BACKING ? 0.0f : 180.0f);
+    const float target = nearestHeading(anchor + backOffset);
     // The record and the notice say where the robot is before anything moves.
     heading.setRouteTarget(target);
-    routeResume.beginReverseStep((uint8_t)j, step.amount, step.amount - done, -180.0f - legOffset);
+    routeResume.beginReverseStep((uint8_t)j, step.amount, step.amount - done, -backOffset);
     routeLegBegin(route, true, (uint8_t)j, count, step.op, step.flags,
                   wallAheadBeyond(steps, count, (uint8_t)j, true));
     if (fabsf(target - heading.heading()) > HeadingControl::TURN_TOLERANCE_DEG) {
@@ -287,7 +309,7 @@ static bool runReverseRoute(uint8_t route, const RouteStep* steps, uint8_t count
     beginRouteLeg(done);
     if (!safeMoveDistance(done, false, step.op == RouteOp::LONG_HALLWAY)) return false;
     // The wall alignment and the straight may have corrected the route frame.
-    anchor = heading.routeTarget() - legOffset - 180.0f;
+    anchor = heading.routeTarget() - backOffset;
     if (!routePause()) return false;
   }
 

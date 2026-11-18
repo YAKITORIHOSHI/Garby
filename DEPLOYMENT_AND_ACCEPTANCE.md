@@ -1,5 +1,184 @@
 # GARBY deployment and acceptance
 
+## Route arrival database reporting — 2026-11-17
+
+This change requires **Executor only**: upload the entire `MAIN_EXECUTOR_CODE` sketch
+(`ARRIVAL-20261117`) and deploy the entire `RasPi/` directory (`ARRIVAL-20261117`). The
+existing bridge forwards the new completion line; this does not remove any earlier pending
+bridge upload requirement. Installed firmware and Pi deployment are unverified here.
+
+After deployment, observe Firebase `devices/garby-bin-01/status` during supervised,
+already-authorized route acceptance. A completed outbound route must show `POINT_B` and a
+`lastArrival` naming Disposal area. A successful ordinary or continued return must show
+`POINT_A`, `isAtStation = true`, and a Station arrival sourced from `RETURN_COMPLETE`.
+While driving, current location must be `IN_TRANSIT`; faults and link uncertainty must make
+it `UNKNOWN`. Confirm that boot, idle after a test/release, an incomplete route and RESET ACK
+do not invent station arrival, and that reconnect replays the actual completed endpoint.
+
+These fields report executor route completion; they do not measure physical arrival or slip.
+Database rules must permit the Pi's existing administrative status writes and app status
+reads. No live rules, records, services or hardware were changed by the software checks.
+Exact source/build evidence and remaining limits: `docs/route-arrival-2026-11-17.md`.
+
+## MPU scale, developer speed and map layout — 2026-11-17
+
+Upload **Both** complete `BLE_Receiver-Final` and `MAIN_EXECUTOR_CODE` sketches and deploy
+the entire `RasPi/` directory, build `TURNSCALE-20261116`. This includes prior pending source
+changes; intermediate images do not require separate uploads. Installed versions remain
+unverified by this software-only task.
+
+The MPU scale is provisional: the owner estimated 100° on the floor for 90° reported.
+`100/90` corrects rate and integration together; keep the requested target at 90°. Under
+supervision, measure settled left and right turns from floor reference marks. If the scale
+needs refinement, use `new = current * physical / reported` with measurements from both
+directions; a discrepancy caused by slip, mounting or inertia is not proof of scale error.
+Check both routes' heading behavior before accepting the new global MPU calibration.
+
+Confirm the Developer speed settings: 2351 steps/s minimum/default (nominally 30 cm/s),
+remote Slow/Fast 2351/4702, RunStart maximum 8000. These are wheel-speed settings, not
+guaranteed chassis speed; ramps/short moves and measured-turn approach can be slower.
+Verify braking and emergency stop with the payload; software counts cannot measure slip
+or stopping distance. Selected sensor gates and all live leases retain their scope.
+
+On the map, inspect the right sidebar's state/hold, scan status, bin sensors, range,
+caption, hit count and zone information. Scroll for lower details. The canvas should
+fill its panel, and the top button should say **Developer**. Other tabs retain visible
+header holds and the emergency stop stays visible. Test at 800×480 and the owner's usual
+window size. Source/test/build evidence: `docs/developer-turn-speed-2026-11-17.md`.
+
+## Developer 90-degree floor turns — 2026-11-16
+
+Upload **Both** complete sketches and deploy the entire `RasPi/` directory, all
+`TURNTEST-20261116`. This includes the immediate turn stop and earlier RunStart updates;
+no separate intermediate `TURNSTOP-20261116` executor upload is needed. Software builds do
+not establish which firmware is installed. Saved flasher state reports no connected board.
+
+In Developer tests, confirm **Turn left 90°** / **Turn right 90°** explain that GARBY must
+be on the floor with its wheels down, and Cancel sends no movement. Deselect MPU and both
+buttons must be disabled. For physical acceptance, supervise each direction on the floor,
+measure the settled chassis angle, and verify the immediate endpoint stop. Keep the chosen
+sensor checks active for floor acceptance. Missing MPU holds the test; unchanged heading
+ends it as `NO_ROTATION` with the floor notice. An undetected MPU also needs its connection
+checked. Confirm emergency stop and a lost test connection stop it once. The new 30-second
+limit does not extend the 800 ms connection lease. No hardware action is part of these
+software checks. Evidence and build configurations:
+`docs/developer-90-turns-2026-11-16.md`.
+
+## Immediate turn endpoint stop — 2026-11-16
+
+Upload **Executor only**, the whole `MAIN_EXECUTOR_CODE` sketch, build
+`TURNSTOP-20261116`. This turn change needs no additional bridge flash or Pi deployment.
+Earlier `RUNSTART-20261116B` bridge/Pi changes keep their own deployment requirement;
+installed revisions are unverified here. Saved executor flasher state has no board selected
+or connected; compilation uses the documented ESP32 Dev Module, 4 MB, PSRAM disabled
+configuration below, without an upload port.
+
+After upload, verify the executor boot build ID. With the chassis able to rotate on the
+floor, supervise short left and right turns, then both 90-degree turns, measuring the
+settled chassis angle and observing any wheel slip or missed steps at the abrupt endpoint.
+Lifted wheels cannot validate an MPU turn: the chassis must rotate. Confirm that a target
+stop is followed by the usual settled heading/wall checks and that an obstacle, missing
+heading and emergency stop still hold or stop the turn. No hardware action is part of the
+software checks. Details: `docs/turn-force-stop-2026-11-16.md`.
+
+## You decide when it moves — 2026-11-16
+
+Pi only (`DECIDE-20261116`): restart the monitor from this folder; no MCU upload. Check on the
+bench: start Manual disposal, let it hold, switch a read-only group: the stop latches and the
+line above the tabs says why; Release stop leaves GARBY idle. Close the monitor during a held
+route and reopen it: the route is stopped on connection, not driven on. Details:
+`docs/operator-decides-2026-11-16.md`.
+
+## Sides read-only — 2026-11-16
+
+Pi only (`SIDES-20261116`): restart the monitor from this folder. No MCU upload for this
+change; both boards still need `REMOTE-20261116`. Check: Controls → **Sides: read only** with
+something right beside GARBY; the hold above the tabs clears, the side readings say "Reading
+only", and the LiDAR footer says "Threshold bypass: sides". Turn it back to checks on before
+leaving the bench. Details: `docs/side-read-only-2026-11-16.md`.
+
+## Remote control — 2026-11-16
+
+Upload **both complete sketches** and deploy the whole `RasPi/` folder, all `REMOTE-20261116`
+(it includes `BACKTEST`, `REARPARK` and `CONTROLS`). Bench check with the wheels lifted:
+Developer tests… → Remote control → Slow; hold ▲ two seconds and let go (both wheels forward,
+then stop), the same with ▼, ◀ and ▶; hold ▲ and close the window (it stops). On the floor, Slow
+first: nothing watches for obstacles while driving by hand. Details:
+`docs/remote-control-2026-11-16.md`.
+
+## Two windows and logs in the monitor — 2026-11-16
+
+Pi only: deploy the whole `RasPi/` folder (`CONTROLS-20261116`). **No MCU upload for this
+change.** Still pending: the executor sketch `BACKTEST-20261116` (the bridge already has it).
+To let the monitor's Restart reboot the Pi from an ssh session, run once
+`sudo install -m 644 RasPi/49-garby-reboot.rules /etc/polkit-1/rules.d/`. Check: the monitor
+prints one line naming `~/garby-logs/bridge.log`, the *Log* tab fills, **Developer tests…** opens
+a second window with its own EMERGENCY STOP, and clicking a greyed-out Manual disposal explains
+why. Details: `docs/gui-controls-2026-11-16.md`.
+
+## Backward developer test — 2026-11-16
+
+Upload **both complete sketches** and deploy the whole `RasPi/` folder, all
+`BACKTEST-20261116`. The flasher log shows `REARPARK-20261116` built and uploaded to both
+boards at 03:54/04:12 EST; this build contains it unchanged. Bench check with the wheels lifted:
+Backward ~5 cm with LiDAR unticked turns both wheels about a quarter turn the other way from
+Forward (result `-400` steps each). With LiDAR ticked, a box held behind the robot keeps it
+still and the result names the rear check. Put a flat wall behind the robot and read the rear
+wall's distance and angle on the Live line before the first floor parking. Steps:
+`docs/backward-test-2026-11-16.md`, section 3.
+
+## Rear-wall parking alignment — 2026-11-16
+
+Deploy the entire matching `RasPi/` directory and upload **both complete sketches**,
+all build ID `REARPARK-20261116`. This replaces the earlier `PARK-20261116` source
+build, including its earlier pending executor changes; it does not require separate
+uploads of those older images. No installation or physical acceptance is established
+by the software checks. Current saved flasher state has no board selected or connected;
+target compilation uses the documented production configurations below, not a port.
+
+Before floor use, verify the LiDAR mounting yaw/reflection with a chassis physically
+square to a flat rear wall. Two wall scans can establish relative alignment, but cannot
+tell mounting error from chassis error without this physical reference. Keep the
+existing calibrated parking counts and measure the final rear gap: outbound parking
+still obeys the 35 cm rear box behind the configured rear edge; the station wall is
+ignored only on its existing station step. A wall inside that stop box holds outbound
+parking even when the wall is fitted correctly. No new clearance bypass was added.
+
+Then supervise short rear approaches, rear-wall loss/recovery, an obstacle hold, a small
+alignment correction with full spin clearance, emergency stop and continued parking,
+before both complete routes. There is no rear sonar below the LiDAR plane. Detailed
+procedure and saved software evidence: `docs/rear-wall-parking-2026-11-16.md`.
+
+## Deployment-only folders and developer-turn fix — 2026-11-16
+
+Deploy the whole `RasPi/` folder; since 2026-11-16 it contains only runtime files (no tests,
+simulator or preview). Upload **only the executor** sketch, `DEVTEST-20261116`; the bridge's
+`DEVTEST-20261115` is current. Bench check: with the wheels lifted, a Turn test now spins once
+and reports that the gyro saw no rotation, and any hold ends a test at once with its cause
+named. Run the software checks from the repository root: `python3 -B -m unittest discover -s
+tests/pi -p 'test_*.py'` and `python3 -B tools/run_firmware_tests.py`.
+
+## Developer tests and motion-hold diagnosis — 2026-11-15
+
+This change requires **both complete sketches**, `DEVTEST-20261115`, and the whole matching
+`RasPi/` directory. The owner confirmed the bridge is ESP32-S3 N16R8; select 16 MB flash and
+octal PSRAM (`esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi`). Executor remains ESP32 Dev Module,
+4 MB flash / PSRAM disabled. Saved port selections do not prove a present upload connection.
+
+The developer panel remains disabled on older firmware. Once installed, begin with wheels
+lifted, verify emergency stop, and use **Read sensors** first. Forward/single-motor tests can
+deliberately omit selected sensor gates; keep them supervised. Test the default all-on gates,
+each intended isolated combination, lost test connection, emergency stop and restoration of
+normal route gates. A test ends at IDLE and requires a new deliberate start; it cannot resume
+an interrupted normal route. Do not use a test result as proof of physical distance or braking.
+
+The recent start hold is independently reproduced by recorded LiDAR data; the chassis outline
+is still unmeasured. Identify the near return and measure the LiDAR/body geometry before
+changing production clearance settings. Developer overrides do not calibrate that outline.
+Procedure, wire contracts and saved verification: `docs/developer-tests-start-hold-2026-11-15.md`.
+Source and software verification are separate from upload/physical acceptance, which were
+not performed in this investigation.
+
 ## Phone control and headless — 2026-11-15
 
 Pi only (`PHONE-20261114`): deploy the entire `RasPi/` directory. Before the app's controls
@@ -296,7 +475,7 @@ For the desktop monitor, install system Tk support with
 `sudo apt install python3-tk` on Raspberry Pi OS/Debian/Ubuntu and run the launcher
 without `--headless` in a desktop session. The UI uses standard Tkinter widgets
 and system fonts, with no third-party UI package. The headless service does not
-need Tk or a desktop. `python3 RasPi/preview_ui.py` previews simulated readings
+need Tk or a desktop. `python3 tools/preview_ui.py` previews simulated readings
 using only Python and Tk, without ROS or robot hardware.
 
 Copy `RasPi/garby-bridge.env.example` to `/etc/default/garby-bridge` and edit every

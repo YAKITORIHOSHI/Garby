@@ -1,0 +1,90 @@
+[
+  {
+    "name": "bridge-target-final",
+    "command": [
+      "arduino-cli",
+      "compile",
+      "--fqbn",
+      "esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi",
+      "--build-path",
+      "/tmp/garby-rear-parking-build-bridge",
+      "--build-cache-path",
+      "/tmp/garby-rear-parking-cache-bridge",
+      "--output-dir",
+      "/tmp/garby-rear-parking-bin-bridge",
+      "BLE_Receiver-Final"
+    ],
+    "cwd": "/home/garby/SharedGarby/GARBY-CODEBASE/GarbyMostLatest-ForTesting",
+    "startedUtc": "2026-11-16T08:17:55.277930+00:00",
+    "elapsedSeconds": 25.691,
+    "exitCode": 0,
+    "log": "bridge-target-final.log"
+  },
+  {
+    "name": "executor-target-final",
+    "command": [
+      "arduino-cli",
+      "compile",
+      "--fqbn",
+      "esp32:esp32:esp32:FlashSize=4M,PSRAM=disabled",
+      "--build-path",
+      "/tmp/garby-rear-parking-build-executor",
+      "--build-cache-path",
+      "/tmp/garby-rear-parking-cache-executor",
+      "--output-dir",
+      "/tmp/garby-rear-parking-bin-executor",
+      "MAIN_EXECUTOR_CODE"
+    ],
+    "cwd": "/home/garby/SharedGarby/GARBY-CODEBASE/GarbyMostLatest-ForTesting",
+    "startedUtc": "2026-11-16T08:17:55.283938+00:00",
+    "elapsedSeconds": 25.658,
+    "exitCode": 0,
+    "log": "executor-target-final.log"
+  },
+  {
+    "name": "firmware-final",
+    "command": [
+      "python3",
+      "-B",
+      "tools/run_firmware_tests.py"
+    ],
+    "cwd": "/home/garby/SharedGarby/GARBY-CODEBASE/GarbyMostLatest-ForTesting",
+    "startedUtc": "2026-11-16T08:17:55.277282+00:00",
+    "elapsedSeconds": 60.59,
+    "exitCode": 0,
+    "log": "firmware-final.log"
+  },
+  {
+    "name": "pi-final",
+    "command": [
+      "python3",
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests/pi",
+      "-p",
+      "test_*.py"
+    ],
+    "cwd": "/home/garby/SharedGarby/GARBY-CODEBASE/GarbyMostLatest-ForTesting",
+    "startedUtc": "2026-11-16T08:17:55.276803+00:00",
+    "elapsedSeconds": 78.624,
+    "exitCode": 0,
+    "log": "pi-final.log"
+  },
+  {
+    "name": "source-sanity",
+    "command": [
+      "python3",
+      "-B",
+      "tools/source_sanity.py",
+      "."
+    ],
+    "cwd": "/home/garby/SharedGarby/GARBY-CODEBASE/GarbyMostLatest-ForTesting",
+    "startedUtc": "2026-11-16T08:17:55.277645+00:00",
+    "elapsedSeconds": 7.072,
+    "exitCode": 0,
+    "log": "source-sanity.log"
+  }
+]

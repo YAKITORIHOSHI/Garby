@@ -145,7 +145,8 @@ YAW_UNKNOWN_ALLOW_DPS = 8.0       # no walls: heading hold and centring may turn
 # --- Likely person (2026-11-14, owner: "mark them RED if you think they were humans") ---
 # A 2D scan at chest height cannot recognise a person. "Likely person" is a
 # person-sized cluster that has proven to move over the ground at a walking or
-# running speed, and is not a flat panel. It is a display/report label: every
+# running speed and repeatedly shows a rounded profile. A corner is non-flat
+# too, so that alone is not torso evidence. It is a display/report label: every
 # stop and slow rule above treats all moving objects alike.
 PERSON_MIN_EXTENT_CM = 15.0
 PERSON_MAX_EXTENT_CM = 75.0
@@ -159,6 +160,35 @@ FLAT_MIN_EXTENT_CM = 35.0         # a panel this wide ...
 FLAT_MAX_RMS_CM = 1.2             # ... lying this close to one straight line is not a torso
 FLAT_MAX_RANGE_CM = 400.0         # beyond this the range noise hides a torso's curve
 FLAT_VETO_FRACTION = 0.6          # of the track's sightings
+PERSON_PROFILE_POINTS = 8        # sparse fragments cannot establish a rounded outline
+PERSON_RADIUS_MIN_CM = 8.0
+PERSON_RADIUS_MAX_CM = 40.0
+PERSON_PROFILE_RMS_CM = 1.6
+PERSON_PROFILE_IMPROVEMENT = 0.65 # a curved fit must beat a straight line clearly
+PERSON_PROFILE_CONFIRM = 3
+PERSON_PROFILE_FRACTION = 0.6
+# --- The still scene as the speed reference for the label (2026-11-16) ---
+# Owner, 2026-11-16: "it detects objects sometimes as humans during the run, maybe
+# because garby itself were running?" Ground velocity rests on the wheel speed the
+# executor reports. When the wheels turn but the robot does not cover the ground at
+# that speed (wheels lifted on the bench, slip, a report lagging a ramp), EVERY still
+# object drifts along the travel axis by the difference, and person-sized posts and
+# bins earned the label (ray-cast hallway, wheels lifted at 71 cm/s: 2-4 still
+# objects labelled within about 1 s in every case tried). The other tracked objects
+# show that drift. When most of them agree on one velocity along the travel axis that
+# a wheel-speed error can explain, the label also needs motion relative to them.
+# Display and report only: the moving, stop and slow rules above never use this.
+SCENE_MIN_TRACKS = 3              # confirmed, measured tracks needed for a scene drift
+SCENE_AGREE_CM_S = 15.0           # a track this close to the median velocity agrees with it
+SCENE_AGREE_FRACTION = 0.6        # of those tracks
+SCENE_LATERAL_MAX_CM_S = 15.0     # a wheel-speed error moves the scene along x only
+SCENE_MIN_EGO_CM_S = 10.0         # only while the wheels report driving
+# A wheel-speed error does not vanish between scans: the last drift stands in for a
+# scan with too few measured tracks (misses, a split segment) or with tracks that
+# disagree (noisy velocities), for this long, while the reported speed stays within
+# this of the speed it was measured at.
+SCENE_HOLD_S = 1.2
+SCENE_HOLD_EGO_CM_S = 8.0
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +296,7 @@ class Detection:
     points: int
     near: float                  # nearest point's range
     flat: bool = False           # a wide, straight panel (door leaf, cart side, board)
+    rounded: bool = False        # repeated rounded profiles are needed for the person label
 
 
 @dataclass(frozen=True)
@@ -369,6 +400,26 @@ def build_segments(frame, body=None):
     return ScanSegments(xs, ys, rs, tuple(merged))
 
 
+def _rounded_profile(xs, ys):
+    """Conservative torso-sized arc evidence; corners/panels are generic objects."""
+    if len(xs) < PERSON_PROFILE_POINTS:
+        return False
+    x, y = xs - xs.mean(), ys - ys.mean()
+    try:
+        fit, _, rank, _ = np.linalg.lstsq(
+            np.column_stack((2.0 * x, 2.0 * y, np.ones(len(x)))), x * x + y * y, rcond=None)
+    except np.linalg.LinAlgError:
+        return False
+    if rank < 3:
+        return False
+    cx, cy, offset = fit
+    radius = math.sqrt(max(0.0, float(offset + cx * cx + cy * cy)))
+    if not PERSON_RADIUS_MIN_CM <= radius <= PERSON_RADIUS_MAX_CM:
+        return False
+    rms = float(np.sqrt(np.mean((np.hypot(x - cx, y - cy) - radius) ** 2)))
+    return rms <= PERSON_PROFILE_RMS_CM and rms <= PERSON_PROFILE_IMPROVEMENT * _line_rms(xs, ys)
+
+
 def detect_objects(ranges=None, *, angle_min=0.0, angle_increment=0.0, range_min=0.0,
                    range_max=0.0, lidar_y_cm=0.0, body=None, segments=None):
     """Small segments (object candidates) of one robot-frame scan.
@@ -404,7 +455,9 @@ def detect_objects(ranges=None, *, angle_min=0.0, angle_increment=0.0, range_min
         if distance > 1e-6:
             shift = VISIBLE_ARC_BIAS * min(0.5 * extent, OBJECT_RADIUS_MAX_CM) / distance
             cx, cy = cx * (1.0 + shift), cy * (1.0 + shift)
-        detections.append(Detection(cx, cy, extent, len(seg), near, flat))
+        rounded = (not flat and PERSON_MIN_EXTENT_CM <= extent <= PERSON_MAX_EXTENT_CM
+                   and _rounded_profile(sx, sy))
+        detections.append(Detection(cx, cy, extent, len(seg), near, flat, rounded))
     return detections
 
 
@@ -425,9 +478,11 @@ class _Track:
     ttc: float | None = None
     moving: bool = False
     shape_jump: bool = False
-    person: bool = False         # latched for the track's life: still red when they stop
+    person: bool = False         # retained while identity/shape agrees, including a person stopping
     sightings: int = 0
     flat_sightings: int = 0
+    profiles: deque = field(default_factory=lambda: deque(maxlen=8))
+    flat_profiles: deque = field(default_factory=lambda: deque(maxlen=8))
     # (time, x, y) of corrected positions in the ground frame: the robot's own
     # integrated travel and rotation are taken out.
     trail: deque = field(default_factory=lambda: deque(maxlen=12))
@@ -462,6 +517,7 @@ class MotionTracker:
         self._ego_heading = 0.0
         self._last_wall_heading = None   # H of the previous scan, deg
         self._yaw_unknown_until = -1.0
+        self._drift = None               # (scene drift cm/s, measured at, reported speed)
         self.enabled = np is not None
 
     # -- lifecycle ---------------------------------------------------------
@@ -471,6 +527,7 @@ class MotionTracker:
         self._ego_x = self._ego_y = self._ego_heading = 0.0
         self._last_wall_heading = None
         self._yaw_unknown_until = -1.0
+        self._drift = None
 
     # -- one scan ----------------------------------------------------------
     def update(self, ranges=None, *, angle_min=0.0, angle_increment=0.0, range_min=0.0,
@@ -524,8 +581,9 @@ class MotionTracker:
                 self._predict(track, dt, v_ego, ego_hi - ego_lo)
                 self._rotate(track, turned, yaw_sigma)
         self._associate(detections, scan_time)
+        drift = self._scene_drift(scan_time, ego, known, v_ego)
         for track in self._tracks:
-            self._classify(track, ego_lo, ego_hi, v_ego, scan_time, yaw_allow)
+            self._classify(track, ego_lo, ego_hi, v_ego, scan_time, yaw_allow, drift)
         return self._decide(scan_time, ego, known, v_ego)
 
     # -- internals -----------------------------------------------------------
@@ -659,6 +717,8 @@ class MotionTracker:
                 det.extent, born=now, last_seen=now)
             track.sightings = 1
             track.flat_sightings = 1 if det.flat else 0
+            track.profiles.append(det.rounded)
+            track.flat_profiles.append(det.flat)
             track.trail.append((now, *self._ground(det.x, det.y)))
             self._tracks.append(track)
             self._next_id += 1
@@ -671,6 +731,12 @@ class MotionTracker:
         # track found again after missed scans, moves its centroid without the object
         # moving: keep the position, but do not let that jump read as a velocity.
         track.shape_jump = reacquired or abs(det.extent - track.extent) > SHAPE_JUMP_CM
+        if track.shape_jump:
+            # A re-associated fragment is a new identity for display purposes;
+            # it cannot inherit another object's person label or shape evidence.
+            track.person = False
+            track.profiles.clear()
+            track.flat_profiles.clear()
         P = _mat(track.cov)
         if track.shape_jump:
             P[2, 2] += SHAPE_JUMP_SPEED_SIGMA_CM_S ** 2
@@ -686,6 +752,8 @@ class MotionTracker:
         track.extent = 0.7 * track.extent + 0.3 * det.extent
         track.sightings += 1
         track.flat_sightings += 1 if det.flat else 0
+        track.profiles.append(det.rounded)
+        track.flat_profiles.append(det.flat)
         track.hits += 1
         track.misses = 0
         track.last_seen = now
@@ -694,13 +762,66 @@ class MotionTracker:
     def _band_residual(value, lo, hi):
         return 0.0 if lo <= value <= hi else (lo - value if value < lo else value - hi)
 
-    def _classify(self, track, ego_lo, ego_hi, v_ego, now, yaw_allow=0.0):
+    def _scene_drift(self, now, ego, known, v_ego):
+        """Ground velocity along x that the still scene shows, or None.
+
+        Only while the wheels report driving, with SCENE_MIN_TRACKS measured,
+        confirmed tracks mostly agreeing on one velocity, and only a drift that a
+        wheel-speed error can explain: along the travel axis, between "the robot
+        is not moving at all" and "it moves no faster than reported" (with the
+        report's own sigma either side).
+        """
+        if not (known and ego.mode == "F" and abs(v_ego) >= SCENE_MIN_EGO_CM_S):
+            self._drift = None
+            return None
+        held = self._drift
+        if (held is not None and 0.0 <= now - held[1] <= SCENE_HOLD_S
+                and abs(v_ego - held[2]) <= SCENE_HOLD_EGO_CM_S):
+            held = held[0]
+        else:
+            held = None
+        velocities = [(track.state[2], track.state[3]) for track in self._tracks
+                      if track.hits >= CONFIRM_HITS and track.misses == 0
+                      and track.last_seen == now and not track.shape_jump]
+        if len(velocities) < SCENE_MIN_TRACKS:
+            return held
+        mid_x = sorted(vx for vx, _ in velocities)[len(velocities) // 2]
+        mid_y = sorted(vy for _, vy in velocities)[len(velocities) // 2]
+        agree = sum(1 for vx, vy in velocities
+                    if math.hypot(vx - mid_x, vy - mid_y) <= SCENE_AGREE_CM_S)
+        if agree < SCENE_AGREE_FRACTION * len(velocities):
+            return held  # a noisy scan; the wheel-speed error has not changed
+        sigma = EGO_SPEED_SIGMA_CM_S + 0.1 * abs(v_ego)
+        if (abs(mid_y) > SCENE_LATERAL_MAX_CM_S
+                or not min(0.0, v_ego) - sigma <= mid_x <= max(0.0, v_ego) + sigma):
+            self._drift = None
+            return None
+        self._drift = (mid_x, now, v_ego)
+        return mid_x
+
+    def _moves_through_scene(self, track, now, drift, yaw_allow):
+        """True if the track moves like a walker relative to the drifting still scene."""
+        x, y, vx, vy = track.state
+        lo, hi = drift - SCENE_AGREE_CM_S, drift + SCENE_AGREE_CM_S
+        relative = self._beyond_rotation(x, y, self._band_residual(vx, lo, hi), vy, yaw_allow)
+        return (relative >= PERSON_MIN_SPEED_CM_S
+                and self._travelled(track, now, lo, hi, PERSON_MIN_TRAVEL_S, yaw_allow,
+                                    window_max=PERSON_WINDOW_MAX_S) >= PERSON_MIN_TRAVEL_CM)
+
+    def _classify(self, track, ego_lo, ego_hi, v_ego, now, yaw_allow=0.0, drift=None):
         """Moving if the ground motion is beyond every still-object explanation."""
         if track.misses > 0 or track.last_seen != now:
             # Coasting on a prediction is not evidence of anything.
             track.moving_streak = 0
             track.moving = False
             return
+        if (track.person and sum(track.flat_profiles) >= PERSON_PROFILE_CONFIRM
+                and sum(track.flat_profiles) >= FLAT_VETO_FRACTION * len(track.flat_profiles)):
+            # Even without a scan gap, association can hand a label to a
+            # similar-sized panel. Persistent contradictory shape retires the
+            # display label. Stopping alone never does, and no motion gate
+            # consumes either of these shape votes.
+            track.person = False
         x, y, vx, vy = track.state
         # A still object's estimated ground velocity lies in [v_ego - hi, v_ego - lo].
         lo, hi = v_ego - ego_hi, v_ego - ego_lo
@@ -720,8 +841,11 @@ class MotionTracker:
                 and PERSON_MIN_EXTENT_CM <= track.extent <= PERSON_MAX_EXTENT_CM
                 and PERSON_MIN_SPEED_CM_S <= residual <= PERSON_MAX_SPEED_CM_S
                 and track.flat_sightings < FLAT_VETO_FRACTION * max(1, track.sightings)
+                and sum(track.profiles) >= PERSON_PROFILE_CONFIRM
+                and sum(track.profiles) >= PERSON_PROFILE_FRACTION * len(track.profiles)
                 and self._travelled(track, now, lo, hi, PERSON_MIN_TRAVEL_S, yaw_allow,
-                                    window_max=PERSON_WINDOW_MAX_S) >= PERSON_MIN_TRAVEL_CM):
+                                    window_max=PERSON_WINDOW_MAX_S) >= PERSON_MIN_TRAVEL_CM
+                and (drift is None or self._moves_through_scene(track, now, drift, yaw_allow))):
             track.person = True
 
     def _beyond_rotation(self, x, y, dx, dy, yaw_allow_span):
@@ -824,9 +948,11 @@ class MotionTracker:
                 ttc = self.time_to_box(x, y, rvx, rvy, box)
                 rng = math.hypot(x, y)
                 closing = -(x * rvx + y * rvy) / rng if rng > 1e-6 else 0.0
-                if ttc is not None and x < -g.rear_cm and rvx > 0.0:
+                if ttc is not None and x < -g.rear_cm and rvx > 0.0 and v_ego >= 0.0:
                     # Catching up from behind: stopping would only make the contact
                     # harder, and forward route segments ignore what is behind them.
+                    # Not while backing (reverse parking, 2026-11-16, negative
+                    # [DRIVE:F]): then the robot is the one closing on it.
                     ttc = None
                 elif ttc == 0.0 and closing < CLOSING_MIN_CM_S:
                     # Already within the margins but abeam or moving off: it is

@@ -14,7 +14,8 @@
 //     mount no longer under-reads turns by cos(tilt).
 //   * GYRO_SCALE corrects the MPU6050's +/-3% sensitivity tolerance (about
 //     +/-2.7 degrees on a 90 degree turn). Measure it with the calibration
-//     procedure in docs/navigation-2026-11-11.md; 1.0 means not yet measured.
+//     procedure in docs/navigation-2026-11-11.md. The current correction is based
+//     on the owner's approximate 100-degree floor turn for 90 reported degrees.
 //   * While the bridge holds motion stopped (setStill), the bias is measured
 //     again every 1.5 s of genuinely still data. The heading reference is kept.
 class MpuHeading {
@@ -30,8 +31,11 @@ class MpuHeading {
   static constexpr uint16_t CALIBRATION_SAMPLES = 200;
   // A chassis cannot do this between two samples: treat it as a sensor fault.
   static constexpr float MAX_YAW_JUMP_DEG = 20.0f;
-  // Turn rate measured / true turn rate correction. 1.0 = unmeasured.
-  static constexpr float GYRO_SCALE = 1.0f;
+  // True angle / reported angle, multiplied into BOTH rate and integration.
+  // Owner's estimate (2026-11-16): reported 90, floor about 100. Provisional:
+  // 100/90 makes the old raw 81-degree endpoint report the desired 90 degrees.
+  // Keep targets in real degrees; do not also reduce the executor's turn angle.
+  static constexpr float GYRO_SCALE = 100.0f / 90.0f;
 
   // Stationary bias refresh. Samples must stay within the boot calibration's
   // 1.5 deg/s spread limit and under STILL_MAX_RATE_DPS of yaw, or the window restarts.
@@ -248,7 +252,7 @@ class MpuHeading {
   const char* lastFault() const { return lastFault_; }
   // Bias along the measured up axis, deg/s (the part that becomes yaw drift).
   float biasDps() const {
-    return (bias_[0] * up_[0] + bias_[1] * up_[1] + bias_[2] * up_[2]) / LSB_PER_DPS;
+    return (bias_[0] * up_[0] + bias_[1] * up_[1] + bias_[2] * up_[2]) * GYRO_SCALE / LSB_PER_DPS;
   }
   // Angle between the sensor's +Z axis and measured up, degrees.
   float tiltDeg() const { return acosf(constrain(up_[2], -1.0f, 1.0f)) * 57.2957795f; }
@@ -342,8 +346,10 @@ class MpuHeading {
     float candidate[3];
     for (uint8_t axis = 0; axis < 3; ++axis) {
       candidate[axis] = (float)stillSum_[axis] / (float)STILL_SAMPLES;
-      if (fabsf(candidate[axis] - bias_[axis]) > MAX_BIAS_SHIFT_DPS * LSB_PER_DPS ||
-          fabsf(candidate[axis] - bootBias_[axis]) > MAX_TOTAL_BIAS_DRIFT_DPS * LSB_PER_DPS) {
+      // Keep the physical drift budgets at 0.2/window and 1.0 from boot after
+      // scaling; increasing GYRO_SCALE must not increase the allowed yaw drift.
+      if (fabsf(candidate[axis] - bias_[axis]) > MAX_BIAS_SHIFT_DPS * LSB_PER_DPS / GYRO_SCALE ||
+          fabsf(candidate[axis] - bootBias_[axis]) > MAX_TOTAL_BIAS_DRIFT_DPS * LSB_PER_DPS / GYRO_SCALE) {
         resetStillWindow();  // a jump this size is not drift; keep the old bias
         return;
       }

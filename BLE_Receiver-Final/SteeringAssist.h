@@ -13,6 +13,8 @@
 //      NEAREST-object clearance (CF/CL/CR and the sector minima), and
 //   2. forwards the Pi's wall line fit (WL/WR/H) with its age to the executor as
 //      one W line. The executor fuses it with the gyro (HeadingControl.h).
+//   3. forwards the unmasked rear fit RD/RH as a D line for parking only,
+//      including an explicit unavailable fit on acquisitions without that wall.
 // Its 50 Hz M line carries calibrated yaw and the permission bits. Neither line
 // is ACKed, refreshes path freshness, or can release a STOP.
 // All distances are centimetres from the Pi.
@@ -46,6 +48,8 @@ struct SteeringFrame {
   float frontLeft = 0, frontRight = 0, backLeft = 0, backRight = 0;
   bool wallLeftKnown = false, wallRightKnown = false, headingKnown = false;
   float wallLeft = 0, wallRight = 0, headingDeg = 0;   // WL, WR, H
+  bool rearWallKnown = false;
+  float rearDistance = 0, rearHeading = 0;            // RD, RH; parking only
   bool ageKnown = false;
   uint32_t ageMs = 0;            // G
 };
@@ -90,6 +94,24 @@ inline bool formatWallLine(char* out, size_t size, uint32_t acquisition, uint32_
       (unsigned long)acquisition, (unsigned long)ageMs, flags,
       left ? lroundf(f.wallLeft * 10.0f) : 0L, right ? lroundf(f.wallRight * 10.0f) : 0L,
       heading ? lroundf(f.headingDeg * 100.0f) : 0L);
+  if (used <= 0 || (size_t)used >= sizeof(payload)) return false;
+  const int total = snprintf(out, size, "%s*%02X", payload, (unsigned)lineChecksum(payload));
+  return total > 0 && (size_t)total < size;
+}
+
+// D,<acquisition>,<age ms>,<valid 0|1>,<rear distance mm>,<rear H cdeg>*<xor>
+// Missing fits are forwarded too: the latest acquisition explicitly withdraws
+// the old rear wall. This measurement never authorizes wheel movement.
+inline bool formatRearWallLine(char* out, size_t size, uint32_t acquisition, uint32_t ageMs,
+                               const SteeringFrame& f) {
+  if (!out || ageMs > MAX_WALL_AGE_MS) return false;
+  const bool valid = f.rearWallKnown && f.rearDistance >= 10.0f &&
+      f.rearDistance <= 300.0f && fabsf(f.rearHeading) <= 20.0f;
+  char payload[80];
+  const int used = snprintf(payload, sizeof(payload), "D,%lu,%lu,%u,%ld,%ld",
+      (unsigned long)acquisition, (unsigned long)ageMs, valid ? 1U : 0U,
+      valid ? lroundf(f.rearDistance * 10.0f) : 0L,
+      valid ? lroundf(f.rearHeading * 100.0f) : 0L);
   if (used <= 0 || (size_t)used >= sizeof(payload)) return false;
   const int total = snprintf(out, size, "%s*%02X", payload, (unsigned)lineChecksum(payload));
   return total > 0 && (size_t)total < size;

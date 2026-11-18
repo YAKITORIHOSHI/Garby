@@ -1,0 +1,1442 @@
+--- before/RasPi/final_w_serial.py
++++ after/RasPi/final_w_serial.py
+@@ -17,7 +17,7 @@
+ )
+ logger = logging.getLogger("combined_app")
+ # Pi software revision, shown by the phone app next to the controller build IDs.
+-PI_SOFTWARE_ID = "PARK-20261116"
++PI_SOFTWARE_ID = "REARPARK-20261116"
+ 
+ from bridge_core import (
+     CoalescingUpdateWorker,
+@@ -49,6 +49,7 @@
+ from lidar_map import build_lidar_map_snapshot
+ from lidar_geometry import robot_scan_angles
+ from hallway_geometry import analyze_hallway, geometry_from_environment
++from rear_wall import fit_rear_wall
+ from motion_tracker import EgoMotionState, MotionAssessment, MotionTracker, build_segments
+ from scan_frame import build_scan_frame
+ from scene_objects import SceneMonitor, analyze_scene, scene_markers
+@@ -1373,7 +1374,7 @@
+         except queue.Full:
+             pass
+     if stripped.startswith(("[BRIDGE ", "[HEADING ", "[HEADING:START", "[ROUTE ",
+-                            "[REVERSE COMPLETE")):
++                            "[REVERSE COMPLETE", "[PARK ")):
+         # Firmware ID, reset cause and link timing separate a supply problem from
+         # a radio drop. Headless mode would otherwise discard them with the GUI queue.
+         # [HEADING ...] lines are the executor's turn, straight and wall-fusion
+@@ -1418,6 +1419,10 @@
+             # Reverse parking (2026-11-16).
+             "STOP:BACK": "Obstacle behind (backing)", "STOP:BACK_UNKNOWN": "Rear clearance unknown",
+             "STOP:BACK_CLEARANCE": "Confirming rear clearance",
++            "PARK:WAIT_REAR_WALL": "Parking: waiting for two fresh rear-wall scans",
++            "PARK:WALL_UNSTABLE": "Parking: rear-wall scans do not agree",
++            "PARK:ALIGNING": "Parking: aligning square to the rear wall",
++            "PARK:ALIGNMENT_UNCONFIRMED": "Parking: rear alignment needs checking",
+             "STOP:BACK_UNCONFIRMED": "Bridge has not confirmed rear clearance (flash bridge PARK-20261116)",
+         }
+         hold = holds.get(reason, reason.replace("_", " "))
+@@ -2372,6 +2377,7 @@
+         self._sector_data_valid = {side: False for side in self.SIDES}
+         # Zones and wall fits of the current acquisition only (None = unknown).
+         self._hallway = None
++        self._rear_wall = None  # unmasked rear wall; parking orientation only
+         # Moving-object prediction (motion_tracker.py). It only adds STOP/SLOW
+         # evidence; its failure leaves the sector and zone limits in charge.
+         self._tracker = MotionTracker(CHASSIS)
+@@ -2787,6 +2793,7 @@
+         self._front_data_valid = self._back_data_valid = False
+         self._sector_data_valid = {side: False for side in self.SIDES}
+         self._hallway = None
++        self._rear_wall = None
+         self._tracker.reset()
+         self._motion = MotionAssessment()
+         self._scene.reset()
+@@ -2920,6 +2927,9 @@
+             ranges, angle_min=angle_min, angle_increment=angle_inc,
+             range_min=minimum_range, range_max=maximum_range, lidar_y_cm=CHASSIS.lidar_y_cm)
+         self._cloud_frame = frame   # the phone map draws every return, like the monitor's
++        # Station walls may be ignored for clearance, but the parking wall must
++        # remain available for alignment. Measure the original acquisition first.
++        self._rear_wall = fit_rear_wall(frame, CHASSIS)
+         # On a station step the station's own walls are taken out first, so
+         # every consumer below sees the same scan.
+         ranges, frame = self._apply_station_mode(ranges, frame)
+@@ -3222,6 +3232,9 @@
+             if hallway.heading_deg is not None:
+                 # Less the LiDAR mounting error learned from drift (zero until learned).
+                 sides_parts.append(f"H={wall_heading_offset.correct(hallway.heading_deg):.2f}")
++        if self._rear_wall is not None:
++            sides_parts.append(f"RD={self._rear_wall.distance_cm:.1f}")
++            sides_parts.append(f"RH={self._rear_wall.heading_deg:.2f}")
+         sides_parts.append(f"G={scan_age_ms}")
+ 
+         fl, fr = med.get("FRONT_LEFT"), med.get("FRONT_RIGHT")
+--- before/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h
++++ after/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.h
+@@ -150,7 +150,7 @@
+ // the MPU confirms or swaps it on the first turn and the steering probe.
+ const bool MOTOR1_DIR_HIGH_COUNTS_UP = false;
+ const bool MOTOR2_DIR_HIGH_COUNTS_UP = true;
+-const char EXECUTOR_BUILD_ID[] = "PARK-20261116";
++const char EXECUTOR_BUILD_ID[] = "REARPARK-20261116";
+ 
+ const uint32_t MAX_SPEED       = 5600;
+ const uint32_t CAUTION_SPEED   = 3900;
+@@ -340,8 +340,8 @@
+ // ============================================================
+ // Motor control
+ // Turns are MPU-measured angles in degrees, absolute along the route.
+-bool turnRight(float degrees);
+-bool turnLeft (float degrees);
++bool turnRight(float degrees, bool alignAfter = true);
++bool turnLeft (float degrees, bool alignAfter = true);
+ void emergencyStopMotors();
+ void smoothDecelStopMotors();
+ void activeBrakeStopMotors();
+@@ -410,16 +410,17 @@
+ bool movementGate(bool isNudgeEnabled = true);
+ 
+ bool safeMoveDistance(int32_t steps, bool isADJ = false, bool isNudgeEnabled = true);
+-bool safeTurnLeft (float degrees);
+-bool safeTurnRight(float degrees);
++bool safeTurnLeft (float degrees, bool alignAfter = true);
++bool safeTurnRight(float degrees, bool alignAfter = true);
+ bool beginRouteHeading();
+ // "Continue run" (2026-11-14): keep the route frame; a new S3 heading reference
+ // since the stop needs two agreeing wall scans on the route's right-angle grid.
+ bool resumeRouteHeading(uint32_t reanchorsAtStop);
+ // Finish a route turn whose target is already in the route frame.
+-bool resumeRouteTurn();
++bool resumeRouteTurn(bool alignAfter = true);
+ // Reverse parking (2026-11-16): back `steps` into the parking spot (RouteOp::BACKING),
+-// then square up to the route heading. Needs the Pi's rear clearance via the bridge.
++// aligned to two fresh rear-wall scans first. Needs rear clearance and heading
++// supervision; no final gyro-only spin. Tunables are in HeadingControl.h.
+ bool backIntoPlace(int32_t steps);
+ // Route leg notice and station flags for the step in progress (RouteResume.h STEP_*).
+ void routeLegBegin(uint8_t route, bool reverse, uint8_t index, uint8_t count, RouteOp op,
+--- before/MAIN_EXECUTOR_CODE/HeadingControl.h
++++ after/MAIN_EXECUTOR_CODE/HeadingControl.h
+@@ -143,6 +143,13 @@
+   static constexpr float ALIGN_AGREE_DEG = 1.5f;
+   static constexpr uint8_t ALIGN_MAX_PASSES = 2;
+ 
++  // Parking only: square the rear to its own wall, not the hallway/route yaw.
++  static constexpr float PARK_ALIGN_DEG = 1.0f;
++  static constexpr float PARK_DRIFT_DEG = 2.0f;
++  static constexpr float PARK_SCAN_AGREE_DEG = 1.0f;
++  static constexpr float PARK_DISTANCE_AGREE_CM = 3.0f;
++  static constexpr float PARK_MAX_CORRECTION_DEG = 8.0f;
++
+   // ---- pre-run centring (2026-11-12, owner's idea) ----
+   // Before a long centred straight the robot stands still, measures where it is
+   // between the walls and fixes it there: face the hallway axis, then sidestep
+@@ -178,6 +185,10 @@
+     }
+     if (line[0] == 'W' && line[1] == ',') {
+       handleWallLine(line, now);
++      return true;
++    }
++    if (line[0] == 'D' && line[1] == ',') {
++      handleRearLine(line, now);
+       return true;
+     }
+     if (line[0] != 'M' || line[1] != ',') return false;
+@@ -501,6 +512,25 @@
+   }
+ 
+   // ======================= diagnostics =======================
++  struct RearView {
++    uint32_t acquisition = 0, scanMs = 0;
++    float distanceCm = 0.0f, axisDeg = 0.0f;
++  };
++  void resetRearEvidence() {
++    rearValid_ = haveRearAcquisition_ = false;
++    ++rearGeneration_;
++  }
++  uint32_t rearGeneration() const { return rearGeneration_; }
++  bool rearViewSince(uint32_t sinceMs, uint32_t now, RearView* out) const {
++    if (!rearValid_ || !out || (int32_t)(rear_.scanMs - sinceMs) < 0 ||
++        now - rear_.scanMs > WALL_MAX_AGE_MS) return false;
++    float gyroThen = 0.0f;
++    if (!headingAt(rear_.scanMs, &gyroThen)) return false;
++    *out = rear_;
++    out->axisDeg = gyroThen - rearHeadingDeg_;
++    return true;
++  }
++
+   // Raw LiDAR wall measurement, independent of MPU readiness. Diagnostic only.
+   bool wallMeasurement(uint32_t now, float* degrees) const {
+     if (degrees == nullptr || !wall_.valid || !(wall_.flags & WALL_HEADING) || now - wall_.scanMs > WALL_MAX_AGE_MS)
+@@ -548,6 +578,11 @@
+   WallSample wall_;
+   bool haveWallAcquisition_ = false;
+   uint32_t lastWallAcquisition_ = 0, wallLines_ = 0, wallRejected_ = 0;
++  RearView rear_;
++  bool rearValid_ = false, haveRearAcquisition_ = false;
++  uint32_t lastRearAcquisition_ = 0;
++  uint32_t rearGeneration_ = 0;
++  float rearHeadingDeg_ = 0.0f;
+   // fusion
+   bool axisKnown_ = false, lateralKnown_ = false, widthKnown_ = false, centerActive_ = false;
+   float axisDeg_ = 0.0f, driftDps_ = 0.0f, lateralCm_ = 0.0f, widthCm_ = 0.0f;
+@@ -698,6 +733,34 @@
+     wall_.rightCm = rightMm * 0.1f;
+     wall_.headingDeg = headingCdeg * 0.01f;
+     if (straightActive_ && centering_ && WALL_FUSION_ENABLED) fuseWall(now);
++  }
++
++  void handleRearLine(const char* line, uint32_t now) {
++    char copy[96];
++    const size_t length = strnlen(line, sizeof(copy));
++    if (length >= sizeof(copy)) { rearValid_ = false; ++rearGeneration_; return; }
++    memcpy(copy, line, length + 1U);
++    char* field = checkedFields(copy);
++    unsigned long acquisition = 0, age = 0, valid = 0;
++    long distance = 0, angle = 0;
++    if (!field || !parseUnsigned(&field, ',', &acquisition) ||
++        !parseUnsigned(&field, ',', &age) || !parseUnsigned(&field, ',', &valid) ||
++        !parseSigned(&field, ',', &distance) || !parseSigned(&field, '\0', &angle) ||
++        valid > 1 || age > WALL_MAX_AGE_MS || distance < 0 || distance > 3000 ||
++        angle < -2000 || angle > 2000 || (valid && distance < 100)) {
++      rearValid_ = false;
++      ++rearGeneration_;
++      return;
++    }
++    if (haveRearAcquisition_ && (int32_t)((uint32_t)acquisition - lastRearAcquisition_) <= 0) return;
++    haveRearAcquisition_ = true;
++    lastRearAcquisition_ = (uint32_t)acquisition;
++    rearValid_ = valid != 0;
++    if (!rearValid_) ++rearGeneration_;
++    rear_.acquisition = (uint32_t)acquisition;
++    rear_.scanMs = now - (uint32_t)age;
++    rear_.distanceCm = distance * 0.1f;
++    rearHeadingDeg_ = angle * 0.01f;
+   }
+ 
+   void fuseWall(uint32_t now) {
+--- before/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp
++++ after/MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp
+@@ -162,6 +162,7 @@
+ // backwards. The sonar faces away from that travel: it neither holds nor slows it.
+ static bool backingActive = false;
+ static unsigned long backingStartedMs = 0;
++static const char* parkingHoldReason = nullptr;
+ // A plain GO can already be on its way when backing starts. Only one still arriving
+ // this long after [BACK:START] means a bridge without the backing rule.
+ #define BACKING_GO_GRACE_MS 1000UL
+@@ -900,6 +901,7 @@
+   else if (shouldStop) reason = lastStopReason.length() ? lastStopReason : String("WAITING_FOR_PATH");
+   else if (frontObstacleDetected() || (haltWaitingForClearance && haltRequiresLocal)) reason = "LOCAL_OBSTACLE";
+   else if (haltWaitingForClearance) reason = "CONFIRMING_CLEARANCE";
++  else if (parkingHoldReason) reason = parkingHoldReason;
+   else reason = "CLEAR";
+   if (force || reason != lastReportedMotion) {
+     lastReportedMotion = reason;
+@@ -1246,6 +1248,9 @@
+     }
+     if (espMsg == "[BLE CONNECTION ESTABLISHED]") {
+       abortDeveloperTest("SESSION_CHANGED");
++      // A new Pi process restarts A at zero. Only rear evidence is reset; the
++      // continuous gyro frame and route/checkpoint remain intact.
++      heading.resetRearEvidence();
+       noteBridgeRx();
+       bridgeLinkObserved = bridgeLinkUp = true;
+       observeNotice(linkMonitor, 'U', (uint32_t)millis());
+@@ -1800,12 +1805,12 @@
+   return moveDistance(steps, isADJ, isNudgeEnabled);
+ }
+ 
+-bool safeTurnLeft(float degrees) {
+-  return turnLeft(degrees);  // the turn waits for its own fresh clearance
+-}
+-
+-bool safeTurnRight(float degrees) {
+-  return turnRight(degrees);
++bool safeTurnLeft(float degrees, bool alignAfter) {
++  return turnLeft(degrees, alignAfter);  // the turn waits for its own fresh clearance
++}
++
++bool safeTurnRight(float degrees, bool alignAfter) {
++  return turnRight(degrees, alignAfter);
+ }
+ 
+ void fullReset() {
+@@ -2384,22 +2389,22 @@
+   return align != AlignResult::FAILED && !resetQueued && !routeFaultLatched;
+ }
+ 
+-bool turnLeft(float degrees) {
++bool turnLeft(float degrees, bool alignAfter) {
+   if (!stepper1 || !stepper2 || !(degrees > 0.0f)) return false;
+   TurnSegmentNotice notice;
+   if (!movementGate(false)) return false;
+   heading.addTurn(degrees);
+   routeResume.commitTurn();
+-  return rotateToHeading(heading.routeTarget(), degrees, !stationStep);
+-}
+-
+-bool turnRight(float degrees) {
++  return rotateToHeading(heading.routeTarget(), degrees, alignAfter && !stationStep);
++}
++
++bool turnRight(float degrees, bool alignAfter) {
+   if (!stepper1 || !stepper2 || !(degrees > 0.0f)) return false;
+   TurnSegmentNotice notice;
+   if (!movementGate(false)) return false;
+   heading.addTurn(-degrees);
+   routeResume.commitTurn();
+-  return rotateToHeading(heading.routeTarget(), -degrees, !stationStep);
++  return rotateToHeading(heading.routeTarget(), -degrees, alignAfter && !stationStep);
+ }
+ 
+ // A spin to an absolute heading that is not a route turn (pre-run centring). The
+@@ -2502,13 +2507,13 @@
+ 
+ // A route turn interrupted after its angle entered the route frame: spin to that
+ // target (the remaining angle), then align to the walls as every turn does.
+-bool resumeRouteTurn() {
++bool resumeRouteTurn(bool alignAfter) {
+   if (!stepper1 || !stepper2) return false;
+   TurnSegmentNotice notice;
+   if (!movementGate(false)) return false;
+   routeResume.commitTurn();
+   const float target = heading.routeTarget();
+-  return rotateToHeading(target, HeadingControl::wrap180(target - heading.heading()), !stationStep);
++  return rotateToHeading(target, HeadingControl::wrap180(target - heading.heading()), alignAfter && !stationStep);
+ }
+ 
+ // ============================================================
+@@ -3394,11 +3399,12 @@
+ // away from this travel and does not hold it, as nothing beside the rear half
+ // holds a forward move. Nothing below the LiDAR plane behind the robot is seen.
+ //
+-// The move: both wheels the same steps backwards at BACKING_SPEED as one plain
+-// ramp (no steering), held by every STOP, a lost MPU stream and the operator stop,
+-// and resumed toward the same targets after a hold. Then, if the gyro shows it
+-// drifted more than the turn tolerance, an MPU-measured spin squares it up to the
+-// route heading, without wall alignment (beside the spot no wall need be parallel).
++// Rear LiDAR determines the parking normal from two fresh agreeing D scans.
++// Corrections use full turn clearance and MPU-measured rotation, then new rear
++// scans confirm the result. Both wheels reverse at BACKING_SPEED for the
++// calibrated mean travel. Lost rear evidence or >2 degree drift brakes and
++// remeasures; obstacle/heading holds retain the remaining travel. No final
++// MPU-only square-up is performed beside the parking wall.
+ class BackingSegmentNotice {
+  public:
+   BackingSegmentNotice() {
+@@ -3417,26 +3423,180 @@
+   }
+ };
+ 
++static void parkingHold(const char* reason) {
++  parkingHoldReason = reason;
++  reportMotionStatus();
++}
++
++// Standing still: two independent acquisitions of the same rear surface, both
++// acquired after since. Gyro history only transports the measured rear normal
++// to the present instant; neither the route target nor a side wall chooses it.
++static bool measureRearPair(uint32_t since, HeadingControl::RearView* result) {
++  HeadingControl::RearView first;
++  bool haveFirst = false;
++  uint32_t anchors = heading.reanchors();
++  uint32_t rearGeneration = heading.rearGeneration();
++  uint32_t lastEvidence = (uint32_t)millis();
++  parkingHold("PARK:WAIT_REAR_WALL");
++  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
++    requestStatus();
++    serviceTurnSafety();
++    if (!heading.headingReady((uint32_t)millis())) {
++      if (!holdForHeading(false)) return false;
++      since = (uint32_t)millis();
++      haveFirst = false;
++    }
++    const uint32_t now = (uint32_t)millis();
++    if (heading.rearGeneration() != rearGeneration) {
++      rearGeneration = heading.rearGeneration();
++      haveFirst = false;
++    }
++    if (heading.reanchors() != anchors) {
++      anchors = heading.reanchors();
++      since = now;
++      haveFirst = false;
++    }
++    HeadingControl::RearView view;
++    if (!heading.rearViewSince(since, now, &view)) {
++      haveFirst = false;
++      parkingHold("PARK:WAIT_REAR_WALL");
++    } else if (!haveFirst || now - first.scanMs > HeadingControl::WALL_MAX_AGE_MS) {
++      first = view;
++      haveFirst = true;
++      lastEvidence = now;
++    } else if (view.acquisition != first.acquisition) {
++      if (fabsf(HeadingControl::wrap180(view.axisDeg - first.axisDeg)) <= HeadingControl::PARK_SCAN_AGREE_DEG &&
++          fabsf(view.distanceCm - first.distanceCm) <= HeadingControl::PARK_DISTANCE_AGREE_CM) {
++        *result = view;
++        result->axisDeg = first.axisDeg + 0.5f * HeadingControl::wrap180(view.axisDeg - first.axisDeg);
++        return true;
++      }
++      first = view;
++      parkingHold("PARK:WALL_UNSTABLE");
++    }
++    if (now - lastEvidence >= LOW_POWER_AFTER_MS) enterLowPower("rear wall alignment");
++    vTaskDelay(pdMS_TO_TICKS(lowPowerActive ? 20 : 2));
++  }
++  return false;
++}
++
++static bool alignRearForParking() {
++  uint8_t corrections = 0;
++  bool flipped = false;
++  const uint32_t started = (uint32_t)millis();
++  while (!resetQueued && !routeFaultLatched && !operatorEmergencyLatched) {
++    HeadingControl::RearView rear;
++    if (!measureRearPair((uint32_t)millis(), &rear)) return false;
++    const float error = HeadingControl::wrap180(heading.heading() - rear.axisDeg);
++    if (fabsf(error) <= HeadingControl::PARK_ALIGN_DEG) {
++      exitLowPower();
++      heading.setRouteTarget(rear.axisDeg);
++      parkingHold(nullptr);
++      ESP_Serial.printf("[PARK rear=ALIGNED err=%+.2f distance=%.1f]\n", error, rear.distanceCm);
++      return true;
++    }
++    if (fabsf(error) > HeadingControl::PARK_MAX_CORRECTION_DEG ||
++        corrections >= HeadingControl::ALIGN_MAX_PASSES) {
++      parkingHold("PARK:ALIGNMENT_UNCONFIRMED");
++      if ((uint32_t)millis() - started >= LOW_POWER_AFTER_MS) enterLowPower("rear alignment unconfirmed");
++      responsiveDelay(250);  // hold, never invent an alignment or spin repeatedly
++      continue;
++    }
++    parkingHold("PARK:ALIGNING");
++    ESP_Serial.printf("[PARK rear=CORRECTING err=%+.2f]\n", error);
++    // The sweep/obstacle gate may hold for minutes. Acquire another pair AFTER
++    // that gate; a pre-hold gyro-frame target must never drive a later spin.
++    {
++      TurnSegmentNotice turn;
++      waitForSpinSurvey();
++      if (!movementGate(false)) return false;
++      if (!measureRearPair((uint32_t)millis(), &rear)) return false;
++      const float freshError = HeadingControl::wrap180(heading.heading() - rear.axisDeg);
++      if (fabsf(freshError) <= HeadingControl::PARK_ALIGN_DEG ||
++          fabsf(freshError) > HeadingControl::PARK_MAX_CORRECTION_DEG) continue;
++      serviceTurnSafety();
++      if (turnMustHalt() || !heading.sampleFresh((uint32_t)millis(), HeadingControl::TURN_DATA_TIMEOUT_MS)) continue;
++      exitLowPower();
++      parkingHold("PARK:ALIGNING");
++      const SpinResult result = spinToward(rear.axisDeg, HeadingControl::TURN_CORRECTION_SPEED_HZ);
++      if (result == SpinResult::HALTED || result == SpinResult::DATA_LOST) continue;
++      if (result == SpinResult::WRONG_WAY) {
++        if (flipped || heading.turnSideConfirmed()) return false;
++        heading.swapTurnSides();
++        flipped = true;
++      } else if (result != SpinResult::REACHED) {
++        return false;
++      } else {
++        heading.confirmTurnSides();
++        ++corrections;
++      }
++    }
++    responsiveDelay(HeadingControl::TURN_SETTLE_MS);
++  }
++  return false;
++}
++
+ bool backIntoPlace(int32_t steps) {
+   if (!stepper1 || !stepper2) return false;
+   if (steps <= 0) return true;
+-  {
+-    // movementGate/movePlain hold for heading feedback like every route move.
++  struct ParkingScope {
++    LowPowerScope power;
++    ~ParkingScope() { parkingHold(nullptr); }
++  } parkingScope;
++  const long start1 = stepper1->getCurrentPosition(), start2 = stepper2->getCurrentPosition();
++  auto remaining = [&]() -> int32_t {
++    const int64_t moved = ((int64_t)stepper1->getCurrentPosition() - start1 +
++                           (int64_t)stepper2->getCurrentPosition() - start2) / 2;
++    return (int32_t)((int64_t)steps + moved);
++  };
++  while (remaining() > 0) {
++    if (!alignRearForParking()) return false;
+     BackingSegmentNotice notice;
+     if (!movementGate(false)) return false;
+-    const long target1 = stepper1->getCurrentPosition() - steps;
+-    const long target2 = stepper2->getCurrentPosition() - steps;
+-    Serial.printf("[PARK] Backing %ld steps into place\n", (long)steps);
+-    if (!movePlain(target1, target2, "backing", BACKING_SPEED)) return false;
+-  }
+-  const bool mpu = heading.headingReady((uint32_t)millis());
+-  const float error = heading.routeError();
+-  ESP_Serial.printf("[HEADING BACK steps=%ld err=%+.1f mpu=%d]\n", (long)steps,
+-                    mpu ? error : 0.0f, mpu ? 1 : 0);
+-  if (!mpu || fabsf(error) <= HeadingControl::TURN_TOLERANCE_DEG) return true;
+-  responsiveDelay(100);
+-  if (resetQueued) return false;
+-  return spinToRouteHeading(heading.routeTarget(), false);
++    HeadingControl::RearView rear;
++    // Clearance may have taken seconds to return. Re-measure while held, rather
++    // than spending an old alignment when GO:BACK finally arrives.
++    if (!measureRearPair((uint32_t)millis(), &rear)) return false;
++    if (fabsf(HeadingControl::wrap180(heading.heading() - rear.axisDeg)) > HeadingControl::PARK_ALIGN_DEG) continue;
++    parkingHold(nullptr);
++    exitLowPower();
++    const int32_t left = remaining();
++    const long target1 = stepper1->getCurrentPosition() - left;
++    const long target2 = stepper2->getCurrentPosition() - left;
++    if (!startTargetMove(target1, target2, BACKING_SPEED)) {
++      if (motionPermitted()) return false;
++      continue;
++    }
++    movingForward = true;  // existing motion telemetry derives direction from wheel speeds
++    while (motorsRunning()) {
++      if (!serviceMotionProgress()) return false;
++      serviceTurnSafety();
++      if (resetQueued || routeFaultLatched || operatorEmergencyLatched) {
++        activeBrakeStopMotors();
++        return false;
++      }
++      HeadingControl::RearView current;
++      const uint32_t now = (uint32_t)millis();
++      const bool rearFresh = heading.rearViewSince(now - HeadingControl::WALL_MAX_AGE_MS, now, &current);
++      if (shouldStop || !pathCommandFresh() ||
++          !heading.sampleFresh(now, HeadingControl::HEADING_LOSS_HALT_MS) || !rearFresh ||
++          (rearFresh && fabsf(HeadingControl::wrap180(heading.heading() - current.axisDeg)) > HeadingControl::PARK_DRIFT_DEG)) {
++        activeBrakeStopMotors();
++        movingForward = false;
++        parkingHold("PARK:WAIT_REAR_WALL");
++        // Unwind BACK before any correction: a spin must not inherit the sonar
++        // bypass for rear travel. Remaining MEAN steps exclude in-place spins.
++        break;
++      }
++      delay(1);
++    }
++    movingForward = false;
++  }
++  // No post-parking MPU-only square-up. The rear wall controlled alignment
++  // before travel and monitored it throughout the approach.
++  ESP_Serial.printf("[HEADING BACK steps=%ld err=%+.1f mpu=%d rear=1]\n", (long)steps,
++                    heading.routeError(), heading.headingReady((uint32_t)millis()) ? 1 : 0);
++  return !resetQueued && !routeFaultLatched && !operatorEmergencyLatched;
+ }
+ 
+ bool moveToTarget(long target1, long target2, bool isADJ, bool isNudgeEnabled) {
+--- before/MAIN_EXECUTOR_CODE/pointsRun.ino
++++ after/MAIN_EXECUTOR_CODE/pointsRun.ino
+@@ -23,8 +23,9 @@
+ //   4900/5000-step turns are 90 degrees, the 9800-step turn is 180). Each turn
+ //   is then checked against the LiDAR walls and corrected to the hallway.
+ // BACKING n  (reverse parking, owner 2026-11-16)
+-//   backIntoPlace(n): n steps BACKWARDS on both wheels into the parking spot,
+-//   slowly, with the Pi's rear clearance (R=) required by the bridge.
++//   backIntoPlace(n): square the rear to its own LiDAR wall from two scans, then
++//   n steps BACKWARDS slowly, with the Pi's rear clearance (R=) required by the
++//   bridge. The preceding turn skips hallway-wall alignment; D owns this normal.
+ //
+ // Reverse parking (owner, 2026-11-16: "Add backwards movement for parking
+ // purposes", for both routes). Until then each route ended by turning toward its
+@@ -119,7 +120,8 @@
+   return safeMoveDistance(steps - progress, false, true);
+ }
+ 
+-static bool runRouteStep(const RouteStep& step, int32_t amount, bool turnCommitted) {
++static bool runRouteStep(const RouteStep& step, int32_t amount, bool turnCommitted,
++                         bool parkingNext = false) {
+   switch (step.op) {
+     case RouteOp::BUMPS:
+       return runCalibrationBumps(amount);
+@@ -129,9 +131,9 @@
+     case RouteOp::LONG_HALLWAY:
+       return amount <= 0 || runLongHallway(amount);
+     case RouteOp::TURN_LEFT:
+-      return turnCommitted ? resumeRouteTurn() : safeTurnLeft((float)amount);
++      return turnCommitted ? resumeRouteTurn(!parkingNext) : safeTurnLeft((float)amount, !parkingNext);
+     case RouteOp::TURN_RIGHT:
+-      return turnCommitted ? resumeRouteTurn() : safeTurnRight((float)amount);
++      return turnCommitted ? resumeRouteTurn(!parkingNext) : safeTurnRight((float)amount, !parkingNext);
+     case RouteOp::BACKING:
+       beginRouteLeg(amount, true);
+       return amount <= 0 || backIntoPlace(amount);
+@@ -213,7 +215,9 @@
+     routeResume.beginStep(i, amount, -headingBeforeStep(steps, i), stepTurnDeg(steps[i]));
+     routeLegBegin(route, false, i, count, steps[i].op, steps[i].flags,
+                   wallAheadBeyond(steps, count, i, false));
+-    if (!runRouteStep(steps[i], amount, resumed && resume.turnCommitted)) return false;
++    // Rear-wall alignment owns the parking direction, including continued turns.
++    const bool parkingNext = i + 1U < count && steps[i + 1U].op == RouteOp::BACKING;
++    if (!runRouteStep(steps[i], amount, resumed && resume.turnCommitted, parkingNext)) return false;
+     // A pause after every step but the last, as the hand-written routes had.
+     if (i + 1U < count && !routePause()) return false;
+   }
+--- before/BLE_Receiver-Final/SteeringAssist.h
++++ after/BLE_Receiver-Final/SteeringAssist.h
+@@ -13,6 +13,8 @@
+ //      NEAREST-object clearance (CF/CL/CR and the sector minima), and
+ //   2. forwards the Pi's wall line fit (WL/WR/H) with its age to the executor as
+ //      one W line. The executor fuses it with the gyro (HeadingControl.h).
++//   3. forwards the unmasked rear fit RD/RH as a D line for parking only,
++//      including an explicit unavailable fit on acquisitions without that wall.
+ // Its 50 Hz M line carries calibrated yaw and the permission bits. Neither line
+ // is ACKed, refreshes path freshness, or can release a STOP.
+ // All distances are centimetres from the Pi.
+@@ -46,6 +48,8 @@
+   float frontLeft = 0, frontRight = 0, backLeft = 0, backRight = 0;
+   bool wallLeftKnown = false, wallRightKnown = false, headingKnown = false;
+   float wallLeft = 0, wallRight = 0, headingDeg = 0;   // WL, WR, H
++  bool rearWallKnown = false;
++  float rearDistance = 0, rearHeading = 0;            // RD, RH; parking only
+   bool ageKnown = false;
+   uint32_t ageMs = 0;            // G
+ };
+@@ -94,3 +98,21 @@
+   const int total = snprintf(out, size, "%s*%02X", payload, (unsigned)lineChecksum(payload));
+   return total > 0 && (size_t)total < size;
+ }
++
++// D,<acquisition>,<age ms>,<valid 0|1>,<rear distance mm>,<rear H cdeg>*<xor>
++// Missing fits are forwarded too: the latest acquisition explicitly withdraws
++// the old rear wall. This measurement never authorizes wheel movement.
++inline bool formatRearWallLine(char* out, size_t size, uint32_t acquisition, uint32_t ageMs,
++                               const SteeringFrame& f) {
++  if (!out || ageMs > MAX_WALL_AGE_MS) return false;
++  const bool valid = f.rearWallKnown && f.rearDistance >= 10.0f &&
++      f.rearDistance <= 300.0f && fabsf(f.rearHeading) <= 20.0f;
++  char payload[80];
++  const int used = snprintf(payload, sizeof(payload), "D,%lu,%lu,%u,%ld,%ld",
++      (unsigned long)acquisition, (unsigned long)ageMs, valid ? 1U : 0U,
++      valid ? lroundf(f.rearDistance * 10.0f) : 0L,
++      valid ? lroundf(f.rearHeading * 100.0f) : 0L);
++  if (used <= 0 || (size_t)used >= sizeof(payload)) return false;
++  const int total = snprintf(out, size, "%s*%02X", payload, (unsigned)lineChecksum(payload));
++  return total > 0 && (size_t)total < size;
++}
+--- before/BLE_Receiver-Final/BLE_Receiver-Final.ino
++++ after/BLE_Receiver-Final/BLE_Receiver-Final.ino
+@@ -101,7 +101,7 @@
+ #define TRANSPORT_STATS_INTERVAL_MS   10000UL
+ #define BRIDGE_CPU_FREQUENCY_MHZ         160
+ #define BRIDGE_TX_POWER_DBM                9
+-#define BRIDGE_FIRMWARE_ID       "PARK-20261116"
++#define BRIDGE_FIRMWARE_ID       "REARPARK-20261116"
+ 
+ // Steering is continuous in the executor (HeadingControl.h). Bridge steering
+ // tunables, the permission rules and the W line format are in SteeringAssist.h.
+@@ -655,6 +655,9 @@
+   f.headingKnown = heading == FieldParseStatus::VALID;
+   f.ageKnown = ageStatus == FieldParseStatus::VALID;
+   f.ageMs = f.ageKnown ? (uint32_t)lroundf(age) : 0U;
++  // Rear orientation is independent of the hallway fit and of GO permission.
++  f.rearWallKnown = extractField(sidesVal, "RD=", f.rearDistance) == FieldParseStatus::VALID &&
++      extractField(sidesVal, "RH=", f.rearHeading) == FieldParseStatus::VALID;
+   f.clearanceValid =
+     extractField(sidesVal, "CF=", f.clearFront) == FieldParseStatus::VALID &&
+     extractField(sidesVal, "CL=", f.clearLeft) == FieldParseStatus::VALID &&
+@@ -673,6 +676,12 @@
+   const uint32_t totalAgeMs = f.ageMs + queuedMs + BLE_TRANSIT_ESTIMATE_MS;
+   steeringAllow = f.ageKnown && totalAgeMs <= STEERING_MAX_AGE_MS ? steeringAllowMask(f) : 0;
+   steeringAllowAtMs = nowMs - totalAgeMs;
++
++  if (f.ageKnown) {
++    char line[96];
++    if (formatRearWallLine(line, sizeof(line), acquisition, totalAgeMs, f))
++      sendMcuLine(line, false);
++  }
+ 
+   // The wall fit is measurement only. It is forwarded with its total age so the
+   // executor can line it up with the gyro heading at the moment of the scan.
+@@ -732,6 +741,7 @@
+ //   S:<seq>|L=..|R=..|F=..|...|CF=..|CL=..|CR=..|A=<acq>[|WL=..][|WR=..][|H=..]|G=<ms>
+ //       (steering; latest value). CF/CL/CR give the steering permission bits;
+ //       WL/WR/H (wall line fit) and G (scan age) become the executor's W line.
++//       RD/RH (unmasked rear-wall distance/heading) and G become its D line.
+ //   SENSOR:...                         (telemetry only; never changes path)
+ //   [HEALTH:1:UUUUU]                   (Internet/cloud/LiDAR/sensor UART/thermal;
+ //                                       U=up, D=down, X=unknown; telemetry only)
+--- before/tests/pi/test_reverse_parking.py
++++ after/tests/pi/test_reverse_parking.py
+@@ -18,6 +18,7 @@
+ from station_mode import StationMode
+ import test_forward_only_motion as forward_only
+ import test_motion_tracker as hallway_model
++import test_hallway_geometry as wall_model
+ 
+ BACKING_AT_STATION = "[LEG:RF:12/13:K:1]"    # return route, last step, STEP_STATION
+ BACKING_AT_DESTINATION = "[LEG:OF:12/13:K:0]"
+@@ -136,6 +137,91 @@
+             runtime.ble_connected.clear()
+             runtime.station_mode.invalidate()
+             runtime.publish_robot_state("UNKNOWN")
++
++
++class RearWallEvidenceTests(unittest.TestCase):
++    def setUp(self):
++        self.runtime = fixtures.load_runtime()
++        self.runtime.LIDAR_REFLECT_LEFT_RIGHT = False
++        self.runtime.LIDAR_YAW_OFFSET_DEG = 0.0
++
++    def scan(self, segments, angle=0.0):
++        msg = fixtures.RuntimeTests.scan()
++        data = wall_model.world_scan(segments, heading_deg=angle, noise_cm=0.2)
++        for key, value in data.items():
++            setattr(msg, key, value)
++        msg.ranges = [v if v > 0 else math.inf for v in msg.ranges]
++        return msg
++
++    def fields(self, node):
++        _, sides = node.build_status_packets()
++        return dict(item.split('=', 1) for item in sides.split('|')[1:] if '=' in item)
++
++    def test_rear_wall_reports_its_own_heading_and_distance(self):
++        for angle in (-6.0, 0.0, 4.0):
++            with self.subTest(angle=angle):
++                node = self.runtime.LidarDistanceReader(None, queue.Queue())
++                node.scan_callback(self.scan([(-150, -220, -150, 220)], angle))
++                fields = self.fields(node)
++                self.assertIn('RH', fields)
++                self.assertAlmostEqual(float(fields['RH']), angle, delta=0.4)
++                self.assertAlmostEqual(float(fields['RD']), 150.0, delta=0.5)
++
++    def test_station_mask_does_not_erase_the_rear_alignment_wall(self):
++        runtime = self.runtime
++        runtime.ble_connected.set()
++        try:
++            runtime.ble_notify_handler('[RETURNING]')
++            runtime.ble_notify_handler(BACKING_AT_STATION)
++            node = runtime.LidarDistanceReader(None, queue.Queue())
++            node.scan_callback(self.scan([(-120, -220, -120, 220)], 3.0))
++            fields = self.fields(node)
++            self.assertTrue(node._station_walls)
++            self.assertIn('RH', fields)
++            self.assertAlmostEqual(float(fields['RH']), 3.0, delta=0.4)
++        finally:
++            runtime.ble_connected.clear()
++            runtime.station_mode.invalidate()
++            runtime.publish_robot_state('UNKNOWN')
++
++    def test_a_short_panel_or_wall_to_one_side_is_not_the_parking_wall(self):
++        for segment in [(-120, -20, -120, 20), (-120, 50, -120, 200),
++                        (-100, 80, 200, 80), (150, -220, 150, 220)]:
++            with self.subTest(segment=segment):
++                node = self.runtime.LidarDistanceReader(None, queue.Queue())
++                node.scan_callback(self.scan([segment]))
++                fields = self.fields(node)
++                self.assertNotIn('RH', fields)
++                self.assertNotIn('RD', fields)
++
++    def test_mount_transform_is_shared_with_the_map_and_clearance(self):
++        self.runtime.LIDAR_REFLECT_LEFT_RIGHT = True
++        self.runtime.LIDAR_YAW_OFFSET_DEG = 7.0
++        node = self.runtime.LidarDistanceReader(None, queue.Queue())
++        node.scan_callback(self.scan([(-150, -220, -150, 220)], 3.0))
++        self.assertAlmostEqual(float(self.fields(node)['RH']), 4.0, delta=0.4)
++
++    def test_recorded_station_wall_remains_measurable_despite_its_corner_step(self):
++        # Recorded raw mounting uses the runtime's default reflection.
++        self.runtime.LIDAR_REFLECT_LEFT_RIGHT = True
++        runtime = self.runtime
++        runtime.ble_connected.set()
++        try:
++            runtime.ble_notify_handler('[RETURNING]')
++            runtime.ble_notify_handler(BACKING_AT_STATION)
++            node = runtime.LidarDistanceReader(None, queue.Queue())
++            measured = []
++            for scan in forward_only.recorded_scans():
++                node.scan_callback(scan)
++                fields = self.fields(node)
++                measured.append(float(fields['RH']))
++                self.assertAlmostEqual(float(fields['RD']), 22.4, delta=0.6)
++            self.assertEqual(len(measured), 15)
++            self.assertLess(max(measured) - min(measured), 1.0)
++        finally:
++            runtime.ble_connected.clear()
++            runtime.station_mode.invalidate()
++            runtime.publish_robot_state('UNKNOWN')
+ 
+ 
+ class BackingLegNoticeTests(unittest.TestCase):
+--- before/tests/firmware/test_bridge.cpp
++++ after/tests/firmware/test_bridge.cpp
+@@ -772,6 +772,32 @@
+   Wire=TwoWire{};
+ }
+ 
++static void checkRearWallTransport(){
++  mpuFixture();
++  clearPath();
++  currentFrameReceivedAtMs=fakeNow;
++  const uint32_t pathAt=lastPathDataReceived;
++  const uint8_t pending=mcuUnackedCommands;
++  handleSidesPacket(("S:"+std::to_string(pathSeq)+
++      "|A=1|G=200|RD=160.5|RH=-3.25|F=300|CF=300|CL=95|CR=95").c_str());
++  auto lines=uartLines('D');
++  check(lines.size()==1 && lines[0].rfind("D,1,230,1,1605,-325*",0)==0 && lineChecks(lines[0]),
++        "rear wall distance, sign and source age cross the real S parser into checksummed D");
++  check(lastPathDataReceived==pathAt && mcuUnackedCommands==pending,
++        "rear measurement neither refreshes path age nor expects an executor ACK");
++  sides("A=1|G=0|RD=160.5|RH=-3.25");
++  check(uartLines('D').size()==1,"a repeated acquisition never refreshes rear evidence");
++  sides("A=2|G=100");
++  lines=uartLines('D');
++  check(lines.size()==2 && lines.back().rfind("D,2,130,0,0,0*",0)==0,
++        "a scan without a rear wall explicitly withdraws the old fit");
++  sides("A=3|G=100|RD=nan|RH=0");
++  check(uartLines('D').back().rfind("D,3,130,0,0,0*",0)==0,
++        "a malformed optional rear fit cannot become an alignment");
++  sides("A=4|G=900|RD=160|RH=0");
++  check(uartLines('D').size()==3,"over-age rear evidence is not forwarded");
++}
++
+ int main(){
+   setup();check(NimBLEDevice::getAdvertising()->scanResponse && pServer->autoAdvertise,"scan response and automatic advertising recovery are configured");
+   check(NimBLEDevice::getPower()==9,"NimBLE power API receives dBm rather than the numeric ESP-IDF enum");
+@@ -782,6 +808,7 @@
+   checkHeadingStreamAndWalls();
+   checkTurnSweepAndSlow();
+   checkBackingScope();
++  checkRearWallTransport();
+   checkTurnSessionRecovery();
+   checkPortedRegressions();
+   checkSteeringFrameGates();
+--- before/tests/firmware/hallway_sim.h
++++ after/tests/firmware/hallway_sim.h
+@@ -42,6 +42,8 @@
+   int allow = 3;
+   // ---- walls ----
+   bool walls = true;
++  bool rearWall = true;            // independent parking wall, even without side walls
++  double rearHeadingErrorDeg = 0.0;
+   double widthCm = 190.0;           // the measured 95 + 95 cm hallway
+   double distanceNoiseCm = 1.0, headingNoiseDeg = 0.3;
+   double wallHeadingErrorDeg = 0.0;  // a door leaf or clutter fitted instead of the wall
+@@ -112,7 +114,7 @@
+       if (backing && *backing) *rx += rearClear ? "GO:BACK\n" : "STOP:BACK\n";
+       else *rx += slowZone ? "GO:SLOW\n" : "GO\n";
+     }
+-    if (walls && now - lastScan >= scanPeriodMs) {
++    if ((walls || rearWall) && now - lastScan >= scanPeriodMs) {
+       lastScan = now;
+       const double relDeg = wrap(thetaDeg - axisDeg);
+       const double heading = relDeg - 90.0 * std::round(relDeg / 90.0);
+@@ -120,7 +122,7 @@
+       const bool haveHeading = (left || right) && std::fabs(heading) <= 20.0;
+       const unsigned flags = (left ? 1U : 0U) | (right ? 2U : 0U) | (haveHeading ? 4U : 0U);
+       ++acquisition;
+-      if (flags != 0) {
++      if (walls && flags != 0) {
+         double leftCm = widthCm / 2 - yCm + noise(distanceNoiseCm);
+         double rightCm = widthCm / 2 + yCm + noise(distanceNoiseCm);
+         if (swapWalls) std::swap(leftCm, rightCm);
+@@ -133,6 +135,16 @@
+                       showLeft ? std::lround(leftCm * 10.0) : 0L,
+                       showRight ? std::lround(rightCm * 10.0) : 0L,
+                       haveHeading ? std::lround((heading + wallHeadingErrorDeg + noise(headingNoiseDeg)) * 100.0) : 0L);
++        pending.push_back({now + lidarLatencyMs, checked(payload)});
++      }
++      if (rearWall) {
++        // The model supplies an ideal rear plane normal to the nearest route
++        // axis. Its fixed distance is only a stationary-pair consistency check;
++        // this model does not choose parking travel or prove physical clearance.
++        char payload[80];
++        std::snprintf(payload, sizeof(payload), "D,%lu,%lu,1,2600,%ld",
++                      (unsigned long)acquisition, (unsigned long)lidarLatencyMs,
++                      std::lround((heading + rearHeadingErrorDeg) * 100.0));
+         pending.push_back({now + lidarLatencyMs, checked(payload)});
+       }
+     }
+--- before/tests/firmware/test_route_reverse.cpp
++++ after/tests/firmware/test_route_reverse.cpp
+@@ -347,8 +347,9 @@
+         "the return parks by backing 7500 steps into the station, flagged as a station step");
+   const size_t lastTurn = ESP_Serial.tx.rfind("[HEADING TURN cmd=");
+   check(lastTurn != std::string::npos && lastTurn < ESP_Serial.tx.rfind("[BACK:START]") &&
+-        ESP_Serial.tx.substr(lastTurn, 120).find("align=SKIP") == std::string::npos,
+-        "the turn before backing in is an ordinary turn at the hallway centre");
++        ESP_Serial.tx.substr(lastTurn, 120).find("align=SKIP") != std::string::npos &&
++        sent("[PARK rear=ALIGNED"),
++        "the parking turn is confirmed by the rear wall, not a hallway side wall");
+   const size_t firstTurn = ESP_Serial.tx.find("[HEADING TURN cmd=+90.0");
+   check(firstTurn != std::string::npos &&
+         ESP_Serial.tx.substr(firstTurn, 120).find("align=SKIP") == std::string::npos,
+--- before/tests/firmware/test_system.cpp
++++ after/tests/firmware/test_system.cpp
+@@ -44,7 +44,15 @@
+ // The Pi's path packet. Since 2026-11-16 it always carries the rear-travel code R=.
+ static void pathBody(const char* body){
+   std::string packet="P:"+std::to_string(++sequence)+"|"+body;
+-  bridge::handlePathPacket(packet.c_str());wireUart();wireUart();
++  bridge::handlePathPacket(packet.c_str());
++  const float yaw=bridge::mpuHeading.headingDeg();
++  const float rearAngle=yaw-90.0f*std::round(yaw/90.0f);
++  const std::string sides="S:"+std::to_string(sequence)+
++      "|L=80|R=80|F=200|T=9|CF=200|CL=80|CR=80|WL=80|WR=80|G=0|A="+
++      std::to_string(sequence)+"|RD=260|RH="+std::to_string(rearAngle);
++  bridge::enqueueBleWrite(sides.c_str(), sides.size());
++  bridge::processBleIngress();
++  wireUart();wireUart();
+ }
+ static void path(bool blocked){pathBody(blocked?"F=O|B=C|T=C|R=C":"F=C|B=C|T=C|R=C");}
+ static void check(bool ok,const char* label){if(!ok){std::fprintf(stderr,"FAIL %s\n",label);std::exit(1);}std::printf("PASS %s\n",label);}
+--- before/README.md
++++ after/README.md
+@@ -144,7 +144,9 @@
+   blocks it, it stops, chirps twice every 2 s, and continues by itself when the path is clear; a
+   long wait switches to low power. It parks by reversing: at the end of each route it turns its
+   back to the parking spot and backs in slowly (about 25 cm/s), at the destination and at the
+-  station. While backing only the LiDAR watches behind it, and nothing below the LiDAR's height
++  station. Before reversing it needs two fresh, agreeing scans of the wall behind it and
++  aligns square to that wall; without that wall it waits. Rear-wall loss or excess drift
++  holds the approach until it can be checked again. While backing only the LiDAR watches behind it, and nothing below the LiDAR's height
+   is seen there: keep the parking spots clear of low objects. At the destination it stays put
+   until a return is requested from the Android app.
+ - **Emergency stop** stops both controllers and stays latched through reconnects and restarts.
+--- before/SYSTEM_ARCHITECTURE.md
++++ after/SYSTEM_ARCHITECTURE.md
+@@ -302,8 +302,27 @@
+ Both routes end by backing into their parking spot (`RouteOp::BACKING`, op `K` in the leg
+ notice): the last turn faces away from the spot at the same place, and the robot reverses
+ the travel it used to drive forward (outbound 11100 steps, return 7500), at
+-`BACKING_SPEED` (2000 steps/s, ~25 cm/s), both wheels the same steps, no steering. The
+-final place and heading are those of the old forward approach plus 180-degree spin.
++`BACKING_SPEED` (2000 steps/s, ~25 cm/s), both wheels the same remaining steps. Travel
++counts remain calibrated; parking orientation comes from the rear wall as follows.
++
++The Pi fits the original rear returns before station masking (`RasPi/rear_wall.py`),
++using the existing mount rotation/reflection. A rear plane must span at least 80 cm
++(or chassis width + 20 cm), cross the centreline with support on both rear halves,
++and have continuous central support. Side-wall `H` and its learned mounting correction
++do not enter this fit. `RD`/`RH` in S become checksummed `D` lines carrying the same
++acquisition and total source age. Unavailable fits explicitly withdraw old rear evidence;
++duplicates cannot refresh it. A new Pi session resets rear scan numbering in the executor
++without resetting the continuous heading.
++
++Before any backing travel, two stationary scans must agree within 1 degree and 3 cm;
++alignment must be within 1 degree. A correction is at most 8 degrees and uses full
++turn clearance/sonar plus MPU supervision, with another fresh pair AFTER the turn gate
++and after the correction. At most two completed corrections are tried; an unconfirmed
++angle holds in low power rather than repeatedly spinning. The final approach turn
++skips side-wall alignment on both routes. During backing, missing/stale rear fits or
++more than 2 degrees of rear-relative drift brakes the robot and rechecks it outside
++the backing scope, preserving remaining mean travel. There is no final gyro-only spin.
++The gyro timestamps/supervises movement; the rear plane chooses the parking direction.
+ 
+ The Pi computes the rear-travel code `R=` for every scan, whatever the robot is doing:
+ `S` without a current scan; `O` for side clearance, a return within 2 cm beside the rear
+@@ -355,7 +374,7 @@
+    (W: clear to the stop, caution zone ahead; T: spin-sweep clearance, gated only in turns;
+     R: rear-travel clearance, gated only while backing: rear box, bands beside the rear
+     half, side clearance, a mover predicted to reach the body; 2026-11-16)
+-S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|CF=..|CL=..|CR=..|A=<uint32>[|WL=..][|WR=..][|H=..]|G=<ms>|T=..
++S:<same-seq>|L=..|R=..|F=..|B=..|FL=..|FR=..|BL=..|BR=..|CF=..|CL=..|CR=..|A=<uint32>[|WL=..][|WR=..][|H=..][|RD=..|RH=..]|G=<ms>|T=..
+    (WL/WR: wall distances from the centreline, cm; H: heading vs walls, deg, + = left;
+     G: scan age refreshed immediately before the Pi's GATT write, ms; T: legacy tilt, ignored)
+ S:<same-seq>|STABLE
+@@ -374,6 +393,7 @@
+ M,<seq>,<heading cdeg>,<rate cdeg/s>,<epoch>,<allow bits>*<xor hex>   (50 Hz, no ACK)
+ MPU:FAULT                                                            (no valid heading)
+ W,<acq>,<age ms>,<flags>,<left mm>,<right mm>,<H cdeg>*<xor hex>      (per LiDAR scan, no ACK)
++D,<acq>,<age ms>,<valid 0|1>,<rear mm>,<rear H cdeg>*<xor hex>       (rear alignment only, no ACK; never GO)
+ SENSOR:...
+ [HEALTH:1:UUUUU]
+ [BLE CONNECTION ESTABLISHED]
+@@ -686,6 +706,8 @@
+ The executor anchors a route frame at route start (it refuses to start without a
+ confirmed heading stream). Each turn adds its angle, is driven to it by the gyro,
+ then checked against the walls; the measured hallway direction becomes the frame.
++The final parking approach is the exception: rear-wall confirmation owns its
++alignment, as described in Reverse parking above.
+ On centring-enabled straights (`isNudgeEnabled`) each W line gives
+ `axis = gyro heading at the scan - H` and `lateral = (R - L)/2` (or one wall plus
+ the learned width). The steering target is `axis + centring`; between scans the
+--- before/RELEASE_NOTES.md
++++ after/RELEASE_NOTES.md
+@@ -1,4 +1,21 @@
+ # GARBY release notes
++
++## Rear-wall parking alignment — 2026-11-16
++
++- Both final parking steps use two fresh scans of the wall behind GARBY before
++  reversing. The final approach turn leaves alignment to that rear wall; side-wall
++  heading does not choose the parking direction. MPU supervision remains active.
++- Rear fits are measured before station-wall filtering and retain their acquisition
++  age through Pi, bridge and executor. Missing, stale or disagreeing evidence holds
++  parking; lost rear fits or drift during the approach brakes and rechecks it. Holds
++  preserve the remaining calibrated travel. The final gyro-only spin is removed.
++- Controls, developer-test behavior and nudge tuning are unchanged. Independent
++  hallway-model checks support retaining the working nudge deadband.
++- **MCU upload requirement: Both**, complete `BLE_Receiver-Final` and
++  `MAIN_EXECUTOR_CODE` sketches, plus the entire `RasPi/` folder, all
++  `REARPARK-20261116`. This supersedes the earlier source build `PARK-20261116`;
++  installed firmware identity remains unverified. See
++  `docs/rear-wall-parking-2026-11-16.md` for verification and acceptance limits.
+ 
+ ## Reverse parking, fewer false red dots while moving — 2026-11-16
+ 
+--- before/DEPLOYMENT_AND_ACCEPTANCE.md
++++ after/DEPLOYMENT_AND_ACCEPTANCE.md
+@@ -1,4 +1,26 @@
+ # GARBY deployment and acceptance
++
++## Rear-wall parking alignment — 2026-11-16
++
++Deploy the entire matching `RasPi/` directory and upload **both complete sketches**,
++all build ID `REARPARK-20261116`. This replaces the earlier `PARK-20261116` source
++build, including its earlier pending executor changes; it does not require separate
++uploads of those older images. No installation or physical acceptance is established
++by the software checks. Current saved flasher state has no board selected or connected;
++target compilation uses the documented production configurations below, not a port.
++
++Before floor use, verify the LiDAR mounting yaw/reflection with a chassis physically
++square to a flat rear wall. Two wall scans can establish relative alignment, but cannot
++tell mounting error from chassis error without this physical reference. Keep the
++existing calibrated parking counts and measure the final rear gap: outbound parking
++still obeys the 35 cm rear box behind the configured rear edge; the station wall is
++ignored only on its existing station step. A wall inside that stop box holds outbound
++parking even when the wall is fitted correctly. No new clearance bypass was added.
++
++Then supervise short rear approaches, rear-wall loss/recovery, an obstacle hold, a small
++alignment correction with full spin clearance, emergency stop and continued parking,
++before both complete routes. There is no rear sonar below the LiDAR plane. Detailed
++procedure and saved software evidence: `docs/rear-wall-parking-2026-11-16.md`.
+ 
+ ## Deployment-only folders and developer-turn fix — 2026-11-16
+ 
+--- before/AGENTS.md
++++ after/AGENTS.md
+@@ -82,8 +82,9 @@
+   ONE continuous heading reference from boot and streams it (M lines, 50 Hz); segment
+   notices never re-zero it. The executor fuses gyro and wall scans (W lines, matched by
+   scan age): the hallway axis is measured, centring is bounded (5 deg), has a 2 cm
+-  deadband and 5/2 cm hysteresis, and is slewed. Every turn is MPU-measured, then aligned
+-  to two agreeing wall scans within 8 deg of the commanded direction. Executor tunables
++  deadband and 5/2 cm hysteresis, and is slewed. Every turn is MPU-measured; ordinary
++  turns then align to two agreeing hallway-wall scans within 8 deg of the command.
++  Final parking approaches instead use the rear-wall confirmation described below. Executor tunables
+   are at the top of `HeadingControl.h`, bridge ones in `SteeringAssist.h`. Check changes
+   with `tests/firmware/test_navigation.cpp`, a kinematic model that cannot show
+   physical straightness, slip or stopping distance. Before each long hallway run
+@@ -110,9 +111,15 @@
+   holds one. Turns keep the full spin sweep; missing/stale back data still holds. "Reverse
+   to start" keeps the forward rule: it turns the robot around and drives forward, and
+   undoes a backing step by driving forward without turning.
+-- Reverse parking (`RouteOp::BACKING`, leg op `K`): the last turn faces away from the spot
+-  at the same place and the robot reverses the old forward travel at `BACKING_SPEED`, both
+-  wheels equal steps, then squares up by MPU if over 1 degree off. Between `[BACK:START]`
++- Reverse parking (`RouteOp::BACKING`, leg op `K`; rear-wall rework, owner 2026-11-16):
++  the last turn faces away from the spot at the same place, skips side-wall alignment,
++  and the rear wall determines parking orientation before reversing. `RD/RH` are fitted
++  before station masking and become age/acquisition-checked `D` UART lines. Two stationary
++  scans must agree; missing or unstable rear evidence holds only parking. Small corrections
++  retain full turn gates and MPU supervision, and remeasure after clearance waits. The
++  robot reverses the old forward travel at `BACKING_SPEED`, both wheels equal remaining
++  steps; rear-wall loss or excess drift brakes and rechecks without losing mean travel.
++  No final MPU-only spin. See `docs/rear-wall-parking-2026-11-16.md`. Between `[BACK:START]`
+   and `[BACK:END]` the bridge grants `GO:BACK` only on `R=C` and `B=C` and does not consult
+   `F`; the executor backs only on `GO:BACK` and never counts `GO:BACK` as forward
+   permission; the scope is replayed in status and unknown after a bridge reboot until
+--- /dev/null
++++ after/RasPi/rear_wall.py
+@@ -0,0 +1,45 @@
++"""Parking alignment from the unmasked REAR of one robot-frame LiDAR scan.
++
++This is orientation evidence only. It never clears an obstacle or chooses a
++parking distance. The configured mounting rotation/reflection has already been
++applied by the scan producer; no side-wall heading or learned offset is used.
++"""
++from dataclasses import dataclass
++import math
++
++from hallway_geometry import fit_wall, np, WALL_INLIER_TOLERANCE_CM
++
++
++@dataclass(frozen=True)
++class RearWallFit:
++    distance_cm: float
++    heading_deg: float  # chassis relative to the wall normal, positive = left
++
++
++def fit_rear_wall(frame, geometry):
++    if frame is None or np is None:
++        return None
++    # Rotate the coordinate axes, not the sensor mounting: u goes across the
++    # rear wall, v goes backwards. A rear wall is then a "left" line v=a+b*u.
++    u, v = frame.ys, -frame.xs
++    half_span = max(120.0, geometry.half_width_cm + 60.0)
++    wall = fit_wall(u, v, "left", 10.0, behind_cm=half_span, ahead_cm=half_span,
++                    min_span_cm=max(80.0, geometry.width_cm + 20.0))
++    if wall is None:
++        return None
++    angle = math.radians(wall.angle_deg)
++    residual = v * math.cos(angle) - u * math.sin(angle) - wall.distance_cm
++    hits = u[(np.abs(residual) <= WALL_INLIER_TOLERANCE_CM)
++             & (v > 0.0) & (np.abs(u) <= half_span)]
++    # The broad surface must cross the rear centreline and cover both halves of
++    # the approach. A wall step can hide one outer corner (the recorded station
++    # does): orientation needs a long line, not a claim that every corner is clear.
++    # Clearance is independently enforced by R/B/T and is never changed here.
++    support = min(20.0, geometry.half_width_cm)
++    if (int(np.sum(hits <= -support)) < 3 or int(np.sum(hits >= support)) < 3
++            or int(np.sum(np.abs(hits) <= support)) < 5):
++        return None
++    corridor = np.sort(hits[(hits >= -support) & (hits <= support)])
++    if len(corridor) < 2 or float(np.max(np.diff(corridor))) > 20.0:
++        return None
++    return RearWallFit(wall.distance_cm, round(-wall.angle_deg, 2))
+--- /dev/null
++++ after/tests/firmware/test_rear_parking.cpp
+@@ -0,0 +1,169 @@
++// Parking uses the wall BEHIND the robot. Exercise the actual executor and UART
++// parser with the kinematic plant; this cannot prove physical wall alignment.
++#pragma GCC optimize("O1")
++#include "stubs/Arduino.h"
++#include "../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.cpp"
++#include "../../MAIN_EXECUTOR_CODE/pointsRun.ino"
++#include "../../MAIN_EXECUTOR_CODE/MAIN_EXECUTOR_CODE.ino"
++#include "hallway_sim.h"
++#include <climits>
++
++static FastAccelStepper a, b;
++static hallway_sim::Plant plant;
++static int failures = 0;
++static void check(bool ok, const char* label) {
++  std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++  if (!ok) ++failures;
++}
++static void fresh() {
++  tickHook = backgroundHook = nullptr;
++  fakeNow = 5000;
++  operatorStopMarker = 0;
++  operatorEmergencyLatched = operatorManualStartRequired = false;
++  operatorSonarEnabled = false;
++  a = FastAccelStepper(); b = FastAccelStepper(); stepper1 = &a; stepper2 = &b;
++  fullReset(); garbyState = GarbyState::RUNNING;
++  heading = HeadingControl();
++  plant = hallway_sim::Plant(); plant.walls = false; plant.rearWall = false;
++  plant.attach(&a, &b, &ESP_Serial.rx); plant.backing = &backingActive;
++  ESP_Serial.rx.clear(); ESP_Serial.tx.clear();
++  backgroundHook = [] { plant.tick(); };
++  for (int i = 0; i < 400; ++i) { delay(1); pollESP(); }
++  beginRouteHeading(); heading.confirmTurnSides();
++}
++static void rear(uint32_t acquisition, double angle, unsigned age = 0, bool valid = true) {
++  char payload[80], line[96];
++  std::snprintf(payload, sizeof(payload), "D,%lu,%u,%u,1600,%ld",
++                (unsigned long)acquisition, age, valid ? 1U : 0U, std::lround(angle * 100));
++  unsigned char sum = 0;
++  for (const char* p = payload; *p; ++p) sum ^= (unsigned char)*p;
++  std::snprintf(line, sizeof(line), "%s*%02X\n", payload, sum);
++  ESP_Serial.rx += line;
++}
++int main() {
++  fresh();
++  const long before = a.getCurrentPosition() + b.getCurrentPosition();
++  const uint32_t t0 = fakeNow;
++  tickHook = [&] { if (fakeNow - t0 > 4000) resetQueued = true; };
++  bool ok = backIntoPlace(2000);
++  check(!ok && a.getCurrentPosition() + b.getCurrentPosition() == before,
++        "no rear-wall measurement: no backward travel, even with GO and MPU");
++
++  fresh();
++  const uint32_t started = fakeNow;
++  uint32_t scanMs = fakeNow, acq = 0;
++  bool backedBeforeAligned = false;
++  plant.thetaDeg = 4.0; // gyro's route target is zero, but the rear wall says +4.
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; rear(++acq, plant.thetaDeg); }
++    if (a.getCurrentPosition() + b.getCurrentPosition() < -10 && std::fabs(plant.thetaDeg) > 1.1)
++      backedBeforeAligned = true;
++    if (fakeNow - started > 30000) resetQueued = true;
++  };
++  ok = backIntoPlace(2000);
++  check(ok && !backedBeforeAligned && std::fabs(plant.thetaDeg) <= 1.1,
++        "the rear wall aligns the chassis before reversing despite the gyro route reference");
++  check(a.getCurrentPosition() + b.getCurrentPosition() == -4000,
++        "alignment spins do not change calibrated backward travel");
++
++  fresh();
++  const uint32_t duplicateStart = fakeNow;
++  scanMs = fakeNow;
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; rear(1, 0); }
++    if (fakeNow - duplicateStart > 3500) resetQueued = true;
++  };
++  ok = backIntoPlace(2000);
++  check(!ok && a.getCurrentPosition() == 0 && b.getCurrentPosition() == 0,
++        "repeated acquisition IDs cannot supply the two rear alignment scans");
++
++  fresh();
++  scanMs = fakeNow; acq = 100;
++  const uint32_t staleStart = fakeNow;
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; rear(++acq, 0, 901); }
++    if (fakeNow - staleStart > 3500) resetQueued = true;
++  };
++  ok = backIntoPlace(2000);
++  check(!ok && a.getCurrentPosition() == 0 && b.getCurrentPosition() == 0,
++        "new IDs with stale source acquisition ages still cannot authorize parking");
++
++  fresh();
++  scanMs = fakeNow; acq = 100;
++  const uint32_t unstableStart = fakeNow;
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; ++acq; rear(acq, acq % 2 ? 3 : -3); }
++    if (fakeNow - unstableStart > 3500) resetQueued = true;
++  };
++  ok = backIntoPlace(2000);
++  check(!ok && a.getCurrentPosition() == 0 && b.getCurrentPosition() == 0,
++        "disagreeing rear scans never start the wheels");
++
++  fresh();
++  shouldStop = true;
++  const uint32_t pathTime = lastPathCommandMs;
++  rear(1000, 0); pollESP();
++  HeadingControl::RearView view;
++  check(shouldStop && lastPathCommandMs == pathTime,
++        "rear wall evidence never grants GO or refreshes path permission");
++  const float continuousHeading = heading.heading();
++  processESPMessage("[BLE CONNECTION ESTABLISHED]");
++  rear(1, 0); pollESP();
++  check(heading.rearViewSince(fakeNow, fakeNow, &view) && view.acquisition == 1 &&
++        heading.heading() == continuousHeading,
++        "a restarted Pi scan sequence is accepted without resetting continuous heading");
++  ESP_Serial.rx += "D,2,0,1,1600,0*00\n"; pollESP();
++  check(!heading.rearViewSince(fakeNow, fakeNow, &view),
++        "a damaged rear UART checksum withdraws rear alignment evidence");
++
++  fresh();
++  scanMs = fakeNow; acq = 0;
++  const uint32_t heldStart = fakeNow;
++  bool heldStill = true, moved = false;
++  long heldAt = LONG_MIN;
++  tickHook = [&] {
++    const uint32_t age = fakeNow - heldStart;
++    if (fakeNow - scanMs >= 174) {
++      scanMs = fakeNow; rear(++acq, 0, 0, !(age >= 1800 && age < 4500));
++    }
++    moved = moved || a.getCurrentPosition() + b.getCurrentPosition() < -10;
++    if (age >= 2200 && age < 4400) {
++      const long position = a.getCurrentPosition() + b.getCurrentPosition();
++      if (heldAt == LONG_MIN) heldAt = position;
++      heldStill = heldStill && heldAt == position;
++    }
++    if (age > 30000) resetQueued = true;
++  };
++  ok = backIntoPlace(8000);
++  check(ok && moved && heldStill && heldAt < 0 &&
++        a.getCurrentPosition() + b.getCurrentPosition() == -16000,
++        "rear wall loss mid-parking holds, then fresh pairs resume only remaining travel");
++
++  fresh();
++  scanMs = fakeNow; acq = 0;
++  const uint32_t driftStart = fakeNow;
++  plant.gyroBiasDps = 0.4;
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; rear(++acq, plant.thetaDeg); }
++    if (fakeNow - driftStart > 30000) resetQueued = true;
++  };
++  ok = backIntoPlace(8000);
++  check(ok && std::fabs(plant.thetaDeg) < 0.1 &&
++        ESP_Serial.tx.find("[TURN:START]") == std::string::npos,
++        "gyro bias alone does not trigger a post-parking spin when the rear wall is square");
++
++  fresh();
++  scanMs = fakeNow; acq = 0;
++  const uint32_t offAngleStart = fakeNow;
++  bool lowPowerSeen = false;
++  tickHook = [&] {
++    if (fakeNow - scanMs >= 174) { scanMs = fakeNow; rear(++acq, 12); }
++    lowPowerSeen = lowPowerSeen || lowPowerActive;
++    if (fakeNow - offAngleStart > 12000) resetQueued = true;
++  };
++  ok = backIntoPlace(2000);
++  check(!ok && lowPowerSeen && a.getCurrentPosition() == 0 && b.getCurrentPosition() == 0,
++        "an unconfirmed rear angle holds in low power instead of repeatedly spinning");
++  tickHook = backgroundHook = nullptr;
++  return failures ? 1 : 0;
++}
+--- /dev/null
++++ after/docs/rear-wall-parking-2026-11-16.md
+@@ -0,0 +1,182 @@
++# Rear-wall reverse parking — 2026-11-16
++
++The owner requested alignment from the LiDAR wall behind GARBY before reversing,
++for both outbound parking and return parking. The owner clarified that the return
++still drives forward through the hallway and reverses only into the station.
++Controls and developer tests were reported working and were left unchanged.
++Nudge optimization was optional; the independent model review supports keeping
++the current tuning.
++
++This supersedes the alignment portion of `reverse-parking-2026-11-16.md`. Its
++rear-clearance scopes, route travel counts, station masking and physical limits
++continue to apply.
++
++## Resulting parking behavior
++
++1. The final approach turn faces away from the parking spot at the same place as
++   before. On both routes it now skips side-wall alignment: the parking wall is
++   behind the robot, and a hallway side fit must not choose this direction.
++2. Before any backward travel, GARBY stands still and requires two independent
++   rear-wall acquisitions, no older than 900 ms, acquired after it stopped.
++   Their normals must agree within 1 degree and distances within 3 cm. Repeated
++   acquisition IDs cannot provide a second confirmation or renew freshness.
++3. The measured rear-wall normal determines alignment. If its error exceeds
++   1 degree but is no more than 8 degrees, GARBY makes a slow correction under
++   full spin-sweep, floor-sonar, emergency-stop, path and MPU supervision.
++   It measures another rear pair **after** any turn-clearance wait and after
++   the correction. At most two completed corrections are attempted; a larger
++   or still-unconfirmed angle holds stationary and enters low power after
++   10 seconds instead of repeatedly spinning.
++4. Fresh `GO:BACK` remains mandatory. After its clearance wait another rear pair
++   is required before wheel commands. The final legs retain 11100 outbound
++   steps and 7500 return steps at `BACKING_SPEED` (2000 steps/s). Both wheels
++   receive the same remaining backward travel; in-place corrections do not
++   count toward mean route distance.
++5. Rear-fit loss, stale evidence or more than 2 degrees of rear-relative drift
++   during the approach brakes the robot. It leaves the backing scope before
++   any correction, checks the rear again, then resumes only the remaining mean
++   travel under fresh rear permission. The existing route checkpoint handles
++   an operator stop and continued parking.
++6. There is no MPU-only square-up after the final parking distance. The MPU
++   still supervises every motion and measures corrections. Its old route
++   reference and side-wall heading do not choose the parking direction.
++
++No 180-degree spin beside either parking spot was added. No calibrated route
++counts, motor DIR levels, wheel-side assumptions, general clearance thresholds,
++operator commands or developer-test overrides were changed.
++
++## Rear measurement and transport
++
++`RasPi/rear_wall.py` fits the original robot-frame scan **before** station walls
++are removed. It reuses the existing robust line fit with rotated coordinate axes:
++rear-facing distance, a minimum 80 cm span (or chassis width + 20 cm), support
++across the rear centreline and both halves, and no central gap over 20 cm.
++A short panel, one-sided surface, front wall or ordinary side wall cannot supply
++the required rear-plane evidence. A station corner step may hide an outer end
++without invalidating a long visible line crossing the centreline. Orientation
++evidence does not claim that the corners or path are clear.
++
++Mount yaw and left/right reflection are shared with the map and clearance
++processing. The side-wall mounting-angle learner is not applied to rear fits.
++The new fields are `RD` (perpendicular centimetres) and `RH` (degrees, chassis
++left positive). Both are omitted without a usable fit.
++
++The bridge forwards one unacknowledged measurement for each accepted independent
++S acquisition:
++
++```text
++D,<acquisition>,<age-ms>,<valid-0-or-1>,<rear-mm>,<rear-heading-cdeg>*<xor>
++```
++
++An unavailable fit explicitly withdraws the previous one. Source age is refreshed
++at the Pi GATT write, then includes bridge queue time and the existing 30 ms transit
++estimate; the executor matches it against gyro history. This is an age estimate,
++not a measured end-to-end transport deadline. D lines never grant GO, renew path
++permission, satisfy readiness, or consume the bridge's command-ACK budget. A
++confirmed new Pi/BLE session clears only rear acquisition state, allowing a
++restarted Pi to begin at A=1 without resetting continuous MPU heading.
++
++`PARK:WAIT_REAR_WALL`, `PARK:WALL_UNSTABLE`, `PARK:ALIGNING` and
++`PARK:ALIGNMENT_UNCONFIRMED` explain parking waits in the existing motion status.
++Parking reports are also retained in headless logs.
++
++## Review and software verification
++
++Before implementation, new tests failed against the unchanged source: backward
++travel did not require a rear-wall fit, repeated rear acquisitions did not hold it,
++and the Pi had no rear alignment fields. Logs are in
++`verification/2026-11-16-rear-wall-parking/`.
++
++Independent review found and verified fixes for restarted acquisition numbering,
++a stale correction target after a long clearance wait, and low-power behavior for
++an unconfirmed angle. In the delayed-clearance model, a 120-second hold with
++0.1 degree/s gyro bias previously produced a 15.78-degree physical correction;
++after remeasurement it corrected by 3.71 degrees and left 0.29 degree rear error.
++These are simulated values, not floor measurements.
++
++Final checks, commands, timestamps and exit codes are recorded in
++[`checks.json`](verification/2026-11-16-rear-wall-parking/checks.json):
++
++| Check | Result |
++| --- | --- |
++| Pi unittest discovery | 634 tests, 41 skips, exit 0 |
++| Actual firmware host tests | 12 executables, 825 passing assertions, exit 0 |
++| Source sanity | PASS, exit 0 |
++| ESP32-S3 bridge target | PASS, 600006 bytes program, 38664 bytes globals |
++| ESP32 executor target | PASS, 431854 bytes program, 29712 bytes globals |
++
++Tk display tests were skipped: Tkinter imports, but `localhost:11.0` is not a
++working display; Xvfb is unavailable. The optional separate Android checkout
++interoperability check was not enabled. No Android source or APK was copied.
++
++The ESP32 core was 3.3.11. Builds used external build/cache directories and the
++documented production configurations: bridge
++`esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi`; executor
++`esp32:esp32:esp32:FlashSize=4M,PSRAM=disabled`. Saved flasher state selected no
++board and reported no connection; that state was not treated as current USB
++evidence or used to invent a port.
++
++Tests cover the actual Pi producer, bridge parser and UART consumer; malformed,
++missing, duplicate, stale and disagreeing rear evidence; rear loss during motion;
++unchanged GO dominance; Pi-session restart; low-power holds; continued parking;
++both complete routes; the ordinary return and Reverse-to-start behavior. All
++15 recorded station scans retain a stable rear fit even after station masking.
++Original and final source hashes, exact edits, binary hashes and review evidence
++are linked in the [change manifest](verification/2026-11-16-rear-wall-parking/change-manifest.md).
++
++## Optional nudging review
++
++The independent review exercised current production algorithms in the existing
++hallway model, with no tuning changes. A centered 15 m run had a maximum 2.16 cm
++deviation and no centring commands. A 3-degree initial heading error, 0.05 degree/s
++gyro bias and 0.4% wheel-scale mismatch finished 2.54 cm off centre; a 4 m wall
++gap finished 0.81 cm off centre. Pre-run centring reduced a 22 cm offset to
++0.1 cm. Existing permission-veto, wall-loss, slow-zone and wrong-way checks passed.
++These results support retaining the intentional 5 cm engage / 2 cm release
++behavior; reducing it would introduce steering activity without physical evidence.
++See [`nudge-model.log`](verification/2026-11-16-rear-wall-parking/nudge-model.log).
++
++## Deployment and remaining physical checks
++
++**MCU upload requirement for this change: Both.** Upload the complete
++`BLE_Receiver-Final` and `MAIN_EXECUTOR_CODE` sketches and deploy the entire
++matching `RasPi/` directory. All identify as **REARPARK-20261116**. Both firmware
++targets changed because the bridge produces D evidence and the executor consumes
++and enforces it; Pi deployment supplies its rear fit. An older Pi or bridge
++cannot provide the new parking evidence. Ordinary forward travel has no new
++rear-wall requirement.
++
++Earlier source images such as `PARK-20261116` and its pending developer-turn
++fixes are included in this build; they do not need separate older uploads.
++Installed firmware identity is unknown. This session performed no upload,
++robot command, service restart, cloud mutation or physical acceptance.
++
++Compiled binary/ELF evidence is kept outside the repository at
++`~/.local/share/garby-builds/rear-wall-parking-2026-11-16/`, with exact hashes in
++[`binary-hashes.json`](verification/2026-11-16-rear-wall-parking/binary-hashes.json).
++The complete sketch, rather than an individual header, is the upload unit.
++
++Before floor use:
++
++1. Verify actual mounting yaw/reflection with the chassis physically square to
++   a known flat rear wall. A rear line alone cannot distinguish mounting error
++   from chassis error. Neither its physical alignment nor its installation was
++   established by the recorded-data/model checks.
++2. Measure body outline, LiDAR offset and the available rear gap. **Outbound
++   parking still obeys the existing rear box**: with the assumed 30 cm rear edge
++   and 35 cm stop, the wall must remain at least 65 cm behind the LiDAR. A 11100
++   step (~142 cm) approach therefore needs an initial distance around 207 cm or
++   more, plus real stopping margin. If the configured gap is insufficient, it
++   holds rather than silently ignoring that wall. The return's station wall is
++   omitted only under its existing fresh station-step scope. No such omission
++   was added at the outbound destination. The model's rear plane is orientation
++   evidence only; its R/C path fixture is not physical clearance validation.
++3. With supervision, check small correction direction and full spin clearance,
++   rear wall loss/recovery, an obstacle hold, emergency stop/continued parking,
++   and both final approaches before a complete route. Wheel steps remain open
++   loop and cannot detect slip. If drift occurs close to the wall without a
++   clear spin sweep, the robot holds.
++4. Keep low objects out of both parking approaches. The forward sonar faces
++   away while reversing; nothing below the rear LiDAR plane is observed. Actual
++   stopping distance, final gap, physical centring and battery savings remain
++   unmeasured.

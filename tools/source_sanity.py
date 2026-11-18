@@ -82,7 +82,7 @@ def check_delimiters(path: Path) -> list[str]:
 
 def main() -> int:
     failures = []
-    IGNORE_DIRS = {".git", ".gradle", "build", ".venv", ".mcu_flasher_build_cache", "node_modules", ".idea", ".externalNativeBuild", ".cxx"}
+    IGNORE_DIRS = {".git", ".gradle", "build", ".venv", ".mcu_flasher_build_cache", "node_modules", ".idea", ".externalNativeBuild", ".cxx", "artifacts", "Garby_MobileApp"}
 
     def is_ignored(p: Path) -> bool:
         return any(part in IGNORE_DIRS for part in p.parts)

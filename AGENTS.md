@@ -45,8 +45,12 @@ User instructions and authorization in the current session take precedence.
 ## Source and hardware boundaries
 
 - Production Pi entry point is `RasPi/final_w_serial.py`. Deploy its entire
-  directory; local helpers are required. The serial test sketches are not
-  alternative production implementations.
+  directory; local helpers are required. Deployment layout (owner, 2026-11-16):
+  `RasPi/`, `BLE_Receiver-Final/` and `MAIN_EXECUTOR_CODE/` hold only what runs on the
+  robot. Tests, fixtures, the Pi simulator and bench sketches live in `tests/` (`tests/pi`,
+  `tests/firmware`, `tests/sketches`); desktop helpers such as `tools/preview_ui.py` live in
+  `tools/`. Never add test files back to the deployable folders. The bench sketches are
+  not alternative production implementations.
 - Firmware source changes belong in root sketch `.ino/.cpp/.h` files. Respect
   each sketch's `AGENTS.md`. Never modify flasher caches, `.pio` or `.opencode`.
   A user-authorized coordinated system change can also update its Pi, bridge,
@@ -78,10 +82,11 @@ User instructions and authorization in the current session take precedence.
   ONE continuous heading reference from boot and streams it (M lines, 50 Hz); segment
   notices never re-zero it. The executor fuses gyro and wall scans (W lines, matched by
   scan age): the hallway axis is measured, centring is bounded (5 deg), has a 2 cm
-  deadband and 5/2 cm hysteresis, and is slewed. Every turn is MPU-measured, then aligned
-  to two agreeing wall scans within 8 deg of the commanded direction. Executor tunables
+  deadband and 5/2 cm hysteresis, and is slewed. Every turn is MPU-measured; ordinary
+  turns then align to two agreeing hallway-wall scans within 8 deg of the command.
+  Final parking approaches instead use the rear-wall confirmation described below. Executor tunables
   are at the top of `HeadingControl.h`, bridge ones in `SteeringAssist.h`. Check changes
-  with `tools/firmware_tests/test_navigation.cpp`, a kinematic model that cannot show
+  with `tests/firmware/test_navigation.cpp`, a kinematic model that cannot show
   physical straightness, slip or stopping distance. Before each long hallway run
   (`runLongHallway`, 2026-11-12) the robot stands still and `centerBeforeLongRun()` puts it
   on the centre line and axis from two agreeing wall scans (35 degree sidesteps, at most 3,
@@ -96,13 +101,33 @@ User instructions and authorization in the current session take precedence.
 - Chassis zones (`RasPi/hallway_geometry.py`) only ADD stop/slow evidence to the sector
   limits: front box (body width + 10 cm to 95 cm, front-group bypass), slow zone to
   160 cm (`F=W` -> `GO:SLOW`), side band within 2 cm of the body from the spin centre to
-  the front edge (never bypassed), spin sweep `T=` (required clear between
-  `[TURN:START]`/`[TURN:END]`). Chassis outline is env-configured and unmeasured.
-- Every route segment drives forward (owner, 2026-11-14): back-sector distances are shown
-  but never hold motion (`BACK_DISTANCE_HOLDS_MOTION`, set True only for a reverse
-  segment), and nothing beside the rear half holds a forward move. Turns keep the full
-  spin sweep; missing/stale back data still holds. "Reverse to start" keeps this rule: it
-  turns the robot around and drives forward.
+  the front edge (bypassed only by the operator's sides read-only, 2026-11-16), spin sweep `T=` (required clear between
+  `[TURN:START]`/`[TURN:END]`), rear box and rear bands in `R=` (required clear between
+  `[BACK:START]`/`[BACK:END]`). Chassis outline is env-configured and unmeasured.
+- Every route segment drives forward (owner, 2026-11-14) except each route's last step,
+  which backs into its parking spot (reverse parking, owner 2026-11-16,
+  `docs/reverse-parking-2026-11-16.md`). Back-sector distances are shown but never hold a
+  forward move (`BACK_DISTANCE_HOLDS_MOTION` stays False), and nothing beside the rear half
+  holds one. Turns keep the full spin sweep; missing/stale back data still holds. "Reverse
+  to start" keeps the forward rule: it turns the robot around and drives forward, and
+  undoes a backing step by driving forward without turning.
+- Reverse parking (`RouteOp::BACKING`, leg op `K`; rear-wall rework, owner 2026-11-16):
+  the last turn faces away from the spot at the same place, skips side-wall alignment,
+  and the rear wall determines parking orientation before reversing. `RD/RH` are fitted
+  before station masking and become age/acquisition-checked `D` UART lines. Two stationary
+  scans must agree; missing or unstable rear evidence holds only parking. Small corrections
+  retain full turn gates and MPU supervision, and remeasure after clearance waits. The
+  robot reverses the old forward travel at `BACKING_SPEED`, both wheels equal remaining
+  steps; rear-wall loss or excess drift brakes and rechecks without losing mean travel.
+  No final MPU-only spin. See `docs/rear-wall-parking-2026-11-16.md`. Between `[BACK:START]`
+  and `[BACK:END]` the bridge grants `GO:BACK` only on `R=C` and `B=C` and does not consult
+  `F`; the executor backs only on `GO:BACK` and never counts `GO:BACK` as forward
+  permission; the scope is replayed in status and unknown after a bridge reboot until
+  replayed. `R=` (every packet) holds on the rear box (35 cm behind the rear edge), the
+  bands beside the rear half (bypassed only by sides read-only), side clearance and a mover predicted to
+  reach the body; read-only back bypasses the box and the mover. The sonar faces away and
+  holds nothing while backing; nothing below the LiDAR plane behind the robot is seen. Do
+  not use backing for other steps or the reverse run without a new owner request.
 - Station steps (owner, 2026-11-14, `docs/objects-station-reverse-2026-11-14.md`): the station
   is at the hallway wall. Route steps flagged `STEP_STATION` (`RouteResume.h`, `pointsRun.ino`)
   are named in the executor's `[LEG:..]` notice; while that notice is fresh (3.5 s), the link
@@ -111,8 +136,10 @@ User instructions and authorization in the current session take precedence.
   (`RasPi/station_mode.py`). Anything else still holds. The notice is telemetry: losing it
   only restores the ordinary rules. Station turns skip wall alignment; steps facing the
   station wall use the sonar's expected-wall rule (`STATION_PARK_GAP_CM`, unmeasured: the
-  forward sonar then does not hold those steps). Do not widen this to other steps or to
-  non-wall returns without a new owner request.
+  forward sonar then does not hold those steps). Since 2026-11-16 the return route backs
+  into the station (its backing step is the station step) and no route step faces the
+  station wall forward; only the reverse run's way back over the leaving steps does. Do not
+  widen this to other steps or to non-wall returns without a new owner request.
 - Gyro bias is re-measured only while the wheels are held (STOP latched >= 1 s, or the
   executor reporting IDLE/OUTBOUND COMPLETE/ROUTE FAULT for >= 1 s), never in a turn,
   at most 0.2 deg/s per window and 1 deg/s from boot.
@@ -154,7 +181,10 @@ User instructions and authorization in the current session take precedence.
   "robot speed unknown" without it. Since 2026-11-14 the wall heading of each scan removes
   the robot's own rotation from the tracks, and a person-sized, non-flat track proven to
   move over the ground is labelled a **likely person** (red dot on the map; owner's request).
-  That label is display and report only: every stop/slow rule treats all movers alike.
+  Since 2026-11-16 the label also needs motion relative to the other tracked objects when
+  most of them drift together along the travel axis by no more than the wheel speed (wheels
+  lifted, slip, a lagging report: still objects had been labelled). That label is display
+  and report only: every stop/slow rule treats all movers alike, and none uses the drift.
 - Hallway objects (`RasPi/scene_objects.py`, 2026-11-14) only ADD evidence: with both walls
   fitted 120-450 cm apart, returns between them are grouped into objects (wall fixtures and
   the end wall excluded) and marked on the map; one standing in the robot's path beyond the
@@ -192,7 +222,7 @@ User instructions and authorization in the current session take precedence.
   `true/false` DIR pair still drove backward; the current pair is `false/true` in
   `MAIN_EXECUTOR_CODE.h`. Preserve route signs and turn angles. Which motor is the left
   wheel is not measured: the first MPU turn checks the guess and swaps it, and steering
-  uses the proven side. Do not flip the DIR pair again without new evidence. `tools/firmware_tests/test_motor_direction.cpp` models the reported forward
+  uses the proven side. Do not flip the DIR pair again without new evidence. `tests/firmware/test_motor_direction.cpp` models the reported forward
   levels and keeps motor-side assumptions explicit. Historical November 7 reports
   remain dated evidence and are superseded for the current direction settings.
 - The user's October 31 correction supersedes the previous inspection-only
@@ -200,9 +230,53 @@ User instructions and authorization in the current session take precedence.
   distance thresholds while readings continue. They must not globally block
   motion or manual start, or cancel pending starts. Missing/stale scan evidence,
   side clearance, emergency stop and MPU/nearest steering-clearance gates remain.
+  Owner, 2026-11-16 ("let me decide when will it move", `docs/operator-decides-2026-11-16.md`):
+  changing any read-only group while a route runs latches the operator stop, and so does a
+  Pi process that finds a route already running at its first state report (not a Bluetooth
+  reconnect); the operator then chooses Continue run, Reverse to start or Release stop.
+  Sides read-only (owner, 2026-11-16: "add read only for sides too, so that the motor can
+  be tested and run", `docs/side-read-only-2026-11-16.md`) is the third group: it bypasses
+  the side sector limits and the side bands beside both halves of the body for F/B/R, off
+  at every start; front/back read-only still never bypass a side, the spin sweep stays with
+  the front/back groups, and missing/stale scans, readings, zones and steering vetoes stay.
   Confirmed SONAR_OFF likewise permits operation with its local gate bypassed
   and servo parked at DEFAULT_VIEW. Do not reinstate an extra motion interlock
   without a new user request.
+- Developer tests (owner, 2026-11-15, `docs/developer-tests-start-hold-2026-11-15.md`) are
+  a deliberate exception to the side-band and heading-feedback rules above: a single
+  confirmed `[TEST:..]` from stationary IDLE may leave out LiDAR clearance (all zones and
+  scan freshness), MPU supervision and/or obstacle sonar for that test only. It is capped at
+  400 steps forward or backward, 100 on one motor or a 1..15 degree / exactly 90 degree
+  MPU-measured turn. Owner's latest speed request (2026-11-16/17,
+  `docs/developer-turn-speed-2026-11-17.md`) sets the finite-test speed to 2351 steps/s,
+  nominally 30 cm/s; ramps, short moves, motor-side checks and turn braking can be slower.
+  Small tests have 8 s, exactly 90 degrees has 30 s, and both need a live 800 ms KEEP
+  lease. Measured developer turns require fresh stationary MPU confirmation and a final
+  1 degree tolerance. MPU scale is provisionally 100/90 from the owner's approximate
+  physical 100-degree observation for a reported 90, pending measured floor acceptance;
+  do not apply that correction twice or change the degree targets. Backward (2026-11-16,
+  `docs/backward-test-2026-11-16.md`) runs inside the reverse-parking rear scope: with LiDAR
+  selected only `GO:BACK` moves it. Remote control (owner, 2026-11-16,
+  `docs/remote-control-2026-11-16.md`): the Developer window's held arrows (`W/S/A/D`, mask 0,
+  2351 or 4702 steps/s, nominally 30/60 cm/s) have no step value, no time limit and no sensor gates by the owner's
+  choice; they run only while the Pi keeps a 500 ms lease alive from a window that still
+  shows the arrow pressed, and `[TEST END]` (let go) stops them at once. The phone cannot keep
+  that lease, so its arrows are nudges (owner, 2026-11-18, `docs/phone-controls-rundown-2026-11-18.md`):
+  the Pi lets go by itself `PHONE_NUDGE_S` (0.6 s) after sending the start; never lengthen it
+  from the phone's side or make a phone arrow latch. RunStart (owner,
+  2026-11-16, `docs/runstart-2026-11-16.md`): the Developer window's own list of up to 20 steps
+  (`P`: F/B/L/R/C, 1..100000 steps each, max speed 2351..8000 steps/s, acceleration
+  100..20000 steps/s²) runs with no sensor gates and no time limit by the owner's choice, under
+  the 800 ms KEEP lease. The executor keeps the list and its exact wheel place after it ends or
+  stops; `C` continues it to its end and `U` undoes it back to its start, each a new confirmed
+  request from IDLE with no latched stop (the monitor releases the stop first through the
+  operator gate). The phone may build and start a list too (`DEV_RUN_START`, owner 2026-11-18):
+  the same `request_run`, ranges and part-way lock, never another path. Any other motion, a new list or `[RUN CLEAR]` forgets it. The emergency stop
+  and link/protocol stops still end every test. Once its wheels have moved, any hold ends the test with the cause named; it never
+  restarts them (2026-11-16: lifted turns stop-started loudly). It never creates GO evidence,
+  never starts or resumes a route, discards the route
+  checkpoint and ends at IDLE needing a new deliberate start. Do not let these overrides reach
+  routes or persist after the test.
 - The current 2D LiDAR reports generic returns in its scan plane; it cannot
   recognise people. The "likely person" marker (owner, 2026-11-14) is a size-and-motion
   guess for the map and the log, and must be described as that. Do not label legacy `H`
@@ -217,7 +291,7 @@ User instructions and authorization in the current session take precedence.
 Run relevant tests from this directory. Standard software commands are:
 
 ```bash
-python3 -B -m unittest discover -s RasPi -p 'test_*.py'
+python3 -B -m unittest discover -s tests/pi -p 'test_*.py'
 python3 -B tools/run_firmware_tests.py
 python3 -B tools/source_sanity.py .
 ```

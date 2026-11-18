@@ -1,0 +1,37 @@
+[
+  {
+    "function": "processDeveloperCommand",
+    "unchanged": true,
+    "sha256": "b626bfe3b70144bc9000d103ef15d4a7916acc3a0315144fd4ddf55dbd28d21a"
+  },
+  {
+    "function": "runDeveloperTest",
+    "unchanged": true,
+    "sha256": "739187ab4008164bb12fa267f00553abdd3a3df2793fbb195dc5d8a68cf3f071"
+  },
+  {
+    "function": "processOperatorCommand",
+    "unchanged": true,
+    "sha256": "149748c7dac909137ab645910774f42e4f9b43c55e41a68f7a9541d0365de267"
+  },
+  {
+    "function": "movePlain",
+    "unchanged": true,
+    "sha256": "7e6ab07238f5346fc50af8b82ed435f7f2fcda43c2c66050e84479dfeded950d"
+  },
+  {
+    "function": "driveStraight",
+    "unchanged": true,
+    "sha256": "8212b2539f5aa1d741b6b3e8960f77dde5a12b4621f735e5a0e5e786ee25979a"
+  },
+  {
+    "function": "waitUntilMotionPermitted",
+    "unchanged": true,
+    "sha256": "41da86838e9a8dae634fc5218686237d53bbb0bbd476610ae76fd01cf62d1f8a"
+  },
+  {
+    "function": "movementGate",
+    "unchanged": true,
+    "sha256": "d606715238c64af5cfa70158c50f2aa788cba37937b88a1ad4e2a527daea5652"
+  }
+]

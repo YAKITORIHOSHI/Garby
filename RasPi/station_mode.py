@@ -66,9 +66,10 @@ STEP_MAX_RANGE_CM = 150.0        # near the robot, where the X3's noise is a few
 STEP_END_TRIM = 3                # returns at each end that may be a rounded corner
 CORNER_MAX_CM = 8.0              # a leftover this small between two wall pieces is their corner
 
-_LEG = re.compile(r"\[LEG:([OR])([FB]):(\d{1,3})/(\d{1,3}):([BSHLR]):(\d{1,3})\]")
+_LEG = re.compile(r"\[LEG:([OR])([FB]):(\d{1,3})/(\d{1,3}):([BSHLRK]):(\d{1,3})\]")
+# K (2026-11-16): backing into the parking spot at the end of a route.
 _OPS = {"B": "calibration bumps", "S": "straight", "H": "long hallway",
-        "L": "left turn", "R": "right turn"}
+        "L": "left turn", "R": "right turn", "K": "backing into place"}
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,12 @@ class RouteLeg:
     @property
     def station(self):
         return bool(self.route and self.flags & STEP_STATION)
+
+    @property
+    def backing(self):
+        """Reverse parking in progress. Display and hold reasons only: the rear
+        clearance itself goes out in every path packet (R=), notice or not."""
+        return bool(self.route and self.op == "K" and not self.reverse)
 
     def describe(self):
         if not self.route:

@@ -1,6 +1,7 @@
 {
-  "include": ["RasPi", "tools"],
-  "exclude": ["**/__pycache__", "**/build", "RasPi/artifacts"],
+  "include": ["RasPi", "tools", "tests/pi"],
+  "exclude": ["**/__pycache__", "**/build"],
+  "extraPaths": ["RasPi"],
   "typeCheckingMode": "off",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none",
